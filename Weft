@@ -1,0 +1,39 @@
+:name backend
+
+:databases
+  :main DATABASE_URL
+  :cache REDIS_URL
+:volumes
+  :storage STORAGE_URL
+  :cache CACHE
+:ports
+  :backend BACKEND_PORT
+
+
+
+# -safe(10) -wait(2) -kill -ignore
+# exit starts with ><=
+.build -safe(10)
+  < &src !0
+  ~ target
+
+  !nu
+    var foo = bar;
+    foo = (bar | complete).stderr
+
+[workspace]
+
+:databases
+  :main -postgres
+    :version 4.1.7
+  :other -redis
+  :foo -sqlite
+    :persist true
+:volumes
+  :cache -ram_fs
+    :max_size 10G
+:ports
+  :frontend
+  :backend 1234
+  :foo engon.cm 1234
+  :bar engon.cm
