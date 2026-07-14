@@ -10,16 +10,40 @@ pub const std_options: std.Options = .{
 comptime {
     _ = NumPattern;
     _ = Glob;
+    _ = Parser;
+    _ = @import("parser/VersionSpec.zig");
 }
 
 pub fn main(init: std.process.Init) !void {
     const alloc = init.arena.allocator();
-    const content = try std.Io.Dir.cwd().readFileAlloc(init.io, "Weft", alloc, .unlimited);
-    var prs = Parser.create(alloc, content) orelse return error.EmptyFile;
-    prs.parse() catch |err| {
-        std.debug.print("Weft:{any}:{any} {any}", .{ prs.ln + 1, prs.idx + 1, err });
-        try prs.print_trace(init.io);
+
+    const ws_content = std.Io.Dir.cwd().readFileAlloc(init.io, "Workspace", alloc, .unlimited) catch |err| blk: {
+        if (err == error.FileNotFound) break :blk @as([]const u8, "");
         return err;
     };
-    std.debug.print("{any}", .{prs.conf});
+
+    if (ws_content.len > 0) {
+        var prs = Parser.create(alloc, ws_content) orelse return error.EmptyFile;
+        const ws = prs.parse_workspace() catch |err| {
+            std.debug.print("Workspace:{any}:{any} {any}", .{ prs.ln + 1, prs.idx + 1, err });
+            try prs.print_trace(init.io);
+            return err;
+        };
+        std.debug.print("Workspace:\n{any}\n", .{ws});
+    }
+
+    const svc_content = std.Io.Dir.cwd().readFileAlloc(init.io, "Service", alloc, .unlimited) catch |err| blk: {
+        if (err == error.FileNotFound) break :blk @as([]const u8, "");
+        return err;
+    };
+
+    if (svc_content.len > 0) {
+        var prs = Parser.create(alloc, svc_content) orelse return error.EmptyFile;
+        const svc = prs.parse_service() catch |err| {
+            std.debug.print("Service:{any}:{any} {any}", .{ prs.ln + 1, prs.idx + 1, err });
+            try prs.print_trace(init.io);
+            return err;
+        };
+        std.debug.print("Service:\n{any}\n", .{svc});
+    }
 }

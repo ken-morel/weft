@@ -36,7 +36,7 @@ pub fn NumPattern(comptime T: type) type {
                 num;
         }
         fn isNum(c: u8) bool {
-            return std.ascii.isDigit(c) or c == '-';
+            return std.ascii.isDigit(c);
         }
         pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
             for (self.patterns) |pattern| {
@@ -69,6 +69,11 @@ pub fn NumPattern(comptime T: type) type {
         pub fn parse(alloc: std.mem.Allocator, str: []const u8) !@This() {
             var patterns: std.ArrayList([]Condition) = .empty;
             defer patterns.deinit(alloc);
+            errdefer {
+                for (patterns.items) |pattern| {
+                    alloc.free(pattern);
+                }
+            }
 
             var or_groups = std.mem.splitScalar(u8, str, ',');
 
@@ -95,14 +100,14 @@ pub fn NumPattern(comptime T: type) type {
                             i += 1;
                             try pattern.append(alloc, .{ .ne = try takeNum(group, &i) });
                         },
-                        else => if (@This().isNum(group[i])) {
+                        else => if (group[i] == '-' or std.ascii.isDigit(group[i])) {
                             const range_start = i;
                             const start = try takeNum(group, &i);
                             if (i >= group.len or group[i] != ':') {
                                 const idx = i -| 1;
                                 _ = idx;
                                 _ = range_start;
-                                return error.RangeSyntaxError;
+                                return error.SyntaxError;
                             }
                             i += 1;
                             const step = try takeNum(group, &i);
@@ -149,47 +154,35 @@ const testing = std.testing;
 test "NumPattern - unsigned 8-bit complex matching" {
     const alloc = testing.allocator;
 
-    // Pattern:
-    // 1. strictly greater than 5 AND strictly less than 10
-    // OR 2. exactly equal to 0
-    // OR 3. between 10 and 20 (inclusive) stepping by 2
     var pattern = try NumPattern(u8).parse(alloc, ">5<10,=0,10:2:20");
     defer pattern.deinit(alloc);
 
-    // Group 1: >5<10
     try testing.expect(pattern.match(6));
     try testing.expect(pattern.match(9));
-    try testing.expect(!pattern.match(5)); // fails >5
+    try testing.expect(!pattern.match(5));
     try testing.expect(!pattern.match(11));
 
-    // Group 2: =0
     try testing.expect(pattern.match(0));
 
-    // Group 3: 10:2:20
     try testing.expect(pattern.match(10));
     try testing.expect(pattern.match(12));
     try testing.expect(pattern.match(20));
-    try testing.expect(!pattern.match(11)); // wrong step
-    try testing.expect(!pattern.match(22)); // out of range
+    try testing.expect(!pattern.match(11));
+    try testing.expect(!pattern.match(22));
 }
 
 test "NumPattern - signed 32-bit negative numbers" {
     const alloc = testing.allocator;
 
-    // Pattern:
-    // 1. between -50 and -10 stepping by 10
-    // OR 2. greater than -5 AND less than 5
     var pattern = try NumPattern(i32).parse(alloc, "-50:10:-10,>-5<5");
     defer pattern.deinit(alloc);
 
-    // Group 1: -50:10:-10
     try testing.expect(pattern.match(-50));
     try testing.expect(pattern.match(-30));
     try testing.expect(pattern.match(-10));
-    try testing.expect(!pattern.match(-45)); // wrong step
-    try testing.expect(!pattern.match(-60)); // out of range
+    try testing.expect(!pattern.match(-45));
+    try testing.expect(!pattern.match(-60));
 
-    // Group 2: >-5<5
     try testing.expect(pattern.match(-4));
     try testing.expect(pattern.match(0));
     try testing.expect(pattern.match(4));
@@ -200,17 +193,13 @@ test "NumPattern - signed 32-bit negative numbers" {
 test "NumPattern - strict memory leak check on multiple parses" {
     const alloc = testing.allocator;
 
-    // Running this in a loop guarantees that if temporary ArrayLists
-    // inside the parse() function aren't freed, the test will fail.
     for (0..100) |_| {
         var pattern = try NumPattern(u32).parse(alloc, ">100<500,=1000,50:5:75");
 
-        // Ensure it evaluates correctly
         try testing.expect(pattern.match(250));
         try testing.expect(pattern.match(1000));
         try testing.expect(pattern.match(65));
 
-        // Clean up the arena
         pattern.deinit(alloc);
     }
 }
@@ -218,10 +207,8 @@ test "NumPattern - strict memory leak check on multiple parses" {
 test "NumPattern - error handling" {
     const alloc = testing.allocator;
 
-    // Missing number after operator
     try testing.expectError(error.NumberExpected, NumPattern(u8).parse(alloc, ">"));
     try testing.expectError(error.NumberExpected, NumPattern(u8).parse(alloc, ">5,<"));
 
-    // Malformed range
-    try testing.expectError(error.SyntaxError, NumPattern(u8).parse(alloc, "5-10")); // Should be 5:10
+    try testing.expectError(error.SyntaxError, NumPattern(u8).parse(alloc, "5-10"));
 }

@@ -2,31 +2,36 @@ const std = @import("std");
 pub const NumPattern = @import("../parser/numpattern.zig").NumPattern;
 pub const Glob = @import("../parser/Glob.zig");
 pub const Script = @import("Script.zig");
-pub const keyed = @import("Weft.zig").keyed;
+pub const keyed = @import("Service.zig").keyed;
 
 name: []const u8,
-inputs: []Input,
+inputs: []Input = &.{},
 
-runtimes: [][]const u8,
-volumes: [][]const u8,
-databases: [][]const u8,
+runtimes: [][]const u8 = &.{},
+volumes: [][]const u8 = &.{},
+databases: [][]const u8 = &.{},
 
-keep: []Glob,
+keep: []Glob = &.{},
 
-second_instance: ?SecondInstance,
+second_instance: ?SecondInstance = null,
 
 script: ?Script = null,
 
-required_env: [][]const u8,
-
-env_bindings: keyed(EnvBinding),
+required_env: [][]const u8 = &.{},
+env_bindings: keyed(EnvBinding) = &.{},
 
 pub const Input = struct {
+    kind: Kind,
     namespace: ?[]const u8,
     name: []const u8,
     consume: bool,
     code: ?NumPattern(u8),
     same_remote: bool,
+
+    pub const Kind = enum {
+        resource,
+        env_var,
+    };
 };
 
 pub const SecondInstance = union(enum) {

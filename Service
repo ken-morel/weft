@@ -1,0 +1,20 @@
+:name eventra
+:workspace backend
+
+$ DATABASE_URL &databases.main
+$ REDIS_URL &databases.cache
+$ STORAGE_URL &volumes.storage
+$ BACKEND_URL http://{&ports.foo}/api
+
+< $REQUIRED_ENV
+
+.build safe(10)
+  < &src !0
+  < $REQUIRED_ENV_VAR
+  ~ target
+  $ STORAGE_URL &volumes.cache
+  $ BACKEND_PORT {simple string} here {$STORAGE_URL} fof {&ports.backend}-is\{escaped
+  $ BACKEND_HOST simple string here
+  !nu -cli args here
+    var foo = bar;
+    foo = (bar | complete).stderr
