@@ -1,4 +1,4 @@
 [keys.normal."#"]
-"b" = "@:o .diag<ret>%d!(zig build run | complete).stderr<ret>gg/^[^ \t].+:\\d+:\\d+<ret><C-s>"
+"b" = "@:o .diag<ret>%d!(zig build | complete).stderr<ret>gg/^[^ \t].+:\\d+:\\d+<ret><C-s>"
 # build and open first diagnostic
-"#" = "@:o .diag<ret>%d!(zig build run | complete).stderr<ret>gg/^[^ \t].+:\\d+:\\d+<ret><C-s>\"dy:o <C-r>d<ret>"
+"#" = "@:o .diag<ret>%d!(zig build | complete).stderr<ret>gg/^[^ \t].+:\\d+:\\d+<ret><C-s>\"dy:o <C-r>d<ret>"

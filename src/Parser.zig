@@ -1,6 +1,6 @@
 const std = @import("std");
-const Workspace = @import("../config/Workspace.zig");
-const Service = @import("../config/Service.zig");
+const Workspace = @import("Workspace.zig");
+const Service = @import("Service.zig");
 const NumPattern = @import("numpattern.zig").NumPattern;
 
 alloc: std.mem.Allocator,

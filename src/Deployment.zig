@@ -1,10 +1,17 @@
 const std = @import("std");
-const NumPattern = @import("../parser/numpattern.zig").NumPattern;
+const NumPattern = @import("numpattern.zig").NumPattern;
+// I'm still working on this part
+
+const Service = @import("Service.zig");
+const Workspace = @import("Workspace.zig");
 
 id: u64,
-workspace: []const u8,
-service: []const u8,
+
+service: Service,
+workspace: Workspace,
+
 artifacts: []Artifact = &.{},
+running: []Running = &.{},
 targets: []Target = &.{},
 remotes: []Remote = &.{},
 
@@ -12,6 +19,10 @@ pub const Target = struct {
     remote: []const u8,
     pipeline: []const u8,
     exit_code: NumPattern(u8),
+};
+
+pub const Running = struct {
+    remote: []const u8,
 };
 
 pub const Artifact = struct {

@@ -1,49 +1,115 @@
-const std = @import("std");
-const NumPattern = @import("parser/numpattern.zig").NumPattern;
-const Glob = @import("parser/Glob.zig");
-const Parser = @import("parser/Parser.zig");
-
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
 };
 
-comptime {
-    _ = NumPattern;
-    _ = Glob;
-    _ = Parser;
-    _ = @import("parser/VersionSpec.zig");
+fn show_usage() void {
+    std.debug.print("Usage", .{});
 }
 
 pub fn main(init: std.process.Init) !void {
-    const alloc = init.arena.allocator();
+    const ac = init.gpa;
+    const args = try init.minimal.args.toSlice(ac);
+    defer ac.free(args);
+    var allocator: std.heap.DebugAllocator(.{
+        .stack_trace_frames = 50,
+    }) = .init;
+    defer _ = allocator.deinit();
+    const alloc = allocator.allocator();
 
-    const ws_content = std.Io.Dir.cwd().readFileAlloc(init.io, "Workspace", alloc, .unlimited) catch |err| blk: {
-        if (err == error.FileNotFound) break :blk @as([]const u8, "");
-        return err;
-    };
+    var term = try Term.init(alloc, init.io);
+    defer term.deinit(alloc, init.io);
 
-    if (ws_content.len > 0) {
-        var prs = Parser.create(alloc, ws_content) orelse return error.EmptyFile;
-        const ws = prs.parse_workspace() catch |err| {
-            std.debug.print("Workspace:{any}:{any} {any}", .{ prs.ln + 1, prs.idx + 1, err });
-            try prs.print_trace(init.io);
-            return err;
-        };
-        std.debug.print("Workspace:\n{any}\n", .{ws});
+    if (args.len > 1) {
+        if (std.mem.eql(u8, args[1], "daemon")) {
+            if (args.len > 2) {
+                if (std.mem.eql(u8, args[2], "install")) {
+                    try install.Daemon.install(init.io, alloc);
+                    return;
+                } else if (std.mem.eql(u8, args[2], "run")) {
+                    const installation: install.Daemon = try .init();
+                    var daemon = try Daemon.init(alloc, init.io, installation);
+                    defer daemon.deinit();
+                    try term.println("Starting daemon on :{any}", .{daemon.config.port});
+                    try term.flush();
+                    return daemon.run();
+                }
+            }
+        } else if (std.mem.eql(u8, args[1], "remote")) {
+            if (args.len > 2) {
+                if (std.mem.eql(u8, args[2], "add")) {
+                    if (args.len != 4) {
+                        std.debug.print("Invalid arguments", .{});
+                        return;
+                    }
+                    const name = args[3];
+
+                    var buf_back: [1 << 6]u8 = undefined;
+                    var buf: []u8 = &buf_back;
+
+                    try term.print("remote address: ", .{});
+                    try term.flush();
+                    const raw_addr = try term.read_line(buf);
+                    const addr = std.mem.trim(u8, raw_addr, "\r\n ");
+                    buf = buf[raw_addr.len..];
+
+                    try term.print("remote port(9338): ", .{});
+                    try term.flush();
+                    const raw_port = try term.read_line(buf);
+                    const port_str = std.mem.trim(u8, raw_port, "\r\n ");
+                    buf = buf[raw_port.len..];
+
+                    const port = std.fmt.parseInt(u16, port_str, 10) catch |err| {
+                        try term.err("Invalid port '{s}': {any}", .{ port_str, err });
+                        try term.flush();
+                        return;
+                    };
+
+                    try term.print("remote token: ", .{});
+                    try term.flush();
+                    const raw_token = try term.read_line(buf);
+                    const token_hex = std.mem.trim(u8, raw_token, "\r\n ");
+
+                    if (token_hex.len != 64) {
+                        try term.err("Invalid token length, expected 64 hex characters (32 bytes), got {d}", .{token_hex.len});
+                        try term.flush();
+                        return;
+                    }
+
+                    const token = try std.fmt.hexToBytes(buf[0..32], token_hex);
+
+                    const remote: install.Client.Remote = .{
+                        .name = name,
+                        .address = addr,
+                        .port = port,
+                        .token = token,
+                    };
+
+                    try install.Client.add_remotes(
+                        alloc,
+                        init.io,
+                        init.environ_map,
+                        &.{remote},
+                    );
+                }
+            }
+        }
     }
+    show_usage();
+}
 
-    const svc_content = std.Io.Dir.cwd().readFileAlloc(init.io, "Service", alloc, .unlimited) catch |err| blk: {
-        if (err == error.FileNotFound) break :blk @as([]const u8, "");
-        return err;
-    };
+const std = @import("std");
+const install = @import("install.zig");
+const Daemon = @import("Daemon.zig");
+const Term = @import("Term.zig");
 
-    if (svc_content.len > 0) {
-        var prs = Parser.create(alloc, svc_content) orelse return error.EmptyFile;
-        const svc = prs.parse_service() catch |err| {
-            std.debug.print("Service:{any}:{any} {any}", .{ prs.ln + 1, prs.idx + 1, err });
-            try prs.print_trace(init.io);
-            return err;
-        };
-        std.debug.print("Service:\n{any}\n", .{svc});
-    }
+comptime {
+    _ = @import("numpattern.zig");
+    _ = @import("Glob.zig");
+    _ = @import("Parser.zig");
+    _ = @import("VersionSpec.zig");
+    _ = @import("Connection.zig");
+    _ = @import("Nonce.zig");
+    _ = install;
+
+    std.testing.refAllDecls(@This());
 }

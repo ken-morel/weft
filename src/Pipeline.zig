@@ -1,6 +1,6 @@
 const std = @import("std");
-pub const NumPattern = @import("../parser/numpattern.zig").NumPattern;
-pub const Glob = @import("../parser/Glob.zig");
+pub const NumPattern = @import("numpattern.zig").NumPattern;
+pub const Glob = @import("Glob.zig");
 pub const Script = @import("Script.zig");
 pub const keyed = @import("Service.zig").keyed;
 
