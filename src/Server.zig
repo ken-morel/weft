@@ -54,22 +54,29 @@ pub fn init(
     },
 ) !@This() {
     const addr = try std.Io.net.IpAddress.parse("0.0.0.0", opts.port);
-    const tcp_listener = try addr.listen(io, .{
-        .kernel_backlog = @as(u31, @intCast(opts.max_conn)),
-    });
+    const tcp_listener = try addr.listen(
+        io,
+        .{
+            .kernel_backlog = @as(u31, @intCast(opts.max_conn)),
+        },
+    );
     errdefer tcp_listener.socket.close(io);
 
     std.Io.Dir.cwd().createDirPath(io, "/run/weft") catch |err|
-        if (err != error.PathAlreadyExists) return err;
+        if (err != error.PathAlreadyExists)
+            return err;
 
-    std.Io.Dir.cwd().deleteFile(io, unix_socket_path) catch |err| {
-        if (err != error.FileNotFound) return err;
-    };
+    std.Io.Dir.cwd().deleteFile(io, unix_socket_path) catch |err|
+        if (err != error.FileNotFound)
+            return err;
 
     const unix_addr = try std.Io.net.UnixAddress.init(unix_socket_path);
-    const unix_listener = try unix_addr.listen(io, .{
-        .kernel_backlog = @as(u31, @intCast(opts.max_conn)),
-    });
+    const unix_listener = try unix_addr.listen(
+        io,
+        .{
+            .kernel_backlog = @as(u31, @intCast(opts.max_conn)),
+        },
+    );
 
     return .{
         .tcp_listener = tcp_listener,

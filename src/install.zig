@@ -122,15 +122,24 @@ pub const Daemon = struct {
 };
 
 pub const Client = struct {
+    config_dir: std.Io.Dir,
+
     pub const Remote = struct {
         name: []const u8,
         address: []const u8 = "127.0.0.1",
         port: u16 = 9338,
         token: []const u8,
-        /// Path to Unix socket for local connections. When present, the client
-        /// will prefer this over a TCP connection to `address:port`.
-        unix_socket: ?[]const u8 = null,
     };
+
+    pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !@This() {
+        const config_dir = try Client.open_config_dir(alloc, io, env);
+        const data_dir = try Client.open_data_dir(alloc, io, env);
+        defer data_dir.close(io);
+
+        return .{
+            .config_dir = config_dir,
+        };
+    }
 
     pub fn open_config_dir(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !std.Io.Dir {
         const path = try if (env.get("XDG_CONFIG_HOME")) |xdg|
@@ -143,11 +152,19 @@ pub const Client = struct {
         try std.Io.Dir.cwd().createDirPath(io, path);
         return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
     }
-    pub fn get_remotes(arena: *std.heap.ArenaAllocator, io: std.Io, env: *const std.process.Environ.Map) ![]Remote {
+    pub fn open_data_dir(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !std.Io.Dir {
+        const path = try if (env.get("HOME")) |home|
+            std.fs.path.join(alloc, &.{ home, ".weft" })
+        else
+            return error.NoHomeFound;
+        defer alloc.free(path);
+        try std.Io.Dir.cwd().createDirPath(io, path);
+        return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
+    }
+
+    pub fn get_remotes(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) ![]Remote {
         const alloc = arena.allocator();
-        const config_dir = try open_config_dir(alloc, io, env);
-        defer config_dir.close(io);
-        const content = config_dir.readFileAlloc(
+        const content = self.config_dir.readFileAlloc(
             io,
             remotes_zon_file_name,
             alloc,
@@ -161,10 +178,8 @@ pub const Client = struct {
         const null_terminated = try alloc.dupeSentinel(u8, content, 0);
         return std.zon.parse.fromSliceAlloc([]Remote, alloc, null_terminated, null, .{});
     }
-    pub fn set_remotes(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map, remotes: []const Remote) !void {
-        const config_dir = try open_config_dir(alloc, io, env);
-        defer config_dir.close(io);
-        var atomic = try config_dir.createFileAtomic(io, remotes_zon_file_name, .{ .permissions = read_only_user_permissions, .replace = true });
+    pub fn set_remotes(self: @This(), io: std.Io, remotes: []const Remote) !void {
+        var atomic = try self.config_dir.createFileAtomic(io, remotes_zon_file_name, .{ .permissions = read_only_user_permissions, .replace = true });
         defer atomic.deinit(io);
         var buffer: [4 << 10]u8 = undefined;
         var writer = atomic.file.writer(io, &buffer);
@@ -172,15 +187,15 @@ pub const Client = struct {
         try writer.flush();
         try atomic.replace(io);
     }
-    pub fn add_remotes(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map, items: []const Remote) !void {
+    pub fn add_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io, items: []const Remote) !void {
         var arena = std.heap.ArenaAllocator.init(alloc);
         defer arena.deinit();
 
         const aac = arena.allocator();
-        const old_remotes = try get_remotes(&arena, io, env);
+        const old_remotes = try self.get_remotes(&arena, io);
         const remotes = try aac.realloc(old_remotes, old_remotes.len + items.len);
 
         std.mem.copyForwards(Remote, remotes[old_remotes.len..], items);
-        try @This().set_remotes(aac, io, env, remotes);
+        try self.set_remotes(io, remotes);
     }
 };

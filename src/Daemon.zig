@@ -5,6 +5,10 @@ server: Server,
 config: DaemonInstall.Config,
 arena: std.heap.ArenaAllocator,
 
+pub fn deinit(self: *@This()) void {
+    self.arena.deinit();
+    self.server.deinit(self.io);
+}
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This() {
     var arena: std.heap.ArenaAllocator = .init(alloc);
     errdefer arena.deinit();
@@ -32,7 +36,7 @@ fn handle_conn(req: *Server.Request, alloc: std.mem.Allocator, io: std.Io) void 
     const conn: *Connection = &req.conn;
 
     const msg = conn.recv(&arena) catch return;
-    std.debug.print("message received: {any}", msg);
+    std.debug.print("message received: {any}", .{msg});
 }
 
 pub fn run(self: *@This()) !void {
@@ -53,11 +57,6 @@ pub fn run(self: *@This()) !void {
             .{ req, self.alloc, self.io },
         );
     }
-}
-
-pub fn deinit(self: *@This()) void {
-    self.arena.deinit();
-    self.server.deinit(self.io);
 }
 
 const Connection = @import("Connection.zig");

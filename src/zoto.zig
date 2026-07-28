@@ -147,31 +147,32 @@ pub fn serializeValue(cursor: *[]u8, value: anytype) !void {
         },
 
         inline .@"struct" => |s| {
-            inline for (s.fields) |f| {
+            inline for (s.fields) |f|
                 try serializeValue(cursor, @field(value, f.name));
-            }
         },
 
-        inline .enumeration => try serializeValue(cursor, @intFromEnum(value)),
+        inline .@"enum" => try serializeValue(cursor, @intFromEnum(value)),
 
         inline .@"union" => {
             const tag = std.meta.activeTag(value);
             try writeByte(cursor, @intFromEnum(tag));
             switch (value) {
-                inline else => |payload| try serializeValue(cursor, payload),
+                inline else => |payload| if (@TypeOf(payload) == anyerror)
+                    try writeInt(cursor, u16, @intFromError(payload))
+                else
+                    try serializeValue(cursor, payload),
             }
         },
 
         inline .pointer => |p| {
             switch (p.size) {
-                .Slice => {
+                .slice => {
                     try writeInt(cursor, u64, value.len);
                     for (value) |item| {
                         try serializeValue(cursor, item);
                     }
                 },
-                .One => {
-                    // Dereference pointer and serialize pointee value directly
+                .one => {
                     try serializeValue(cursor, value.*);
                 },
                 else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
@@ -183,6 +184,8 @@ pub fn serializeValue(cursor: *[]u8, value: anytype) !void {
                 try serializeValue(cursor, item);
             }
         },
+
+        inline .error_set => try writeInt(cursor, u16, @intFromError(value)),
 
         inline .void => {},
         else => @compileError("Unsupported type for zoto serialization: " ++ @typeName(T)),
@@ -197,116 +200,115 @@ pub fn serializeValue(cursor: *[]u8, value: anytype) !void {
 /// Advanced the `src` slice cursor as bytes are read.
 pub fn deserialize(allocator: ?std.mem.Allocator, src: *[]const u8, comptime T: type) !T {
     const header = try readSlice(src, 4);
-    if (!std.mem.eql(u8, header, "ZOTO")) {
+    if (!std.mem.eql(u8, header, "ZOTO"))
         return error.InvalidHeader;
-    }
 
-    const expected_hash = comptime hashType(T);
     const actual_hash = try readInt(src, u64);
-    if (expected_hash != actual_hash) {
+    if (actual_hash != comptime hashType(T))
         return error.TypeMismatch;
-    }
 
     return try deserializeValue(allocator, src, T);
 }
 
 /// Recursively deserializes values from a slice cursor without header validation.
-pub fn deserializeValue(allocator: ?std.mem.Allocator, src: *[]const u8, comptime T: type) !T {
+pub const DeserializeError = std.mem.Allocator.Error || error{
+    BufferTooSmall,
+    InvalidUnionTag,
+    AllocationRequired,
+    InvalidHeader,
+    TypeMismatch,
+};
+
+pub fn deserializeValue(allocator: ?std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
     const info = @typeInfo(T);
 
     switch (info) {
-        .int => return try readInt(src, T),
+        inline .int => return try readInt(src, T),
 
-        .float => |f| {
-            const IntT = std.meta.Int(.unsigned, f.bits);
+        inline .float => |f| {
+            const IntT = comptime std.meta.Int(.unsigned, f.bits);
             const raw_bits = try readInt(src, IntT);
             return @bitCast(raw_bits);
         },
 
-        .bool => return (try readByte(src)) != 0,
+        inline .bool => return (try readByte(src)) != 0,
 
-        .optional => |o| {
+        inline .optional => |o| {
             const has_value = try readByte(src);
-            if (has_value == 1) {
-                return try deserializeValue(allocator, src, o.child);
-            } else {
+            if (has_value == 1)
+                return try deserializeValue(allocator, src, o.child)
+            else
                 return null;
-            }
         },
 
-        .@"struct" => |s| {
+        inline .@"struct" => |s| {
             var result: T = undefined;
-            inline for (s.fields) |f| {
+            inline for (s.fields) |f|
                 @field(result, f.name) = try deserializeValue(allocator, src, f.type);
-            }
             return result;
         },
 
-        .enumeration => |e| {
-            const raw_val = try deserializeValue(allocator, src, e.tag_type);
-            return @enumFromInt(raw_val);
-        },
+        inline .@"enum" => |e| return @enumFromInt(try deserializeValue(allocator, src, e.tag_type)),
 
-        .@"union" => |u| {
+        inline .@"union" => |u| {
             const tag_id = try readByte(src);
             const tag_type = u.tag_type orelse @compileError("Union must be tagged for zoto: " ++ @typeName(T));
 
-            inline for (u.fields) |f| {
-                if (@intFromEnum(@field(tag_type, f.name)) == tag_id) {
-                    const payload = try deserializeValue(allocator, src, f.type);
-                    return @unionInit(T, f.name, payload);
-                }
-            }
+            inline for (u.fields) |f|
+                if (@intFromEnum(@field(tag_type, f.name)) == tag_id)
+                    return @unionInit(
+                        T,
+                        f.name,
+                        if (comptime f.type == anyerror)
+                            @errorFromInt(try readInt(src, u16))
+                        else
+                            try deserializeValue(allocator, src, f.type),
+                    );
+
             return error.InvalidUnionTag;
         },
 
-        .pointer => |p| {
-            switch (p.size) {
-                .Slice => {
-                    const len = try readInt(src, u64);
+        inline .pointer => |p| switch (p.size) {
+            inline .slice => {
+                const len = try readInt(src, u64);
 
-                    // 1. Strings/byte slices are ALWAYS zero-copy
-                    if (p.child == u8) {
-                        return try readSlice(src, len);
-                    }
+                // u8 are always aligned and thus zero-copy easily
+                if (p.child == u8)
+                    return try readSlice(src, len)
+                else if (allocator) |alloc| {
+                    var slice = try alloc.alloc(p.child, len);
+                    errdefer alloc.free(slice);
 
-                    // 2. Allocator mode for nested dynamic slices
-                    if (allocator) |alloc| {
-                        var slice = try alloc.alloc(p.child, len);
-                        errdefer alloc.free(slice);
+                    for (0..len) |i|
+                        slice[i] = try deserializeValue(allocator, src, p.child);
 
-                        for (0..len) |i| {
-                            slice[i] = try deserializeValue(allocator, src, p.child);
-                        }
-                        return slice;
-                    }
+                    return slice;
+                } else if (comptime !hasPointers(p.child)) {
+                    const raw_bytes = try readSlice(src, len * @sizeOf(p.child));
+                    const typed_ptr: [*]const p.child = @ptrCast(@alignCast(raw_bytes.ptr));
+                    return @constCast(typed_ptr[0..len]);
+                }
 
-                    // 3. Zero-allocation mode for flat scalar slices
-                    if (comptime !hasPointers(p.child)) {
-                        const needed_bytes = len * @sizeOf(p.child);
-                        const raw_bytes = try readSlice(src, needed_bytes);
-                        const typed_ptr: [*]const p.child = @ptrCast(@alignCast(raw_bytes.ptr));
-                        return typed_ptr[0..len];
-                    }
+                return error.AllocationRequired;
+            },
+            inline .one => {
+                // Single pointers dereference on serialize, but require allocation on deserialize
+                if (allocator) |alloc| {
+                    const ptr = try alloc.create(p.child);
+                    errdefer alloc.destroy(ptr);
 
-                    return error.AllocationRequired;
-                },
-                .One => {
-                    // Single pointers dereference on serialize, but require allocation on deserialize
-                    if (allocator) |alloc| {
-                        const ptr = try alloc.create(p.child);
-                        errdefer alloc.destroy(ptr);
-
-                        ptr.* = try deserializeValue(allocator, src, p.child);
-                        return ptr;
-                    }
-                    return error.AllocationRequired;
-                },
-                else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
-            }
+                    ptr.* = try deserializeValue(allocator, src, p.child);
+                    return ptr;
+                } else if (comptime !hasPointers(p.child)) { //BUG: check this
+                    const raw_bytes = try readSlice(src, @sizeOf(p.child));
+                    return @as(*const p.child, @ptrCast(@alignCast(raw_bytes.ptr)));
+                }
+                return error.AllocationRequired;
+            },
+            else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
         },
 
-        .array => |a| {
+        inline .array => |a| {
             var arr: T = undefined;
             for (0..a.len) |i| {
                 arr[i] = try deserializeValue(allocator, src, a.child);
@@ -314,7 +316,9 @@ pub fn deserializeValue(allocator: ?std.mem.Allocator, src: *[]const u8, comptim
             return arr;
         },
 
-        .void => return {},
+        inline .error_set => return @errorFromInt(try readInt(src, u16)),
+
+        inline .void => return {},
         else => @compileError("Unsupported type for zoto deserialization: " ++ @typeName(T)),
     }
 }

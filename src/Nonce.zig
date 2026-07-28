@@ -36,7 +36,8 @@ pub fn read(in: *std.Io.Reader) !@This() {
 }
 pub fn to_bytes(self: @This()) [24]u8 {
     var n: [24]u8 = undefined;
-    self.write(&n);
+    std.mem.writeInt(u128, n[0..16], self.base, .little);
+    std.mem.writeInt(u64, n[16..], self.counter, .little);
     return n;
 }
 pub fn from_bytes(bytes: []u8) !@This() {

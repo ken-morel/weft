@@ -9,7 +9,7 @@ line: ?[]const u8,
 idx: usize = 0,
 ln: usize = 0,
 
-pub fn create(alloc: std.mem.Allocator, txt: []const u8) ?@This() {
+pub fn init(alloc: std.mem.Allocator, txt: []const u8) ?@This() {
     var iter = std.mem.splitScalar(u8, txt, '\n');
     const first = iter.next();
     return .{
@@ -51,9 +51,10 @@ pub fn skip_indent(self: *@This()) void {
 }
 
 pub fn skip_space(self: *@This()) !void {
-    if (self.line) |ln| {
-        if (self.idx < ln.len and ln[self.idx] == ' ') return;
-    }
+    if (self.line) |ln|
+        if (self.idx < ln.len and ln[self.idx] == ' ')
+            return;
+
     return error.SpaceExpected;
 }
 
@@ -554,13 +555,16 @@ pub fn parse_pipeline(self: *@This()) !Service.Pipeline {
                         break :blk null;
                     };
 
+                    if (namespace) |_|
+                        return error.NamespaceNotSupported;
+
                     try inputs.append(self.alloc, .{
-                        .kind = .resource,
-                        .namespace = namespace,
-                        .name = name,
+                        .target = .{
+                            .exit_code = exit_pattern,
+                            .pipeline = name,
+                            .remote = "any",
+                        },
                         .consume = consume,
-                        .code = exit_pattern,
-                        .same_remote = false,
                     });
                     self.next_line();
                 }
@@ -821,7 +825,7 @@ test "Parser - Workspace parsing" {
         \\  :foo engon.cm 1234
     ;
 
-    var prs = @This().create(alloc, input) orelse return error.TestInitializationFailed;
+    var prs = @This().init(alloc, input) orelse return error.TestInitializationFailed;
     const ws = try prs.parse_workspace();
 
     try testing.expectEqualStrings("my_workspace", ws.name);
@@ -871,7 +875,7 @@ test "Parser - Service parsing" {
         \\    var foo = bar;
     ;
 
-    var prs = @This().create(alloc, input) orelse return error.TestInitializationFailed;
+    var prs = @This().init(alloc, input) orelse return error.TestInitializationFailed;
     const svc = try prs.parse_service();
 
     try testing.expectEqualStrings("eventra", svc.name);

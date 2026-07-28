@@ -34,6 +34,35 @@ pub fn main(init: std.process.Init) !void {
                     return daemon.run();
                 }
             }
+        } else if (std.mem.eql(u8, args[1], "do")) {
+            if (args.len < 3) {
+                try term.err("Usage: weft do [remote.]pipeline [[remote.]pipeline ...]", .{});
+                try term.flush();
+                return;
+            }
+            const target_args = args[2..];
+            const installation: install.Client = try .init(alloc, init.io, init.environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open(project_dir);
+
+            var targets: std.ArrayList(Target) = .empty;
+            defer targets.deinit(alloc);
+
+            for (target_args) |arg| {
+                const target = Target.parse(alloc, arg) catch |err| {
+                    try term.err("Invalid target: {any}: {s}, ", .{ err, arg });
+                    return err;
+                };
+                errdefer target.deinit(alloc);
+                try targets.append(alloc, target);
+            }
+            const targets_slice = try targets.toOwnedSlice(alloc);
+            defer alloc.free(targets_slice);
+            defer for (targets_slice) |target|
+                target.deinit(alloc);
+
+            return cmd_do.run(alloc, init.io, &term, &project, &installation, targets_slice);
         } else if (std.mem.eql(u8, args[1], "remote")) {
             if (args.len > 2) {
                 if (std.mem.eql(u8, args[2], "add")) {
@@ -84,10 +113,13 @@ pub fn main(init: std.process.Init) !void {
                         .token = token,
                     };
 
-                    try install.Client.add_remotes(
+                    try (try install.Client.init(
                         alloc,
                         init.io,
                         init.environ_map,
+                    )).add_remotes(
+                        alloc,
+                        init.io,
                         &.{remote},
                     );
                 }
@@ -97,19 +129,35 @@ pub fn main(init: std.process.Init) !void {
     show_usage();
 }
 
+const cmd_do = @import("client/do.zig");
+
 const std = @import("std");
 const install = @import("install.zig");
 const Daemon = @import("Daemon.zig");
 const Term = @import("Term.zig");
+const Glob = @import("Glob.zig");
+const Parser = @import("Parser.zig");
+const VersionSpec = @import("VersionSpec.zig");
+const Connection = @import("Connection.zig");
+const Project = @import("Project.zig");
+const packer = @import("packer.zig");
+const Nonce = @import("Nonce.zig");
+const NumPattern = @import("numpattern.zig").NumPattern;
+const Target = @import("Target.zig");
 
 comptime {
-    _ = @import("numpattern.zig");
-    _ = @import("Glob.zig");
-    _ = @import("Parser.zig");
-    _ = @import("VersionSpec.zig");
-    _ = @import("Connection.zig");
-    _ = @import("Nonce.zig");
+    _ = NumPattern;
+    _ = Glob;
+    _ = Parser;
+    _ = VersionSpec;
+    _ = Connection;
+    _ = Project;
+    _ = @import("connection_test.zig");
+    _ = packer;
+    _ = Nonce;
     _ = install;
+    _ = Target;
 
     std.testing.refAllDecls(@This());
+    std.debug.assert(Connection.packet_size > 0);
 }

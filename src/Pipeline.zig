@@ -3,6 +3,7 @@ pub const NumPattern = @import("numpattern.zig").NumPattern;
 pub const Glob = @import("Glob.zig");
 pub const Script = @import("Script.zig");
 pub const keyed = @import("Service.zig").keyed;
+pub const Target = @import("Target.zig");
 
 name: []const u8,
 inputs: []Input = &.{},
@@ -21,17 +22,8 @@ required_env: [][]const u8 = &.{},
 env_bindings: keyed(EnvBinding) = &.{},
 
 pub const Input = struct {
-    kind: Kind,
-    namespace: ?[]const u8,
-    name: []const u8,
+    target: Target,
     consume: bool,
-    code: ?NumPattern(u8),
-    same_remote: bool,
-
-    pub const Kind = enum {
-        resource,
-        env_var,
-    };
 };
 
 pub const SecondInstance = union(enum) {

@@ -4,24 +4,19 @@ const zoto = @import("zoto.zig");
 const Pipeline = @import("Pipeline.zig");
 const Nonce = @import("Nonce.zig");
 
-const packet_size = std.math.maxInt(u16);
-
-const _ = @import("connection_test.zig");
+pub const packet_size = std.math.maxInt(u16);
 
 reader: *std.Io.Reader,
 writer: *std.Io.Writer,
 
-token: []u8,
+token: [32]u8,
 
 out_nonce: Nonce,
 in_nonce: Nonce,
 
-// most of the connection's lifetime is reading or writing from these using
-// the network connection
 read_buf: []u8,
 write_buf: []u8,
 
-// used only in a fraction of second to decrypt/encrypt data
 read_cyph_buf: []u8,
 write_cyph_buf: []u8,
 
@@ -100,9 +95,6 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: *[32]u8, reader: *std.
     const write_cyph_buf = try alloc.alloc(u8, packet_size);
     errdefer alloc.free(write_cyph_buf);
 
-    const token = try alloc.dupe(u8, secret);
-    errdefer alloc.free(token); // unreachable for now
-
     return .{
         .reader = reader,
         .writer = writer,
@@ -113,7 +105,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: *[32]u8, reader: *std.
         .write_buf = write_buf,
         .read_cyph_buf = read_cyph_buf,
         .write_cyph_buf = write_cyph_buf,
-        .token = token,
+        .token = secret.*,
     };
 }
 
@@ -122,24 +114,23 @@ pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
     alloc.free(self.write_buf);
     alloc.free(self.write_cyph_buf);
     alloc.free(self.read_cyph_buf);
-
-    alloc.free(self.token);
 }
 
 pub fn send(self: *@This(), msg: Message) !void {
-    const data = try zoto.serialize(self.msg_buf, msg);
+    const data = try zoto.serializeValue(self.write_buf, msg);
     try self.write(data);
 }
 pub fn recv(self: *@This(), arena: *std.heap.ArenaAllocator) !Message {
     var alloc = arena.allocator();
-    const data = try self.read(self.msg_buf);
+    const data = try self.read(self.read_buf);
 
     if (data.len == 0)
         return error.EmptyMessage;
 
     const owned = try alloc.dupe(u8, data);
     errdefer alloc.free(owned);
-    return zoto.deserialize(alloc, owned, Message);
+    var const_slice: []const u8 = owned;
+    return zoto.deserializeValue(alloc, &const_slice, Message);
 }
 pub fn write(self: *@This(), data: []const u8) !void {
     if (data.len == 0)
@@ -159,7 +150,7 @@ pub fn write(self: *@This(), data: []const u8) !void {
         self.token,
     );
     var len: [2]u8 = undefined;
-    std.mem.writeInt(u16, &len, @as(u16, @intCast(data.len)), .big);
+    std.mem.writeInt(u16, &len, @as(u16, @intCast(data.len)), .little);
 
     try self.writer.writeAll(&len);
     try self.writer.writeAll(self.write_cyph_buf[0..data.len]);
@@ -169,14 +160,14 @@ pub fn write(self: *@This(), data: []const u8) !void {
     self.out_nonce.inc();
 }
 pub fn read(self: *@This(), buf: []u8) ![]u8 {
-    if (buf.len < packet_size)
-        return error.BufferTooSmall;
+    // if (buf.len < packet_size)
+    //     return error.BufferTooSmall;
 
     var tag: [16]u8 = undefined;
     var len: [2]u8 = undefined;
 
     try self.reader.readSliceAll(&len);
-    const size = std.mem.readInt(u16, len, .big);
+    const size = std.mem.readInt(u16, &len, .little);
 
     if (size > buf.len or size > packet_size)
         return error.FrameTooLarge;
@@ -185,16 +176,15 @@ pub fn read(self: *@This(), buf: []u8) ![]u8 {
 
     try self.reader.readSliceAll(&tag);
 
-    var nonce: [24]u8 = undefined;
-    self.in_nonce.write(&nonce);
+    const nonce = self.in_nonce.to_bytes();
 
     try XChaCha20Poly1305.decrypt(
         buf[0..size],
         self.read_cyph_buf[0..size],
         tag,
         &.{},
-        &nonce,
-        &self.token,
+        nonce,
+        self.token,
     );
     self.in_nonce.inc();
     return buf[0..size];
