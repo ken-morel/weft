@@ -62,7 +62,7 @@ pub fn main(init: std.process.Init) !void {
             defer for (targets_slice) |target|
                 target.deinit(alloc);
 
-            return cmd_do.run(alloc, init.io, &term, &project, &installation, targets_slice);
+            return cmd_do.run(alloc, init.io, &term, project, installation, targets_slice);
         } else if (std.mem.eql(u8, args[1], "remote")) {
             if (args.len > 2) {
                 if (std.mem.eql(u8, args[2], "add")) {
@@ -106,8 +106,9 @@ pub fn main(init: std.process.Init) !void {
 
                     const token = try std.fmt.hexToBytes(buf[0..32], token_hex);
 
-                    const address = try std.Io.net.IpAddress.parse(addr, port) catch |err| {
-                        term.err("Invalid Ip Address: {any}", err);
+                    const address = std.Io.net.IpAddress.parse(addr, port) catch |err| {
+                        try term.err("Invalid Ip Address: {any}", .{err});
+                        return err;
                     };
 
                     const remote: ClientInstall.Remote = .{

@@ -1,10 +1,10 @@
 const std = @import("std");
-const ClientInstall = @import("../install/client.zig");
-const Connection = @import("../Connection.zig");
-const Client = @import("../Client.zig");
-const Deployment = @import("../Deployment.zig");
-const Project = @import("../Project.zig");
-const Term = @import("../Term.zig");
+const ClientInstall = @import("../../install/client.zig");
+const Connection = @import("../../Connection.zig");
+const Client = @import("../../Client.zig");
+const Deployment = @import("../../Deployment.zig");
+const Project = @import("../../Project.zig");
+const Term = @import("../../Term.zig");
 
 const runner = @import("../runner.zig");
 
@@ -36,6 +36,6 @@ pub fn run(
         term,
         project,
         inst,
-        deployment,
+        &deployment,
     );
 }

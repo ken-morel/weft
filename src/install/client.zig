@@ -18,7 +18,6 @@ pub const Remote = struct {
         return .{
             .name = buf[0..self.name.len],
             .address = self.address,
-            .port = self.port,
             .token = buf[self.name.len..],
         };
     }
@@ -75,12 +74,12 @@ pub fn get_remotes(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) !
     return std.zon.parse.fromSliceAlloc([]Remote, alloc, null_terminated, null, .{});
 }
 pub fn get_remote(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io, name: []const u8) !?Remote {
-    const temp_arena: std.heap.ArenaAllocator = .init(arena.allocator());
+    var temp_arena: std.heap.ArenaAllocator = .init(arena.allocator());
     defer temp_arena.deinit();
 
     for (try self.get_remotes(&temp_arena, io)) |remote|
         if (std.mem.eql(u8, remote.name, name))
-            return try remote.dupe(&arena);
+            return try remote.dupe(arena);
 
     return null;
 }

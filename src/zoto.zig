@@ -1,44 +1,5 @@
-//! Compact, zero-copy binary serialization engine for Zig.
-//!
-//! ## Overview
-//! `zoto` serializes Zig values into a contiguous byte buffer and deserializes
-//! them back. Strings (`[]const u8`) and byte slices point directly into the input
-//! buffer without copying memory.
-//!
-//! ## Wire Format
-//! All data is encoded in Little-Endian format.
-//!
-//! 1. **Header (12 Bytes):**
-//!    - Magic Magic String: `"ZOTO"` (4 bytes)
-//!    - Type Hash: `u64` (8 bytes) — Comptime FNV-1a structural hash of type `T`.
-//!
-//! 2. **Payload:**
-//!    - **Primitives (`int`, `float`, `bool`):** Stored in exact size/endianness.
-//!    - **Optionals (`?T`):** `1` byte flag (`0x00` = null, `0x01` = value) + payload if present.
-//!    - **Tagged Unions:** `1` byte tag integer + active field payload.
-//!    - **Slices (`[]T`):** `u64` length prefix + array of serialized items.
-//!    - **Arrays (`[N]T`):** Serialized elements sequentially (0 byte overhead).
-//!    - **Single Pointers (`*T`):** Serialized as the dereferenced pointee value `T`.
-//!
-//! ## Memory & Allocator Modes
-//! - **Zero-Allocation Mode (`allocator = null`):** Deserializes flat structs, primitives,
-//!   arrays, optionals, unions, and 1D byte slices (`[]const u8`) without allocating RAM.
-//! - **Hybrid Zero-Copy Mode (`allocator = gpa`):** Required for nested dynamic slices
-//!   (e.g., `[][]const u8`) or single heap pointers (`*T`). Allocates array headers in RAM
-//!   while keeping underlying string bytes zero-copy from the input buffer.
-//!
-//! ## Critical Notices
-//! 1. **Self-Referencing / Infinite Types:** Do not pass recursive graph types (e.g. linked
-//!    lists `Node = struct { next: ?*Node }`). Dereferencing will cause infinite loops at comptime
-//!    or runtime. Use flat arrays with integer index references instead.
-//! 2. **Stdlib Collections:** Do not serialize types like `std.HashMap` directly.
-//!    Convert them to slices of key-value structs prior to passing them to `zoto`.
-//! 3. **Alignment:** On strict-alignment architectures (e.g. ARM Cortex-M0), zero-copying
-//!    scalar slices (`[]const u32`) requires the input buffer to be aligned to `@alignOf(T)`.
-
 const std = @import("std");
 
-/// Calculates a structural 64-bit hash at compile time for a given type `T`.
 pub fn hashType(comptime T: type) u64 {
     comptime {
         var h: u64 = 14695981039346656037;
@@ -76,7 +37,7 @@ pub fn hashType(comptime T: type) u64 {
                 }
             },
 
-            .enumeration => |e| {
+            .@"enum" => |e| {
                 h = (h ^ hashType(e.tag_type)) *% prime;
                 for (e.fields) |f| {
                     for (f.name) |char| h = (h ^ char) *% prime;
@@ -106,98 +67,84 @@ pub fn hashType(comptime T: type) u64 {
     }
 }
 
-// ============================================================================
-// SERIALIZATION
-// ============================================================================
-
-/// Serializes `value` into `dest` including the "ZOTO" header and type hash.
-/// Returns a slice of `dest` containing only the written payload bytes.
 pub fn serialize(dest: []u8, value: anytype) ![]u8 {
     const T = @TypeOf(value);
-    var cursor = dest;
 
-    try writeBytes(&cursor, "ZOTO");
-    try writeInt(&cursor, u64, comptime hashType(T));
-    try serializeValue(&cursor, value);
+    var ptr = dest;
+    const zoto = try writeBytes(ptr, "ZOTO");
+    ptr = ptr[zoto.len..];
+    const type_hash = try writeInt(ptr, u64, comptime hashType(T));
+    ptr = ptr[type_hash.len..];
+    const data = try serializeValue(ptr, value);
+    ptr = ptr[data.len..];
 
-    const bytes_written = dest.len - cursor.len;
-    return dest[0..bytes_written];
+    return dest[0 .. dest.len - ptr.len];
 }
 
-/// Recursively serializes values into a slice cursor without a header.
-pub fn serializeValue(cursor: *[]u8, value: anytype) !void {
+pub fn serializeValue(buffer: []u8, value: anytype) error{BufferTooSmall}![]u8 {
     const T = @TypeOf(value);
     const info = @typeInfo(T);
 
-    switch (info) {
-        inline .int => try writeInt(cursor, T, value),
-        inline .float => |f| {
-            const IntT = std.meta.Int(.unsigned, f.bits);
-            try writeInt(cursor, IntT, @bitCast(value));
-        },
+    return switch (info) {
+        inline .int => try writeInt(buffer, T, value),
+        inline .float => |f| try writeInt(
+            buffer,
+            std.meta.Int(.unsigned, f.bits),
+            @bitCast(value),
+        ),
 
-        inline .bool => try writeByte(cursor, if (value) 1 else 0),
-        inline .optional => {
-            if (value) |payload| {
-                try writeByte(cursor, 1);
-                try serializeValue(cursor, payload);
-            } else {
-                try writeByte(cursor, 0);
-            }
-        },
-
-        inline .@"struct" => |s| {
+        inline .bool => try writeByte(buffer, if (value) 1 else 0),
+        inline .optional => if (value) |payload| blk: {
+            _ = try writeByte(buffer, 1);
+            const data = try serializeValue(buffer, payload);
+            break :blk buffer[0 .. 1 + data.len];
+        } else try writeByte(buffer, 0),
+        inline .@"struct" => |s| blk: {
+            var len: usize = 0;
             inline for (s.fields) |f|
-                try serializeValue(cursor, @field(value, f.name));
+                len += (try serializeValue(
+                    buffer,
+                    @field(value, f.name),
+                )).len;
+            break :blk buffer[0..len];
         },
-
-        inline .@"enum" => try serializeValue(cursor, @intFromEnum(value)),
-
-        inline .@"union" => {
+        inline .@"enum" => try serializeValue(buffer, @intFromEnum(value)),
+        inline .@"union" => blk: {
+            var len: usize = 0;
             const tag = std.meta.activeTag(value);
-            try writeByte(cursor, @intFromEnum(tag));
-            switch (value) {
-                inline else => |payload| if (@TypeOf(payload) == anyerror)
-                    try writeInt(cursor, u16, @intFromError(payload))
-                else
-                    try serializeValue(cursor, payload),
-            }
+            len += (try writeByte(buffer, @intFromEnum(tag))).len;
+            len += switch (value) {
+                inline else => |payload| try serializeValue(
+                    buffer,
+                    payload,
+                ),
+            }.len;
+            break :blk buffer[0..len];
         },
 
-        inline .pointer => |p| {
-            switch (p.size) {
-                .slice => {
-                    try writeInt(cursor, u64, value.len);
-                    for (value) |item| {
-                        try serializeValue(cursor, item);
-                    }
-                },
-                .one => {
-                    try serializeValue(cursor, value.*);
-                },
-                else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
-            }
+        inline .pointer => |p| switch (p.size) {
+            .slice => blk: {
+                var len: usize = 0;
+                len += (try writeInt(buffer, u64, value.len)).len;
+                for (value) |item|
+                    len += (try serializeValue(buffer, item)).len;
+                break :blk buffer[0..len];
+            },
+            .one => try serializeValue(buffer, value.*),
+            else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
         },
-
-        inline .array => {
-            for (value) |item| {
-                try serializeValue(cursor, item);
-            }
+        inline .array => blk: {
+            var len: usize = 0;
+            for (value) |item|
+                len += (try serializeValue(buffer, item)).len;
+            break :blk buffer[0..len];
         },
-
-        inline .error_set => try writeInt(cursor, u16, @intFromError(value)),
-
-        inline .void => {},
+        inline .error_set => try writeInt(buffer, u16, @intFromError(value)),
+        inline .void => buffer[0..0],
         else => @compileError("Unsupported type for zoto serialization: " ++ @typeName(T)),
-    }
+    };
 }
 
-// ============================================================================
-// DESERIALIZATION
-// ============================================================================
-
-/// Reads and verifies the "ZOTO" header and type hash.
-/// Advanced the `src` slice cursor as bytes are read.
 pub fn deserialize(allocator: ?std.mem.Allocator, src: *[]const u8, comptime T: type) !T {
     const header = try readSlice(src, 4);
     if (!std.mem.eql(u8, header, "ZOTO"))
@@ -210,7 +157,6 @@ pub fn deserialize(allocator: ?std.mem.Allocator, src: *[]const u8, comptime T: 
     return try deserializeValue(allocator, src, T);
 }
 
-/// Recursively deserializes values from a slice cursor without header validation.
 pub const DeserializeError = std.mem.Allocator.Error || error{
     BufferTooSmall,
     InvalidUnionTag,
@@ -343,10 +289,11 @@ fn hasPointers(comptime T: type) bool {
     };
 }
 
-fn writeByte(cursor: *[]u8, byte: u8) !void {
-    if (cursor.len < 1) return error.BufferTooSmall;
-    cursor.*[0] = byte;
-    cursor.* = cursor.*[1..];
+fn writeByte(buf: []u8, byte: u8) ![]u8 {
+    if (buf.len < 1)
+        return error.BufferTooSmall;
+    buf[0] = byte;
+    return buf[0..1];
 }
 
 fn writeBytes(cursor: *[]u8, bytes: []const u8) !void {
@@ -355,11 +302,12 @@ fn writeBytes(cursor: *[]u8, bytes: []const u8) !void {
     cursor.* = cursor.*[bytes.len..];
 }
 
-fn writeInt(cursor: *[]u8, comptime IntT: type, value: IntT) !void {
+fn writeInt(buffer: []u8, comptime IntT: type, value: IntT) ![]u8 {
     const size = @sizeOf(IntT);
-    if (cursor.len < size) return error.BufferTooSmall;
-    std.mem.writeInt(IntT, cursor.*[0..size], value, .little);
-    cursor.* = cursor.*[size..];
+    if (buffer.len < size)
+        return error.BufferTooSmall;
+    std.mem.writeInt(IntT, buffer[0..size], value, .little);
+    return buffer[0..size];
 }
 
 fn readByte(src: *[]const u8) !u8 {

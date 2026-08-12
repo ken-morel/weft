@@ -12,12 +12,11 @@ pub fn run_deployment(
     term: *Term,
     project: Project,
     inst: ClientInstall,
-    initial_deployment: Deployment,
-) !Deployment {
-    var deployment = initial_deployment;
+    deployment: *Deployment,
+) !void {
     while (!deployment.completed()) {
-        while (deployment.next()) |next_step|
-            deployment = try spawn_next_step(
+        while (try deployment.next()) |next_step|
+            try spawn_next_step(
                 alloc,
                 io,
                 term,
@@ -37,9 +36,32 @@ pub fn spawn_next_step(
     term: *Term,
     project: Project,
     inst: ClientInstall,
-    deployment: Deployment,
+    deployment: *Deployment,
     step: Deployment.NextStep,
-) !Deployment {
-    const remote = (try inst.get_remote(step.remote)) orelse return error.InvalidRemote;
-    const client = try Client.connect(alloc, io, remote);
+) !void {
+    var arena: std.heap.ArenaAllocator = .init(alloc);
+    defer arena.deinit();
+    const remote = (try inst.get_remote(&arena, io, step.remote)) orelse return error.InvalidRemote;
+    const pipeline = deployment.service.get_pipeline(step.pipeline) orelse return error.InvalidPipeline;
+    _ = project;
+
+    var client = try Client.connect(alloc, io, remote);
+    defer client.destroy(alloc, io);
+    try term.println("Connected to remote", .{});
+    try client.conn.send(.{ .request = .task_create });
+    try client.conn.send(.{
+        .task = .{
+            .deployment = .from_deployment(deployment.*),
+            .pipeline = step.pipeline,
+        },
+    });
+    try client.conn.send(.{
+        .pipeline = pipeline.*,
+    });
+    {
+        var msg_arena: std.heap.ArenaAllocator = .init(alloc);
+        defer msg_arena.deinit();
+        const msg = try client.conn.recv(&msg_arena);
+        try term.println("Recived message: {any}", .{msg});
+    }
 }

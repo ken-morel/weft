@@ -3,6 +3,9 @@ const XChaCha20Poly1305 = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
 const zoto = @import("zoto.zig");
 const Pipeline = @import("Pipeline.zig");
 const Nonce = @import("Nonce.zig");
+const Deployment = @import("Deployment.zig");
+const Service = @import("Service.zig");
+const UUIDv7 = @import("UUIDv7.zig");
 
 pub const packet_size = std.math.maxInt(u16);
 
@@ -23,10 +26,22 @@ write_cyph_buf: []u8,
 pub const ServiceId = struct {
     workspace: []const u8,
     service: []const u8,
+    pub fn from_service(s: Service) @This() {
+        return .{
+            .workspace = s.workspace,
+            .service = s.name,
+        };
+    }
 };
 pub const DeploymentId = struct {
     service: ServiceId,
-    deployment: u64,
+    deployment: UUIDv7,
+    pub fn from_deployment(d: Deployment) @This() {
+        return .{
+            .deployment = d.uuid,
+            .service = .from_service(d.service),
+        };
+    }
 };
 pub const TaskId = struct {
     deployment: DeploymentId,
@@ -76,7 +91,7 @@ pub const Message = union(enum) {
 };
 
 /// The interface for the connection. Handles encryption
-pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: *[32]u8, reader: *std.Io.Reader, writer: *std.Io.Writer) !@This() {
+pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *std.Io.Reader, writer: *std.Io.Writer) !@This() {
     const out_nonce = try Nonce.random(io);
     try out_nonce.write(writer);
     try writer.flush();
@@ -95,6 +110,11 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: *[32]u8, reader: *std.
     const write_cyph_buf = try alloc.alloc(u8, packet_size);
     errdefer alloc.free(write_cyph_buf);
 
+    if (secret.len != 32)
+        return error.InvalidSecret;
+    var stack_secret: [32]u8 = undefined;
+    std.mem.copyForwards(u8, &stack_secret, secret);
+
     return .{
         .reader = reader,
         .writer = writer,
@@ -105,7 +125,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: *[32]u8, reader: *std.
         .write_buf = write_buf,
         .read_cyph_buf = read_cyph_buf,
         .write_cyph_buf = write_cyph_buf,
-        .token = secret.*,
+        .token = stack_secret,
     };
 }
 

@@ -16,7 +16,7 @@ running: []Running = &.{},
 targets: []Target = &.{},
 
 pub const Running = struct {
-    remote: ?[]const u8,
+    remote: []const u8,
     pipeline: []const u8,
 };
 
@@ -29,13 +29,12 @@ pub const Artifact = struct {
     pub fn is_src(self: @This()) bool {
         return std.mem.eql(u8, self.pipeline, "src");
     }
-    pub fn src() @This() {
-        return .{
-            .pipeline = "src",
-            .remote = null,
-            .exit_code = 0,
-        };
-    }
+
+    pub const src: @This() = .{
+        .remote = null,
+        .pipeline = "src",
+        .exit_code = 0,
+    };
 };
 
 pub const NextStep = struct {
@@ -65,13 +64,13 @@ pub const NextStep = struct {
     }
 };
 
-pub fn next(self: *const @This()) ?NextStep {
+pub fn next(self: *const @This()) !?NextStep {
     const target = self.next_target().?;
-    return self.find_next_runnable_input(.from_target(target.*)).?;
+    return self.find_next_runnable_input(.from_target(target.*));
 }
 
 /// asumes any existing artifact from the pipeline isn't satisfying
-pub fn find_next_runnable_input(self: @This(), final_step: NextStep) ?NextStep {
+pub fn find_next_runnable_input(self: @This(), final_step: NextStep) !?NextStep {
     var step = final_step;
     pipeline: while (self.service.get_pipeline(step.pipeline)) |pipeline| {
         if (self.get_running_pipeline(pipeline.name)) |running|
@@ -87,7 +86,7 @@ pub fn find_next_runnable_input(self: @This(), final_step: NextStep) ?NextStep {
             }
             step = .{
                 .pipeline = input.target.pipeline,
-                .remote = input.target.remote orelse step.remote,
+                .remote = input.target.remote,
             };
             continue :pipeline;
         }
@@ -118,7 +117,7 @@ pub fn create(alloc: std.mem.Allocator, io: std.Io, service: Service, targets: [
     const id = try UUIDv7.new(io);
 
     const src = try alloc.alloc(Artifact, 1);
-    src[0] = .{ .src = .{} };
+    src[0] = .src;
 
     return .{
         .uuid = id,
@@ -129,7 +128,7 @@ pub fn create(alloc: std.mem.Allocator, io: std.Io, service: Service, targets: [
     };
 }
 
-pub fn save(self: *const @This(), io: std.Io, proj: *const Project) !void {
+pub fn save(self: *const @This(), io: std.Io, proj: Project) !void {
     var buffer: [1 << 10]u8 = undefined;
     var pos: []u8 = &buffer;
     var filename = try self.uuid.to_string(pos);

@@ -6,7 +6,7 @@ pub fn keyed(comptime T: type) type {
 }
 
 name: []const u8 = "service",
-workspace: ?[]const u8 = null,
+workspace: []const u8 = "workspace",
 pipelines: []Pipeline = &.{},
 required_env: [][]const u8 = &.{},
 env_bindings: keyed(Pipeline.EnvBinding) = &.{},

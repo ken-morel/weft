@@ -4,7 +4,7 @@ const Deployment = @import("Deployment.zig");
 const Artifact = Deployment.Artifact;
 const Running = Deployment.Running;
 
-remote: ?[]const u8,
+remote: []const u8,
 pipeline: []const u8,
 exit_code: ?NumPattern(u8),
 
@@ -35,14 +35,13 @@ pub fn parse(alloc: std.mem.Allocator, txt: []const u8) !@This() {
     errdefer alloc.free(slice);
 
     return @This(){
-        .remote = remote,
+        .remote = remote orelse try alloc.dupe(u8, "local"),
         .pipeline = slice,
         .exit_code = exit_code,
     };
 }
 pub fn deinit(self: *const @This(), alloc: std.mem.Allocator) void {
-    if (self.remote) |remote|
-        alloc.free(remote);
+    alloc.free(self.remote);
     if (self.exit_code) |exit|
         exit.deinit(alloc);
     alloc.free(self.pipeline);
@@ -50,16 +49,9 @@ pub fn deinit(self: *const @This(), alloc: std.mem.Allocator) void {
 
 pub fn could_match(self: @This(), run: Running) bool {
     if (!std.mem.eql(u8, self.pipeline, run.pipeline))
-        return false;
-    if (self.remote) |srem|
-        if (run.remote) |brem|
-            return std.mem.eql(u8, srem, brem)
-        else
-            return false
-    else if (run.remote) |_|
         return false
     else
-        return true;
+        return std.mem.eql(u8, self.remote, run.remote);
 }
 
 pub fn matches(self: @This(), art: Artifact) bool {
@@ -68,13 +60,8 @@ pub fn matches(self: @This(), art: Artifact) bool {
     if (self.exit_code) |code|
         if (!code.match(art.exit_code))
             return false;
-    if (self.remote) |srem|
-        if (art.remote) |brem|
-            return std.mem.eql(u8, srem, brem)
-        else
-            return false
-    else if (art.remote) |_|
-        return false
+    if (art.remote) |arem|
+        return std.mem.eql(u8, self.remote, arem)
     else
-        return true;
+        return false;
 }
