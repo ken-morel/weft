@@ -58,7 +58,7 @@ pub fn matches(self: @This(), art: Artifact) bool {
     if (!std.mem.eql(u8, self.pipeline, art.pipeline))
         return false;
     if (self.exit_code) |code|
-        if (!code.match(art.exit_code))
+        if (!code.matches(art.exit_code))
             return false;
     if (art.remote) |arem|
         return std.mem.eql(u8, self.remote, arem)

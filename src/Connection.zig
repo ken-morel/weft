@@ -137,8 +137,9 @@ pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
 }
 
 pub fn send(self: *@This(), msg: Message) !void {
-    const data = try zoto.serializeValue(self.write_buf, msg);
-    try self.write(data);
+    var ptr = self.write_buf;
+    try zoto.serializeValue(&ptr, msg);
+    try self.write(self.write_buf[0 .. self.write_buf.len - ptr.len]);
 }
 pub fn recv(self: *@This(), arena: *std.heap.ArenaAllocator) !Message {
     var alloc = arena.allocator();

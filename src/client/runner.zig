@@ -41,7 +41,11 @@ pub fn spawn_next_step(
 ) !void {
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
-    const remote = (try inst.get_remote(&arena, io, step.remote)) orelse return error.InvalidRemote;
+    const remote = (try inst.get_remote(&arena, io, step.remote)) orelse {
+        try term.err("Invalid remote: {s}", .{step.remote});
+        try term.flush();
+        return error.InvalidRemote;
+    };
     const pipeline = deployment.service.get_pipeline(step.pipeline) orelse return error.InvalidPipeline;
     _ = project;
 

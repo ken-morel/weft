@@ -1,15 +1,22 @@
+const Connection = @import("Connection.zig");
+const Server = @import("Server.zig");
+const std = @import("std");
+const DaemonInstall = @import("install/daemon.zig");
+const Term = @import("Term.zig");
+
 io: std.Io,
 alloc: std.mem.Allocator,
 install: DaemonInstall,
 server: Server,
 config: DaemonInstall.Config,
 arena: std.heap.ArenaAllocator,
+term: *Term,
 
 pub fn deinit(self: *@This()) void {
     self.arena.deinit();
     self.server.deinit(self.io);
 }
-pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This() {
+pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
     var arena: std.heap.ArenaAllocator = .init(alloc);
     errdefer arena.deinit();
     const config = try install.get_config(io, &arena);
@@ -25,18 +32,8 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This
         .arena = arena,
         .config = config,
         .server = server,
+        .term = term,
     };
-}
-
-fn handle_conn(req: *Server.Request, alloc: std.mem.Allocator, io: std.Io) void {
-    defer req.deinit(alloc, io);
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-
-    const conn: *Connection = &req.conn;
-
-    const msg = conn.recv(&arena) catch return;
-    std.debug.print("message received: {any}", .{msg});
 }
 
 pub fn run(self: *@This()) !void {
@@ -54,12 +51,36 @@ pub fn run(self: *@This()) !void {
         group.async(
             self.io,
             handle_conn,
-            .{ req, self.alloc, self.io },
+            .{ self, req },
         );
     }
 }
 
-const Connection = @import("Connection.zig");
-const Server = @import("Server.zig");
-const std = @import("std");
-const DaemonInstall = @import("install/daemon.zig");
+fn handle_one_request(self: *@This(), req: *Server.Request) !?void {
+    var arena = std.heap.ArenaAllocator.init(self.alloc);
+    defer arena.deinit();
+    const conn = &req.conn;
+
+    const msg = try conn.recv(&arena);
+    switch (msg) {
+        .request => |r| switch (r) {
+            .task_create => {
+                switch (try conn.recv(&arena)) {
+                    .task => |task_id| {
+                        task_id
+                    },
+                }
+            },
+        },
+    }
+}
+
+fn handle_conn(self: *@This(), req: *Server.Request) void {
+    defer req.deinit(self.alloc, self.io);
+
+    while (true)
+        handle_one_request(self, req) catch |err| {
+            self.term.err("Error Handling request: {any}", .{err});
+            break;
+        } orelse break;
+}

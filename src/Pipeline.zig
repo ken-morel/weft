@@ -4,6 +4,7 @@ pub const Glob = @import("Glob.zig");
 pub const Script = @import("Script.zig");
 pub const keyed = @import("Service.zig").keyed;
 pub const Target = @import("Target.zig");
+const Deployment = @import("Deployment.zig");
 
 name: []const u8,
 inputs: []Input = &.{},
@@ -21,9 +22,38 @@ script: ?Script = null,
 required_env: [][]const u8 = &.{},
 env_bindings: keyed(EnvBinding) = &.{},
 
-pub const Input = struct {
-    target: Target,
-    consume: bool,
+pub const Input = union(enum) {
+    src: struct {},
+    artifact: struct {
+        pipeline: []const u8,
+        exit_pattern: ?NumPattern(u8),
+        consume: bool,
+        pub fn could_match(self: @This(), run: Deployment.Running) bool {
+            if (!std.mem.eql(u8, self.pipeline, run.pipeline))
+                return false;
+            return true;
+        }
+        pub fn matches(self: @This(), artifact: Deployment.Artifact) bool {
+            if (!std.mem.eql(u8, self.pipeline, artifact.pipeline))
+                return false;
+            if (self.exit_pattern) |pattern|
+                if (!pattern.matches(artifact.exit_code))
+                    return false;
+            return true;
+        }
+    },
+    pub fn matches(self: @This(), artifact: Deployment.Artifact) bool {
+        return switch (self) {
+            .artifact => |a| a.matches(artifact),
+            .src => false,
+        };
+    }
+    pub fn could_match(self: @This(), run: Deployment.Running) bool {
+        return switch (self) {
+            .artifact => |a| a.could_match(run),
+            .src => false,
+        };
+    }
 };
 
 pub const SecondInstance = union(enum) {

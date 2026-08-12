@@ -25,16 +25,6 @@ pub const Artifact = struct {
     remote: ?[]const u8,
     pipeline: []const u8,
     exit_code: u8,
-
-    pub fn is_src(self: @This()) bool {
-        return std.mem.eql(u8, self.pipeline, "src");
-    }
-
-    pub const src: @This() = .{
-        .remote = null,
-        .pipeline = "src",
-        .exit_code = 0,
-    };
 };
 
 pub const NextStep = struct {
@@ -76,23 +66,28 @@ pub fn find_next_runnable_input(self: @This(), final_step: NextStep) !?NextStep 
         if (self.get_running_pipeline(pipeline.name)) |running|
             if (step.could_match(running.*))
                 return null;
-        input: for (pipeline.inputs) |input| {
-            for (self.artifacts) |artifact|
-                if (input.target.matches(artifact))
-                    continue :input;
-            if (self.get_running_pipeline(input.target.pipeline)) |running_input_provider| {
-                if (input.target.could_match(running_input_provider.*))
-                    continue :input;
+        input: for (pipeline.inputs) |pipeline_input| {
+            switch (pipeline_input) {
+                .src => continue :input,
+                .artifact => |input| {
+                    for (self.artifacts) |artifact|
+                        if (input.matches(artifact))
+                            continue :input;
+                    if (self.get_running_pipeline(input.pipeline)) |running_input_provider|
+                        if (input.could_match(running_input_provider.*))
+                            continue :input;
+
+                    step = .{
+                        .pipeline = input.pipeline,
+                        .remote = step.remote,
+                    };
+                    continue :pipeline;
+                },
             }
-            step = .{
-                .pipeline = input.target.pipeline,
-                .remote = input.target.remote,
-            };
-            continue :pipeline;
         }
         return step;
     }
-    return error.InvalidPipeline;
+    std.debug.panic("Invalid pipeline: {s}", .{step.pipeline});
 }
 pub fn get_running_pipeline(self: @This(), pipeline: []const u8) ?*const Running {
     for (self.running) |*running|
@@ -116,13 +111,10 @@ pub fn completed(self: @This()) bool {
 pub fn create(alloc: std.mem.Allocator, io: std.Io, service: Service, targets: []Target) !@This() {
     const id = try UUIDv7.new(io);
 
-    const src = try alloc.alloc(Artifact, 1);
-    src[0] = .src;
-
     return .{
         .uuid = id,
         .service = service,
-        .artifacts = src,
+        .artifacts = try alloc.alloc(Artifact, 0),
         .running = &.{},
         .targets = targets,
     };

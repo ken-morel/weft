@@ -44,9 +44,9 @@ pub fn NumPattern(comptime T: type) type {
             }
             alloc.free(self.patterns);
         }
-        pub fn match(self: @This(), val: T) bool {
+        pub fn matches(self: @This(), val: T) bool {
             for (self.patterns) |pattern| {
-                const matches = pattern: {
+                const match = pattern: {
                     for (pattern) |condition| {
                         const cond_match = switch (condition) {
                             .gt => |v| val > v,
@@ -60,7 +60,7 @@ pub fn NumPattern(comptime T: type) type {
                     }
                     break :pattern true;
                 };
-                if (matches)
+                if (match)
                     return true;
             }
             return false;
@@ -157,18 +157,18 @@ test "NumPattern - unsigned 8-bit complex matching" {
     var pattern = try NumPattern(u8).parse(alloc, ">5<10,=0,10:2:20");
     defer pattern.deinit(alloc);
 
-    try testing.expect(pattern.match(6));
-    try testing.expect(pattern.match(9));
-    try testing.expect(!pattern.match(5));
-    try testing.expect(!pattern.match(11));
+    try testing.expect(pattern.matches(6));
+    try testing.expect(pattern.matches(9));
+    try testing.expect(!pattern.matches(5));
+    try testing.expect(!pattern.matches(11));
 
-    try testing.expect(pattern.match(0));
+    try testing.expect(pattern.matches(0));
 
-    try testing.expect(pattern.match(10));
-    try testing.expect(pattern.match(12));
-    try testing.expect(pattern.match(20));
-    try testing.expect(!pattern.match(11));
-    try testing.expect(!pattern.match(22));
+    try testing.expect(pattern.matches(10));
+    try testing.expect(pattern.matches(12));
+    try testing.expect(pattern.matches(20));
+    try testing.expect(!pattern.matches(11));
+    try testing.expect(!pattern.matches(22));
 }
 
 test "NumPattern - signed 32-bit negative numbers" {
@@ -177,17 +177,17 @@ test "NumPattern - signed 32-bit negative numbers" {
     var pattern = try NumPattern(i32).parse(alloc, "-50:10:-10,>-5<5");
     defer pattern.deinit(alloc);
 
-    try testing.expect(pattern.match(-50));
-    try testing.expect(pattern.match(-30));
-    try testing.expect(pattern.match(-10));
-    try testing.expect(!pattern.match(-45));
-    try testing.expect(!pattern.match(-60));
+    try testing.expect(pattern.matches(-50));
+    try testing.expect(pattern.matches(-30));
+    try testing.expect(pattern.matches(-10));
+    try testing.expect(!pattern.matches(-45));
+    try testing.expect(!pattern.matches(-60));
 
-    try testing.expect(pattern.match(-4));
-    try testing.expect(pattern.match(0));
-    try testing.expect(pattern.match(4));
-    try testing.expect(!pattern.match(-5));
-    try testing.expect(!pattern.match(5));
+    try testing.expect(pattern.matches(-4));
+    try testing.expect(pattern.matches(0));
+    try testing.expect(pattern.matches(4));
+    try testing.expect(!pattern.matches(-5));
+    try testing.expect(!pattern.matches(5));
 }
 
 test "NumPattern - strict memory leak check on multiple parses" {
@@ -196,9 +196,9 @@ test "NumPattern - strict memory leak check on multiple parses" {
     for (0..100) |_| {
         var pattern = try NumPattern(u32).parse(alloc, ">100<500,=1000,50:5:75");
 
-        try testing.expect(pattern.match(250));
-        try testing.expect(pattern.match(1000));
-        try testing.expect(pattern.match(65));
+        try testing.expect(pattern.matches(250));
+        try testing.expect(pattern.matches(1000));
+        try testing.expect(pattern.matches(65));
 
         pattern.deinit(alloc);
     }

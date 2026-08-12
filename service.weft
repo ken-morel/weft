@@ -9,7 +9,7 @@ $ BACKEND_URL http://{&ports.foo}/api
 < $REQUIRED_ENV
 
 .build safe(10)
-  < src !0
+  < &src
   < $REQUIRED_ENV_VAR
   ~ target
   $ STORAGE_URL &volumes.cache

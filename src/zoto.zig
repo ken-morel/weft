@@ -67,82 +67,63 @@ pub fn hashType(comptime T: type) u64 {
     }
 }
 
-pub fn serialize(dest: []u8, value: anytype) ![]u8 {
+pub fn serialize(dest: *[]u8, value: anytype) !void {
     const T = @TypeOf(value);
 
-    var ptr = dest;
-    const zoto = try writeBytes(ptr, "ZOTO");
-    ptr = ptr[zoto.len..];
-    const type_hash = try writeInt(ptr, u64, comptime hashType(T));
-    ptr = ptr[type_hash.len..];
-    const data = try serializeValue(ptr, value);
-    ptr = ptr[data.len..];
-
-    return dest[0 .. dest.len - ptr.len];
+    try writeBytes(dest, "ZOTO");
+    try writeInt(dest, u64, comptime hashType(T));
+    try serializeValue(dest, value);
 }
 
-pub fn serializeValue(buffer: []u8, value: anytype) error{BufferTooSmall}![]u8 {
+pub fn serializeValue(ptr: *[]u8, value: anytype) error{BufferTooSmall}!void {
     const T = @TypeOf(value);
     const info = @typeInfo(T);
 
-    return switch (info) {
-        inline .int => try writeInt(buffer, T, value),
+    switch (info) {
+        inline .int => try writeInt(ptr, T, value),
         inline .float => |f| try writeInt(
-            buffer,
+            ptr,
             std.meta.Int(.unsigned, f.bits),
             @bitCast(value),
         ),
 
-        inline .bool => try writeByte(buffer, if (value) 1 else 0),
-        inline .optional => if (value) |payload| blk: {
-            _ = try writeByte(buffer, 1);
-            const data = try serializeValue(buffer, payload);
-            break :blk buffer[0 .. 1 + data.len];
-        } else try writeByte(buffer, 0),
-        inline .@"struct" => |s| blk: {
-            var len: usize = 0;
+        inline .bool => try writeByte(ptr, if (value) 1 else 0),
+        inline .optional => if (value) |payload| {
+            try writeByte(ptr, 1);
+            try serializeValue(ptr, payload);
+        } else try writeByte(ptr, 0),
+        inline .@"struct" => |s| {
             inline for (s.fields) |f|
-                len += (try serializeValue(
-                    buffer,
+                try serializeValue(
+                    ptr,
                     @field(value, f.name),
-                )).len;
-            break :blk buffer[0..len];
+                );
         },
-        inline .@"enum" => try serializeValue(buffer, @intFromEnum(value)),
-        inline .@"union" => blk: {
-            var len: usize = 0;
-            const tag = std.meta.activeTag(value);
-            len += (try writeByte(buffer, @intFromEnum(tag))).len;
-            len += switch (value) {
+        inline .@"enum" => try serializeValue(ptr, @intFromEnum(value)),
+        inline .@"union" => {
+            try writeByte(ptr, @intFromEnum(std.meta.activeTag(value)));
+            switch (value) {
                 inline else => |payload| try serializeValue(
-                    buffer,
+                    ptr,
                     payload,
                 ),
-            }.len;
-            break :blk buffer[0..len];
+            }
         },
-
         inline .pointer => |p| switch (p.size) {
-            .slice => blk: {
-                var len: usize = 0;
-                len += (try writeInt(buffer, u64, value.len)).len;
-                for (value) |item|
-                    len += (try serializeValue(buffer, item)).len;
-                break :blk buffer[0..len];
+            inline .slice => {
+                try writeInt(ptr, u64, value.len);
+                for (value) |item| // just put inline everywhere
+                    try serializeValue(ptr, item);
             },
-            .one => try serializeValue(buffer, value.*),
-            else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
+            inline .one => try serializeValue(ptr, value.*),
+            inline else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
         },
-        inline .array => blk: {
-            var len: usize = 0;
-            for (value) |item|
-                len += (try serializeValue(buffer, item)).len;
-            break :blk buffer[0..len];
-        },
-        inline .error_set => try writeInt(buffer, u16, @intFromError(value)),
-        inline .void => buffer[0..0],
+        inline .array => for (value) |item|
+            try serializeValue(ptr, item),
+        inline .error_set => try writeInt(ptr, u16, @intFromError(value)),
+        inline .void => {},
         else => @compileError("Unsupported type for zoto serialization: " ++ @typeName(T)),
-    };
+    }
 }
 
 pub fn deserialize(allocator: ?std.mem.Allocator, src: *[]const u8, comptime T: type) !T {
@@ -289,11 +270,11 @@ fn hasPointers(comptime T: type) bool {
     };
 }
 
-fn writeByte(buf: []u8, byte: u8) ![]u8 {
+fn writeByte(buf: *[]u8, byte: u8) !void {
     if (buf.len < 1)
         return error.BufferTooSmall;
-    buf[0] = byte;
-    return buf[0..1];
+    buf.*[0] = byte;
+    buf.* = buf.*[1..];
 }
 
 fn writeBytes(cursor: *[]u8, bytes: []const u8) !void {
@@ -302,12 +283,12 @@ fn writeBytes(cursor: *[]u8, bytes: []const u8) !void {
     cursor.* = cursor.*[bytes.len..];
 }
 
-fn writeInt(buffer: []u8, comptime IntT: type, value: IntT) ![]u8 {
+fn writeInt(buffer: *[]u8, comptime IntT: type, value: IntT) !void {
     const size = @sizeOf(IntT);
     if (buffer.len < size)
         return error.BufferTooSmall;
-    std.mem.writeInt(IntT, buffer[0..size], value, .little);
-    return buffer[0..size];
+    std.mem.writeInt(IntT, buffer.*[0..size], value, .little);
+    buffer.* = buffer.*[size..];
 }
 
 fn readByte(src: *[]const u8) !u8 {

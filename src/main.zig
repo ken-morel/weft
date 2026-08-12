@@ -18,6 +18,7 @@ pub fn main(init: std.process.Init) !void {
 
     var term = try Term.init(alloc, init.io);
     defer term.deinit(alloc, init.io);
+    defer _ = term.flush() catch {};
 
     if (args.len > 1) {
         if (std.mem.eql(u8, args[1], "daemon")) {
@@ -27,7 +28,7 @@ pub fn main(init: std.process.Init) !void {
                     return;
                 } else if (std.mem.eql(u8, args[2], "run")) {
                     const installation: DaemonInstall = try .init();
-                    var daemon = try Daemon.init(alloc, init.io, installation);
+                    var daemon = try Daemon.init(alloc, init.io, installation, &term);
                     defer daemon.deinit();
                     try term.println("Starting daemon on :{any}", .{daemon.config.port});
                     try term.flush();
@@ -67,12 +68,12 @@ pub fn main(init: std.process.Init) !void {
             if (args.len > 2) {
                 if (std.mem.eql(u8, args[2], "add")) {
                     if (args.len != 4) {
-                        std.debug.print("Invalid arguments", .{});
+                        try term.err("Invalid arguments: Remote name required", .{});
                         return;
                     }
                     const name = args[3];
 
-                    var buf_back: [1 << 6]u8 = undefined;
+                    var buf_back: [1 << 7]u8 = undefined;
                     var buf: []u8 = &buf_back;
 
                     try term.print("remote address: ", .{});
@@ -84,14 +85,16 @@ pub fn main(init: std.process.Init) !void {
                     try term.print("remote port(9338): ", .{});
                     try term.flush();
                     const raw_port = try term.read_line(buf);
-                    const port_str = std.mem.trim(u8, raw_port, "\r\n ");
                     buf = buf[raw_port.len..];
-
-                    const port = std.fmt.parseInt(u16, port_str, 10) catch |err| {
-                        try term.err("Invalid port '{s}': {any}", .{ port_str, err });
-                        try term.flush();
-                        return;
-                    };
+                    const port_str = std.mem.trim(u8, raw_port, "\r\n ");
+                    const port = if (port_str.len == 0)
+                        9338
+                    else
+                        std.fmt.parseInt(u16, port_str, 10) catch |err| {
+                            try term.err("Invalid port '{s}': {any}", .{ port_str, err });
+                            try term.flush();
+                            return;
+                        };
 
                     try term.print("remote token: ", .{});
                     try term.flush();

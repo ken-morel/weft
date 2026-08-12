@@ -558,14 +558,23 @@ pub fn parse_pipeline(self: *@This()) !Service.Pipeline {
                     if (namespace) |_|
                         return error.NamespaceNotSupported;
 
-                    try inputs.append(self.alloc, .{
-                        .target = .{
-                            .exit_code = exit_pattern,
-                            .pipeline = name,
-                            .remote = "any",
-                        },
-                        .consume = consume,
-                    });
+                    if (std.mem.eql(u8, name, "src")) {
+                        if (exit_pattern) |_|
+                            return error.InvalidSrcTarget
+                        else if (consume)
+                            return error.InvalidSrcTarget
+                        else
+                            try inputs.append(self.alloc, .{ .src = .{} });
+                    } else {
+                        try inputs.append(self.alloc, .{
+                            .artifact = .{
+                                .exit_pattern = exit_pattern,
+                                .pipeline = name,
+                                .consume = consume,
+                            },
+                        });
+                    }
+
                     self.next_line();
                 }
             },
