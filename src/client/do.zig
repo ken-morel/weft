@@ -1,12 +1,13 @@
 const std = @import("std");
-const ClientInstall = @import("../../install/client.zig");
-const Connection = @import("../../Connection.zig");
-const Client = @import("../../Client.zig");
-const Deployment = @import("../../Deployment.zig");
-const Project = @import("../../Project.zig");
-const Term = @import("../../Term.zig");
+const ClientInstall = @import("../install/client.zig");
+const Connection = @import("../net/Connection.zig");
+const Client = @import("../net/Client.zig");
+const Deployment = @import("../model/Deployment.zig");
+const Target = @import("../model/Target.zig");
+const Project = @import("../project/Project.zig");
+const Term = @import("../util/Term.zig");
 
-const runner = @import("../runner.zig");
+const runner = @import("runner.zig");
 
 pub fn run(
     allocator: std.mem.Allocator,
@@ -14,12 +15,12 @@ pub fn run(
     term: *Term,
     project: Project,
     inst: ClientInstall,
-    targets: []const Deployment.Target,
+    targets: []const Target,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var alloc = arena.allocator();
-    const owned_targets = try alloc.dupe(Deployment.Target, targets);
+    const owned_targets = try alloc.dupe(Target, targets);
 
     const config = try project.get_config(&arena, io);
     var deployment = try Deployment.create(alloc, io, config, owned_targets);

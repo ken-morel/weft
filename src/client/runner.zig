@@ -1,10 +1,10 @@
 const std = @import("std");
 
-const Deployment = @import("../Deployment.zig");
-const ClientInstall = @import("../install.zig").Client;
-const Project = @import("../Project.zig");
-const Term = @import("../Term.zig");
-const Client = @import("../Client.zig");
+const Deployment = @import("../model/Deployment.zig");
+const ClientInstall = @import("../install/client.zig");
+const Project = @import("../project/Project.zig");
+const Term = @import("../util/Term.zig");
+const Client = @import("../net/Client.zig");
 
 pub fn run_deployment(
     alloc: std.mem.Allocator,

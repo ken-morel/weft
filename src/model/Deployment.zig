@@ -1,11 +1,9 @@
 const std = @import("std");
 
-pub const Service = @import("Service.zig");
-pub const Workspace = @import("Workspace.zig");
-pub const Target = @import("Target.zig");
-const Project = @import("Project.zig");
+const Service = @import("Service.zig");
+const Target = @import("Target.zig");
+const Project = @import("../project/Project.zig");
 const UUIDv7 = @import("UUIDv7.zig");
-const install = @import("install.zig");
 
 uuid: UUIDv7,
 

@@ -138,22 +138,22 @@ pub fn main(init: std.process.Init) !void {
     show_usage();
 }
 
-const cmd_do = @import("client/cmd/do.zig");
+const cmd_do = @import("client/do.zig");
 
 const std = @import("std");
 const DaemonInstall = @import("install/daemon.zig");
 const ClientInstall = @import("install/client.zig");
-const Daemon = @import("Daemon.zig");
-const Term = @import("Term.zig");
-const Glob = @import("Glob.zig");
-const Parser = @import("Parser.zig");
-const VersionSpec = @import("VersionSpec.zig");
-const Connection = @import("Connection.zig");
-const Project = @import("Project.zig");
-const packer = @import("packer.zig");
-const Nonce = @import("Nonce.zig");
-const NumPattern = @import("numpattern.zig").NumPattern;
-const Target = @import("Target.zig");
+const Daemon = @import("daemon/Daemon.zig");
+const Term = @import("util/Term.zig");
+const Glob = @import("util/Glob.zig");
+const Parser = @import("project/Parser.zig");
+const VersionSpec = @import("util/VersionSpec.zig");
+const Connection = @import("net/Connection.zig");
+const Project = @import("project/Project.zig");
+const Packer = @import("net/Packer.zig");
+const Nonce = @import("net/Nonce.zig");
+const NumPattern = @import("util/NumPattern.zig").NumPattern;
+const Target = @import("model/Target.zig");
 
 comptime {
     _ = NumPattern;
@@ -162,8 +162,8 @@ comptime {
     _ = VersionSpec;
     _ = Connection;
     _ = Project;
-    _ = @import("connection_test.zig");
-    _ = packer;
+    _ = @import("net/connection_test.zig");
+    _ = Packer;
     _ = Nonce;
     _ = DaemonInstall;
     _ = ClientInstall;

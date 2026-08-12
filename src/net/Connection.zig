@@ -1,11 +1,12 @@
 const std = @import("std");
 const XChaCha20Poly1305 = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
-const zoto = @import("zoto.zig");
-const Pipeline = @import("Pipeline.zig");
+const Ids = @import("../model/Ids.zig");
+const zoto = @import("../util/zoto.zig");
+const Pipeline = @import("../model/Pipeline.zig");
 const Nonce = @import("Nonce.zig");
-const Deployment = @import("Deployment.zig");
-const Service = @import("Service.zig");
-const UUIDv7 = @import("UUIDv7.zig");
+const Deployment = @import("../model/Deployment.zig");
+const Service = @import("../model/Service.zig");
+const UUIDv7 = @import("../model/UUIDv7.zig");
 
 pub const packet_size = std.math.maxInt(u16);
 
@@ -23,34 +24,10 @@ write_buf: []u8,
 read_cyph_buf: []u8,
 write_cyph_buf: []u8,
 
-pub const ServiceId = struct {
-    workspace: []const u8,
-    service: []const u8,
-    pub fn from_service(s: Service) @This() {
-        return .{
-            .workspace = s.workspace,
-            .service = s.name,
-        };
-    }
-};
-pub const DeploymentId = struct {
-    service: ServiceId,
-    deployment: UUIDv7,
-    pub fn from_deployment(d: Deployment) @This() {
-        return .{
-            .deployment = d.uuid,
-            .service = .from_service(d.service),
-        };
-    }
-};
-pub const TaskId = struct {
-    deployment: DeploymentId,
-    pipeline: []const u8,
-};
-pub const ArtifactId = struct {
-    task: TaskId,
-    neg_idx: u8,
-};
+pub const ServiceId = Ids.ServiceId;
+pub const DeploymentId = Ids.DeploymentId;
+pub const TaskId = Ids.TaskId;
+pub const ArtifactId = Ids.ArtifactId;
 
 pub const Message = union(enum) {
     request: enum(u8) {

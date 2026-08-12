@@ -1,8 +1,8 @@
-const Connection = @import("Connection.zig");
-const Server = @import("Server.zig");
+const Connection = @import("../net/Connection.zig");
+const Server = @import("../net/Server.zig");
 const std = @import("std");
-const DaemonInstall = @import("install/daemon.zig");
-const Term = @import("Term.zig");
+const DaemonInstall = @import("../install/daemon.zig");
+const Term = @import("../util/Term.zig");
 
 io: std.Io,
 alloc: std.mem.Allocator,
@@ -66,12 +66,13 @@ fn handle_one_request(self: *@This(), req: *Server.Request) !?void {
         .request => |r| switch (r) {
             .task_create => {
                 switch (try conn.recv(&arena)) {
-                    .task => |task_id| {
-                        task_id
-                    },
+                    .task => {},
+                    else => {},
                 }
             },
+            else => {},
         },
+        else => {},
     }
 }
 
@@ -80,7 +81,7 @@ fn handle_conn(self: *@This(), req: *Server.Request) void {
 
     while (true)
         handle_one_request(self, req) catch |err| {
-            self.term.err("Error Handling request: {any}", .{err});
+            self.term.err("Error Handling request: {any}", .{err}) catch {};
             break;
         } orelse break;
 }

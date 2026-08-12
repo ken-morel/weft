@@ -1,6 +1,6 @@
 const std = @import("std");
-pub const Config = @import("Service.zig");
-pub const Parser = @import("Parser.zig");
+const Service = @import("../model/Service.zig");
+const Parser = @import("Parser.zig");
 
 const weft_data_path = ".weft";
 
@@ -12,7 +12,7 @@ pub fn open(dir: std.Io.Dir) !@This() {
     };
 }
 
-pub fn get_config(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) !Config {
+pub fn get_config(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) !Service {
     const alloc = arena.allocator();
     const content = self.dir.readFileAlloc(io, "service.weft", alloc, .limited(4 << 10)) catch |err| {
         return if (err == error.FileNotFound)

@@ -1,10 +1,15 @@
 const std = @import("std");
-pub const NumPattern = @import("numpattern.zig").NumPattern;
-pub const Glob = @import("Glob.zig");
-pub const Script = @import("Script.zig");
-pub const keyed = @import("Service.zig").keyed;
-pub const Target = @import("Target.zig");
+const NumPattern = @import("../util/NumPattern.zig").NumPattern;
+const Glob = @import("../util/Glob.zig");
+const keyed = @import("Service.zig").keyed;
 const Deployment = @import("Deployment.zig");
+const Target = @import("Target.zig");
+
+pub const Script = struct {
+    lang: []const u8,
+    args: []const u8 = "",
+    lines: [][]const u8,
+};
 
 name: []const u8,
 inputs: []Input = &.{},

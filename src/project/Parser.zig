@@ -1,7 +1,10 @@
 const std = @import("std");
-const Workspace = @import("Workspace.zig");
-const Service = @import("Service.zig");
-const NumPattern = @import("numpattern.zig").NumPattern;
+const Workspace = @import("../model/Workspace.zig");
+const Service = @import("../model/Service.zig");
+const NumPattern = @import("../util/NumPattern.zig").NumPattern;
+const Pipeline = @import("../model/Pipeline.zig");
+const Glob = @import("../util/Glob.zig");
+const VersionSpec = @import("../util/VersionSpec.zig");
 
 alloc: std.mem.Allocator,
 line_iter: std.mem.SplitIterator(u8, .scalar),
@@ -493,13 +496,13 @@ pub fn parse_pipeline(self: *@This()) !Service.Pipeline {
 
     var inputs: std.ArrayList(Service.Pipeline.Input) = .empty;
     defer inputs.deinit(self.alloc);
-    var keep: std.ArrayList(Service.Pipeline.Glob) = .empty;
+    var keep: std.ArrayList(Glob) = .empty;
     defer keep.deinit(self.alloc);
     var required_env: std.ArrayList([]const u8) = .empty;
     defer required_env.deinit(self.alloc);
     var env_bindings: std.ArrayList(struct { []const u8, Service.Pipeline.EnvBinding }) = .empty;
     defer env_bindings.deinit(self.alloc);
-    var script: ?Service.Pipeline.Script = null;
+    var script: ?Pipeline.Script = null;
 
     while (true) {
         self.skip_empty_lines();
@@ -583,7 +586,7 @@ pub fn parse_pipeline(self: *@This()) !Service.Pipeline {
                 self.idx += 1;
                 _ = self.skip_spaces();
                 if (self.idx < ln.len) {
-                    try keep.append(self.alloc, Service.Pipeline.Glob.parse(ln[self.idx..]));
+                    try keep.append(self.alloc, Glob.parse(ln[self.idx..]));
                     self.next_line();
                 } else {
                     return error.ExpectedPath;
@@ -617,7 +620,7 @@ pub fn parse_pipeline(self: *@This()) !Service.Pipeline {
     };
 }
 
-pub fn parse_script(self: *@This()) !Service.Pipeline.Script {
+pub fn parse_script(self: *@This()) !Pipeline.Script {
     const lang = self.parse_name() orelse return error.NameExpected;
     _ = self.skip_spaces();
 

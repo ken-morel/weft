@@ -1,5 +1,5 @@
-const NumPattern = @import("numpattern.zig").NumPattern;
 const std = @import("std");
+const NumPattern = @import("../util/NumPattern.zig").NumPattern;
 const Deployment = @import("Deployment.zig");
 const Artifact = Deployment.Artifact;
 const Running = Deployment.Running;

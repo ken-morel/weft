@@ -2,7 +2,7 @@ const Connection = @import("Connection.zig");
 const Server = @import("Server.zig");
 const std = @import("std");
 
-const Remote = @import("install/client.zig").Remote;
+const Remote = @import("../install/client.zig").Remote;
 
 conn: Connection,
 rw: struct { std.Io.net.Stream.Reader, std.Io.net.Stream.Writer },
