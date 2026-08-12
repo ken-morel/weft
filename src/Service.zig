@@ -10,3 +10,10 @@ workspace: ?[]const u8 = null,
 pipelines: []Pipeline = &.{},
 required_env: [][]const u8 = &.{},
 env_bindings: keyed(Pipeline.EnvBinding) = &.{},
+
+pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
+    for (self.pipelines) |*pipeline|
+        if (std.mem.eql(u8, pipeline.name, name))
+            return pipeline;
+    return null;
+}

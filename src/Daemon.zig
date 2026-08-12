@@ -62,4 +62,4 @@ pub fn run(self: *@This()) !void {
 const Connection = @import("Connection.zig");
 const Server = @import("Server.zig");
 const std = @import("std");
-const DaemonInstall = @import("install.zig").Daemon;
+const DaemonInstall = @import("install/daemon.zig");

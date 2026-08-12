@@ -1,20 +1,21 @@
 const std = @import("std");
-const install = @import("../install.zig");
+const ClientInstall = @import("../install/client.zig");
 const Connection = @import("../Connection.zig");
 const Client = @import("../Client.zig");
 const Deployment = @import("../Deployment.zig");
 const Project = @import("../Project.zig");
 const Term = @import("../Term.zig");
 
+const runner = @import("../runner.zig");
+
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    project: *const Project,
-    inst: *const install.Client,
+    project: Project,
+    inst: ClientInstall,
     targets: []const Deployment.Target,
 ) !void {
-    _ = inst;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var alloc = arena.allocator();
@@ -29,4 +30,12 @@ pub fn run(
         .{try deployment.uuid.to_string(&buff)},
     );
     try term.flush();
+    try runner.run_deployment(
+        alloc,
+        io,
+        term,
+        project,
+        inst,
+        deployment,
+    );
 }

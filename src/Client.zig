@@ -2,6 +2,8 @@ const Connection = @import("Connection.zig");
 const Server = @import("Server.zig");
 const std = @import("std");
 
+const Remote = @import("install/client.zig").Remote;
+
 conn: Connection,
 rw: struct { std.Io.net.Stream.Reader, std.Io.net.Stream.Writer },
 rw_buffers: struct { []u8, []u8 },
@@ -25,7 +27,11 @@ fn init(self: *@This(), alloc: std.mem.Allocator, io: std.Io, stream: std.Io.net
     );
 }
 
-pub fn connect_tcp(alloc: std.mem.Allocator, io: std.Io, addr: std.Io.net.IpAddress, secret: *[32]u8) !*@This() {
+pub fn connect(alloc: std.mem.Allocator, io: std.Io, remote: Remote) !*@This() {
+    return try connect_tcp(alloc, io, remote.address, remote.token);
+}
+
+pub fn connect_tcp(alloc: std.mem.Allocator, io: std.Io, addr: std.Io.net.IpAddress, secret: []u8) !*@This() {
     const stream = try addr.connect(io, .{
         .mode = .stream,
         .protocol = .tcp,
@@ -37,7 +43,10 @@ pub fn connect_tcp(alloc: std.mem.Allocator, io: std.Io, addr: std.Io.net.IpAddr
     return self;
 }
 
-pub fn connect_unix(alloc: std.mem.Allocator, io: std.Io, secret: *[32]u8, path: ?[]const u8) !*@This() {
+pub fn connect_local(alloc: std.mem.Allocator, io: std.Io, secret: []u8) !*@This() {
+    return try connect_unix(alloc, io, secret, null);
+}
+pub fn connect_unix(alloc: std.mem.Allocator, io: std.Io, secret: []u8, path: ?[]const u8) !*@This() {
     const socket_path = path orelse Server.unix_socket_path;
     const unix_addr = try std.Io.net.UnixAddress.init(socket_path);
     const stream = try unix_addr.connect(io);
@@ -52,7 +61,7 @@ pub fn shutdown(self: *@This(), io: std.Io) void {
     self.stream.shutdown(io, .both) catch {};
 }
 
-pub fn deinit(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
+pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
     self.stream.close(io);
     self.conn.deinit(alloc);
     alloc.free(self.rw_buffers.@"0");

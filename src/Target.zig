@@ -1,5 +1,8 @@
 const NumPattern = @import("numpattern.zig").NumPattern;
 const std = @import("std");
+const Deployment = @import("Deployment.zig");
+const Artifact = Deployment.Artifact;
+const Running = Deployment.Running;
 
 remote: ?[]const u8,
 pipeline: []const u8,
@@ -37,10 +40,41 @@ pub fn parse(alloc: std.mem.Allocator, txt: []const u8) !@This() {
         .exit_code = exit_code,
     };
 }
-pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
+pub fn deinit(self: *const @This(), alloc: std.mem.Allocator) void {
     if (self.remote) |remote|
         alloc.free(remote);
     if (self.exit_code) |exit|
         exit.deinit(alloc);
     alloc.free(self.pipeline);
+}
+
+pub fn could_match(self: @This(), run: Running) bool {
+    if (!std.mem.eql(u8, self.pipeline, run.pipeline))
+        return false;
+    if (self.remote) |srem|
+        if (run.remote) |brem|
+            return std.mem.eql(u8, srem, brem)
+        else
+            return false
+    else if (run.remote) |_|
+        return false
+    else
+        return true;
+}
+
+pub fn matches(self: @This(), art: Artifact) bool {
+    if (!std.mem.eql(u8, self.pipeline, art.pipeline))
+        return false;
+    if (self.exit_code) |code|
+        if (!code.match(art.exit_code))
+            return false;
+    if (self.remote) |srem|
+        if (art.remote) |brem|
+            return std.mem.eql(u8, srem, brem)
+        else
+            return false
+    else if (art.remote) |_|
+        return false
+    else
+        return true;
 }

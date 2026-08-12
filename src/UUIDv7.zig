@@ -22,14 +22,10 @@ pub fn timestamp(self: @This()) u48 {
     return std.mem.readInt(u48, self.bytes[0..6], .big);
 }
 
-pub fn rand_a(self: @This()) u12 {
-    const raw = std.mem.readInt(u16, self.bytes[6..8], .big);
-    return @intCast(raw & 0x0fff);
-}
-
-pub fn rand_b(self: @This()) u62 {
-    const raw = std.mem.readInt(u64, self.bytes[8..16], .big);
-    return @intCast(raw & 0x3fff_ffff_ffff_ffff);
+pub fn rand(self: @This()) struct { u12, u62 } {
+    const raw1 = std.mem.readInt(u16, self.bytes[6..8], .big);
+    const raw2 = std.mem.readInt(u64, self.bytes[8..16], .big);
+    return .{ @intCast(raw1 & 0x0fff), @intCast(raw2 & 0x3fff_ffff_ffff_ffff) };
 }
 
 pub fn to_string(self: *const @This(), buf: []u8) ![]const u8 {
@@ -78,9 +74,9 @@ pub fn parse(input: []const u8) !@This() {
 
 pub inline fn parse_hex(c: u8) !u4 {
     return switch (c) {
-        '0'...'9' => @intCast(c - '0'),
-        'a'...'f' => @intCast(c - 'a' + 10),
-        'A'...'F' => @intCast(c - 'A' + 10),
-        else => error.InvalidCharacter,
+        inline '0'...'9' => @intCast(c - '0'),
+        inline 'a'...'f' => @intCast(c - 'a' + 10),
+        inline 'A'...'F' => @intCast(c - 'A' + 10),
+        inline else => error.InvalidCharacter,
     };
 }

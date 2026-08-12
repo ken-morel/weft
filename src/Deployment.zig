@@ -20,16 +20,99 @@ pub const Running = struct {
     pipeline: []const u8,
 };
 
-pub const Artifact = union(enum) {
-    src: struct {
-        consumed: bool = false,
-    },
-    build: struct {
-        remote: ?[]const u8,
-        pipeline: []const u8,
-        exit_code: u8,
-    },
+pub const Artifact = struct {
+    consumed: bool = false,
+    remote: ?[]const u8,
+    pipeline: []const u8,
+    exit_code: u8,
+
+    pub fn is_src(self: @This()) bool {
+        return std.mem.eql(u8, self.pipeline, "src");
+    }
+    pub fn src() @This() {
+        return .{
+            .pipeline = "src",
+            .remote = null,
+            .exit_code = 0,
+        };
+    }
 };
+
+pub const NextStep = struct {
+    remote: []const u8,
+    pipeline: []const u8,
+    pub fn from_target(t: Target) @This() {
+        return .{
+            .remote = t.remote,
+            .pipeline = t.pipeline,
+        };
+    }
+    pub fn could_match(self: @This(), running: Running) bool {
+        return std.mem.eql(u8, self.pipeline, running.pipeline) and std.mem.eql(u8, self.remote, running.remote);
+    }
+    pub fn cmp(a: @This(), b: @This()) i2 {
+        return if (a.gt(b))
+            1
+        else if (b.gt(a))
+            -1
+        else
+            0;
+    }
+    pub fn gt(a: @This(), b: @This()) bool {
+        _ = a;
+        _ = b;
+        return false;
+    }
+};
+
+pub fn next(self: *const @This()) ?NextStep {
+    const target = self.next_target().?;
+    return self.find_next_runnable_input(.from_target(target.*)).?;
+}
+
+/// asumes any existing artifact from the pipeline isn't satisfying
+pub fn find_next_runnable_input(self: @This(), final_step: NextStep) ?NextStep {
+    var step = final_step;
+    pipeline: while (self.service.get_pipeline(step.pipeline)) |pipeline| {
+        if (self.get_running_pipeline(pipeline.name)) |running|
+            if (step.could_match(running.*))
+                return null;
+        input: for (pipeline.inputs) |input| {
+            for (self.artifacts) |artifact|
+                if (input.target.matches(artifact))
+                    continue :input;
+            if (self.get_running_pipeline(input.target.pipeline)) |running_input_provider| {
+                if (input.target.could_match(running_input_provider.*))
+                    continue :input;
+            }
+            step = .{
+                .pipeline = input.target.pipeline,
+                .remote = input.target.remote orelse step.remote,
+            };
+            continue :pipeline;
+        }
+        return step;
+    }
+    return error.InvalidPipeline;
+}
+pub fn get_running_pipeline(self: @This(), pipeline: []const u8) ?*const Running {
+    for (self.running) |*running|
+        if (std.mem.eql(u8, running.pipeline, pipeline))
+            return running;
+    return null;
+}
+pub fn next_target(self: @This()) ?*const Target {
+    target: for (self.targets) |*target| {
+        for (self.artifacts) |artifact|
+            if (target.matches(artifact))
+                continue :target;
+        return target;
+    }
+    return null;
+}
+pub fn completed(self: @This()) bool {
+    return self.next_target() == null;
+}
 
 pub fn create(alloc: std.mem.Allocator, io: std.Io, service: Service, targets: []Target) !@This() {
     const id = try UUIDv7.new(io);
@@ -46,7 +129,7 @@ pub fn create(alloc: std.mem.Allocator, io: std.Io, service: Service, targets: [
     };
 }
 
-pub fn save(self: @This(), io: std.Io, proj: *const Project) !void {
+pub fn save(self: *const @This(), io: std.Io, proj: *const Project) !void {
     var buffer: [1 << 10]u8 = undefined;
     var pos: []u8 = &buffer;
     var filename = try self.uuid.to_string(pos);
