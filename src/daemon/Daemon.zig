@@ -3,6 +3,7 @@ const Server = @import("../net/Server.zig");
 const std = @import("std");
 const DaemonInstall = @import("../install/daemon.zig");
 const Term = @import("../util/Term.zig");
+const handler = @import("handler.zig");
 
 io: std.Io,
 alloc: std.mem.Allocator,
@@ -50,38 +51,8 @@ pub fn run(self: *@This()) !void {
         };
         group.async(
             self.io,
-            handle_conn,
+            handler.handle_conn,
             .{ self, req },
         );
     }
-}
-
-fn handle_one_request(self: *@This(), req: *Server.Request) !?void {
-    var arena = std.heap.ArenaAllocator.init(self.alloc);
-    defer arena.deinit();
-    const conn = &req.conn;
-
-    const msg = try conn.recv(&arena);
-    switch (msg) {
-        .request => |r| switch (r) {
-            .task_create => {
-                switch (try conn.recv(&arena)) {
-                    .task => {},
-                    else => {},
-                }
-            },
-            else => {},
-        },
-        else => {},
-    }
-}
-
-fn handle_conn(self: *@This(), req: *Server.Request) void {
-    defer req.deinit(self.alloc, self.io);
-
-    while (true)
-        handle_one_request(self, req) catch |err| {
-            self.term.err("Error Handling request: {any}", .{err}) catch {};
-            break;
-        } orelse break;
 }

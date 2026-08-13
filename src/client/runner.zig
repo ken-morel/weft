@@ -54,7 +54,7 @@ pub fn spawn_next_step(
     try term.println("Connected to remote", .{});
     try client.conn.send(.{ .request = .task_create });
     try client.conn.send(.{
-        .task = .{
+        .task_id = .{
             .deployment = .from_deployment(deployment.*),
             .pipeline = step.pipeline,
         },

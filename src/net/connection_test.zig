@@ -43,7 +43,7 @@ test "Connection: TCP Handshake and basic Message exchange" {
             defer conn.deinit(ctx.alloc);
 
             // Send request
-            const msg = Message{ .bytes = "hello server" };
+            const msg = Message{ .data = "hello server" };
             try conn.send(msg);
 
             // Read response
@@ -211,7 +211,7 @@ test "Connection: TCP Fragmentation and Packet Boundaries" {
             defer ctx.alloc.free(large_payload);
             @memset(large_payload, 0xAB);
 
-            try conn.send(Message{ .bytes = large_payload });
+            try conn.send(Message{ .data = large_payload });
         }
     };
 
@@ -274,7 +274,7 @@ test "Connection: Tampered Ciphertext or Auth Tag Rejection" {
             defer conn.deinit(ctx.alloc);
 
             // Send normal message
-            try conn.send(Message{ .bytes = "Secret Payload" });
+            try conn.send(Message{ .data = "Secret Payload" });
         }
     };
 

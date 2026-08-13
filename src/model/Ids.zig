@@ -29,5 +29,5 @@ pub const TaskId = struct {
 };
 pub const ArtifactId = struct {
     task: TaskId,
-    neg_idx: u8,
+    idx: u8,
 };

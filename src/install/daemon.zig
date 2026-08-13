@@ -4,6 +4,7 @@ const client_install = @import("client.zig");
 const read_only_user_permissions = client_install.read_only_user_permissions;
 const read_only_user_mode = client_install.read_only_user_mode;
 const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
+const Ids = @import("../model/Ids.zig");
 
 pub const Config = struct {
     secret: [32]u8 = undefined,
@@ -83,7 +84,10 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
     const hex_key = std.fmt.bytesToHex(config.secret, .upper);
 
     var stdout = std.Io.File.stdout();
-    try stdout.writeStreamingAll(io, "\n=== Weft Daemon Installed Successfully ===\nsecret: ");
+    try stdout.writeStreamingAll(
+        io,
+        "\n=== Weft Daemon Installed Successfully ===\nsecret: ",
+    );
     try stdout.writeStreamingAll(io, &hex_key);
 }
 
@@ -101,14 +105,56 @@ pub fn get_config(self: @This(), io: std.Io, arena: *std.heap.ArenaAllocator) !C
     const stat = try file.stat(io);
 
     if ((stat.permissions.toMode() & 0o777) != read_only_user_mode) {
-        std.debug.print("FATAL: /etc/weft.zon has insecure permissions. Must be 0600.\n", .{});
+        std.debug.print(
+            "FATAL: /etc/weft.zon has insecure permissions. Must be 0600.\n",
+            .{},
+        );
         return error.InsecurePermissions;
     }
     var buff: [4 << 10]u8 = undefined;
     var reader = file.reader(io, &buff);
-    const content = try reader.interface.allocRemaining(alloc, client_config_size_limit);
+    const content = try reader.interface.allocRemaining(
+        alloc,
+        client_config_size_limit,
+    );
     defer alloc.free(content);
-    const null_terminated = try alloc.dupeSentinel(u8, content, 0);
+    const null_terminated = try alloc.dupeSentinel(
+        u8,
+        content,
+        0,
+    );
 
-    return try std.zon.parse.fromSliceAlloc(Config, alloc, null_terminated, null, .{});
+    return try std.zon.parse.fromSliceAlloc(
+        Config,
+        alloc,
+        null_terminated,
+        null,
+        .{},
+    );
+}
+
+pub fn create_artifact_dir(
+    self: @This(),
+    alloc: std.mem.Allocator,
+    io: std.Io,
+    art: *Ids.ArtifactId,
+) !std.Io.Dir {
+    _ = self;
+    var uuid: [56]u8 = undefined;
+    var id_buf: [5]u8 = undefined;
+    const id = try std.fmt.bufPrint(&id_buf, "{d}", art.idx);
+    art.task.deployment.deployment.to_string(&uuid);
+    const path = try std.fs.path.join(alloc, &.{
+        "/var/lib/weft/artifacts/",
+        art.task.deployment.service.workspace,
+        art.task.deployment.service.service,
+        art.task.pipeline,
+        uuid,
+        id,
+    });
+    defer alloc.free(path);
+    try std.Io.Dir.cwd().createDirPath(io, path);
+    return try std.Io.Dir.cwd().openDir(io, path, .{
+        .iterate = true,
+    });
 }

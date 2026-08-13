@@ -45,21 +45,20 @@ pub const Message = union(enum) {
         workspace_sync,
     },
 
-    artifact: ArtifactId,
+    artifact_id: ArtifactId,
 
-    task: TaskId,
+    task_id: TaskId,
 
     pipeline: Pipeline,
 
     log: TaskId,
     log_stream: TaskId,
 
-    file: struct {
-        path: []const u8,
-        size: u64,
-    },
+    file: []const u8,
 
-    bytes: []const u8,
+    folder: []const u8,
+
+    data: []const u8,
 
     end: void,
 
