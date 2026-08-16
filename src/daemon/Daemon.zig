@@ -1,8 +1,8 @@
-const Connection = @import("../net/Connection.zig");
-const Server = @import("../net/Server.zig");
+const Connection = @import("../Connection.zig");
+const Server = @import("../Server.zig");
 const std = @import("std");
-const DaemonInstall = @import("../install/daemon.zig");
-const Term = @import("../util/Term.zig");
+const DaemonInstall = @import("../DaemonInstall.zig");
+const Term = @import("../Term.zig");
 const handler = @import("handler.zig");
 
 io: std.Io,
@@ -38,7 +38,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
 }
 
 pub fn run(self: *@This()) !void {
-    std.debug.print("Listening on TCP :{d} and Unix {s}\n", .{ self.config.port, Server.unix_socket_path });
+    try self.term.printlnf("Listening on TCP :{d} and Unix {s}", .{ self.config.port, Server.unix_socket_path });
 
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
@@ -46,9 +46,10 @@ pub fn run(self: *@This()) !void {
     while (true) {
         const req = self.server.accept(self.alloc, self.io) catch |err| {
             if (err == error.Canceled) return;
-            std.debug.print("accept error: {any}\n", .{err});
+            try self.term.err("accept error: {any}", .{err});
             continue;
         };
+        try self.term.printlnf("new connection", .{});
         group.async(
             self.io,
             handler.handle_conn,

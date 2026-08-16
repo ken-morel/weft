@@ -21,11 +21,11 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
     };
 }
 
-pub fn reader(self: *@This()) *std.Io.Reader {
+pub inline fn reader(self: *@This()) *std.Io.Reader {
     return &self.rw_file.@"0".interface;
 }
 
-pub fn writer(self: *@This()) *std.Io.Writer {
+pub inline fn writer(self: *@This()) *std.Io.Writer {
     return &self.rw_file.@"1".interface;
 }
 
@@ -35,31 +35,41 @@ pub fn deinit(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
     alloc.free(self.rw_buf.@"1");
 }
 
-pub fn flush(self: *@This()) !void {
+pub inline fn flush(self: *@This()) !void {
     try self.writer().flush();
 }
 
-pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+pub inline fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
     try self.writer().print(fmt, args);
+}
+pub fn printf(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+    try self.print(fmt, args);
+    try self.flush();
 }
 
 pub fn println(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
     try self.print(fmt ++ "\n", args);
 }
 
-pub fn err(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+pub fn printlnf(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
     try self.print(fmt ++ "\n", args);
+    try self.flush();
 }
 
-pub fn write(self: *@This(), txt: []const u8) !void {
+pub inline fn err(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+    try self.print(fmt ++ "\n", args);
+    try self.flush();
+}
+
+pub inline fn write(self: *@This(), txt: []const u8) !void {
     try self.writer().writeAll(txt);
 }
 
-pub fn newline(self: *@This()) !void {
+pub inline fn newline(self: *@This()) !void {
     try self.writer().writeByte('\n');
 }
 
-pub fn line_return(self: *@This()) !void {
+pub inline fn line_return(self: *@This()) !void {
     try self.writer().writeByte('\r');
 }
 
@@ -72,6 +82,6 @@ pub fn read_till(self: *@This(), buf: []u8, tk: u8) ![]u8 {
     return buf;
 }
 
-pub fn read_line(self: *@This(), buf: []u8) ![]u8 {
+pub inline fn read_line(self: *@This(), buf: []u8) ![]u8 {
     return self.read_till(buf, '\n');
 }

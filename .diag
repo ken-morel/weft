@@ -1,0 +1,35 @@
+install
++- install weft
+   +- compile exe weft Debug native 3 errors
+/usr/lib/zig/std/debug.zig:420:14: error: reached unreachable code
+    if (!ok) unreachable; // assertion failure
+             ^~~~~~~~~~~
+/usr/lib/zig/std/zon/parse.zig:382:20: note: called at comptime here
+    comptime assert(canParseType(T));
+             ~~~~~~^~~~~~~~~~~~~~~~~
+referenced by:
+    fromZoirAlloc__anon_34411: /usr/lib/zig/std/zon/parse.zig:343:29
+    fromSliceAlloc__anon_33597: /usr/lib/zig/std/zon/parse.zig:307:25
+    8 reference(s) hidden; use '-freference-trace=10' to see all references
+src/Deployment.zig:116:37: error: no field or member function named 'open_deployments_dir' in 'Project'
+    const deployments_dir = try proj.open_deployments_dir(io);
+                                ~~~~^~~~~~~~~~~~~~~~~~~~~
+src/Project.zig:1:1: note: struct declared here
+const std = @import("std");
+^~~~~
+src/main.zig:61:23: error: no field or member function named 'deinit' in 'Step'
+                target.deinit(alloc);
+                ~~~~~~^~~~~~~
+src/Step.zig:1:1: note: struct declared here
+const std = @import("std");
+^~~~~
+error: 3 compilation errors
+failed command: /usr/bin/zig build-exe -ODebug -Mroot=/home/engon/weft/src/main.zig --cache-dir .zig-cache --global-cache-dir /home/engon/.cache/zig --name weft --zig-lib-dir /usr/lib/zig/ --listen=-
+
+Build Summary: 0/3 steps succeeded (1 failed)
+install transitive failure
++- install weft transitive failure
+   +- compile exe weft Debug native 3 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/cb80f3598123f7dbe6707996f7dc0f52/build /usr/bin/zig /usr/lib/zig /home/engon/weft .zig-cache /home/engon/.cache/zig --seed 0x95ea648f -Z3b29d40bcca9a4be

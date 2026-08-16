@@ -1,12 +1,11 @@
 const std = @import("std");
 const XChaCha20Poly1305 = std.crypto.aead.chacha_poly.XChaCha20Poly1305;
-const Ids = @import("../model/Ids.zig");
-const zoto = @import("../util/zoto.zig");
-const Pipeline = @import("../model/Pipeline.zig");
+const zoto = @import("zoto.zig");
+const Weft = @import("Weft.zig");
 const Nonce = @import("Nonce.zig");
-const Deployment = @import("../model/Deployment.zig");
-const Service = @import("../model/Service.zig");
-const UUIDv7 = @import("../model/UUIDv7.zig");
+const Deployment = @import("Deployment.zig");
+const UUIDv7 = @import("UUIDv7.zig");
+const ids = @import("ids.zig");
 
 pub const packet_size = std.math.maxInt(u16);
 
@@ -24,11 +23,6 @@ write_buf: []u8,
 read_cyph_buf: []u8,
 write_cyph_buf: []u8,
 
-pub const ServiceId = Ids.ServiceId;
-pub const DeploymentId = Ids.DeploymentId;
-pub const TaskId = Ids.TaskId;
-pub const ArtifactId = Ids.ArtifactId;
-
 pub const Message = union(enum) {
     request: enum(u8) {
         artifact_push,
@@ -45,14 +39,14 @@ pub const Message = union(enum) {
         workspace_sync,
     },
 
-    artifact_id: ArtifactId,
+    artifact_id: ids.ArtifactId,
 
-    task_id: TaskId,
+    task_id: ids.TaskId,
 
-    pipeline: Pipeline,
+    pipeline: Weft.Pipeline,
 
-    log: TaskId,
-    log_stream: TaskId,
+    log: ids.TaskId,
+    log_stream: ids.TaskId,
 
     file: []const u8,
 
@@ -66,7 +60,6 @@ pub const Message = union(enum) {
     err: anyerror,
 };
 
-/// The interface for the connection. Handles encryption
 pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *std.Io.Reader, writer: *std.Io.Writer) !@This() {
     const out_nonce = try Nonce.random(io);
     try out_nonce.write(writer);
@@ -105,7 +98,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *s
     };
 }
 
-pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
+pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
     alloc.free(self.read_buf);
     alloc.free(self.write_buf);
     alloc.free(self.write_cyph_buf);

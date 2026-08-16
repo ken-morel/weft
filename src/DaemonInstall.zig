@@ -1,10 +1,10 @@
 const std = @import("std");
-const client_install = @import("client.zig");
+const ClientInstall = @import("ClientInstall.zig");
 
-const read_only_user_permissions = client_install.read_only_user_permissions;
-const read_only_user_mode = client_install.read_only_user_mode;
+const read_only_user_permissions = ClientInstall.read_only_user_permissions;
+const read_only_user_mode = ClientInstall.read_only_user_mode;
 const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
-const Ids = @import("../model/Ids.zig");
+const ids = @import("ids.zig");
 
 pub const Config = struct {
     secret: [32]u8 = undefined,
@@ -133,25 +133,28 @@ pub fn get_config(self: @This(), io: std.Io, arena: *std.heap.ArenaAllocator) !C
     );
 }
 
+pub fn get_artifact_dir_path(
+    self: @This(),
+    alloc: std.mem.Allocator,
+    art: ids.ArtifactId,
+) ![]const u8 {
+    _ = self;
+    var uuid_buf: [36]u8 = undefined;
+    const uuid = try art.deployment.to_string(&uuid_buf);
+    return try std.fs.path.join(alloc, &.{
+        "/var/lib/weft/artifacts/",
+        art.service.workspace,
+        uuid,
+        art.service.name,
+    });
+}
 pub fn create_artifact_dir(
     self: @This(),
     alloc: std.mem.Allocator,
     io: std.Io,
-    art: *Ids.ArtifactId,
+    art: ids.ArtifactId,
 ) !std.Io.Dir {
-    _ = self;
-    var uuid: [56]u8 = undefined;
-    var id_buf: [5]u8 = undefined;
-    const id = try std.fmt.bufPrint(&id_buf, "{d}", art.idx);
-    art.task.deployment.deployment.to_string(&uuid);
-    const path = try std.fs.path.join(alloc, &.{
-        "/var/lib/weft/artifacts/",
-        art.task.deployment.service.workspace,
-        art.task.deployment.service.service,
-        art.task.pipeline,
-        uuid,
-        id,
-    });
+    const path = try self.get_artifact_dir_path(alloc, art);
     defer alloc.free(path);
     try std.Io.Dir.cwd().createDirPath(io, path);
     return try std.Io.Dir.cwd().openDir(io, path, .{

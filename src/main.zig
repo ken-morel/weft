@@ -30,15 +30,13 @@ pub fn main(init: std.process.Init) !void {
                     const installation: DaemonInstall = try .init();
                     var daemon = try Daemon.init(alloc, init.io, installation, &term);
                     defer daemon.deinit();
-                    try term.println("Starting daemon on :{any}", .{daemon.config.port});
-                    try term.flush();
+                    try term.printlnf("Starting daemon on :{any}", .{daemon.config.port});
                     return daemon.run();
                 }
             }
         } else if (std.mem.eql(u8, args[1], "do")) {
             if (args.len < 3) {
                 try term.err("Usage: weft do [remote.]pipeline [[remote.]pipeline ...]", .{});
-                try term.flush();
                 return;
             }
             const target_args = args[2..];
@@ -47,15 +45,14 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            var targets: std.ArrayList(Target) = .empty;
+            var targets: std.ArrayList(Step) = .empty;
             defer targets.deinit(alloc);
 
             for (target_args) |arg| {
-                const target = Target.parse(alloc, arg) catch |err| {
+                const target = Step.parse(arg) catch |err| {
                     try term.err("Invalid target: {any}: {s}, ", .{ err, arg });
                     return err;
                 };
-                errdefer target.deinit(alloc);
                 try targets.append(alloc, target);
             }
             const targets_slice = try targets.toOwnedSlice(alloc);
@@ -76,14 +73,12 @@ pub fn main(init: std.process.Init) !void {
                     var buf_back: [1 << 7]u8 = undefined;
                     var buf: []u8 = &buf_back;
 
-                    try term.print("remote address: ", .{});
-                    try term.flush();
+                    try term.printlnf("remote address: ", .{});
                     const raw_addr = try term.read_line(buf);
                     const addr = std.mem.trim(u8, raw_addr, "\r\n ");
                     buf = buf[raw_addr.len..];
 
-                    try term.print("remote port(9338): ", .{});
-                    try term.flush();
+                    try term.printlnf("remote port(9338): ", .{});
                     const raw_port = try term.read_line(buf);
                     buf = buf[raw_port.len..];
                     const port_str = std.mem.trim(u8, raw_port, "\r\n ");
@@ -92,18 +87,15 @@ pub fn main(init: std.process.Init) !void {
                     else
                         std.fmt.parseInt(u16, port_str, 10) catch |err| {
                             try term.err("Invalid port '{s}': {any}", .{ port_str, err });
-                            try term.flush();
                             return;
                         };
 
-                    try term.print("remote token: ", .{});
-                    try term.flush();
+                    try term.printlnf("remote token: ", .{});
                     const raw_token = try term.read_line(buf);
                     const token_hex = std.mem.trim(u8, raw_token, "\r\n ");
 
                     if (token_hex.len != 64) {
                         try term.err("Invalid token length, expected 64 hex characters (32 bytes), got {d}", .{token_hex.len});
-                        try term.flush();
                         return;
                     }
 
@@ -141,34 +133,9 @@ pub fn main(init: std.process.Init) !void {
 const cmd_do = @import("client/do.zig");
 
 const std = @import("std");
-const DaemonInstall = @import("install/daemon.zig");
-const ClientInstall = @import("install/client.zig");
+const DaemonInstall = @import("DaemonInstall.zig");
+const ClientInstall = @import("ClientInstall.zig");
 const Daemon = @import("daemon/Daemon.zig");
-const Term = @import("util/Term.zig");
-const Glob = @import("util/Glob.zig");
-const Parser = @import("project/Parser.zig");
-const VersionSpec = @import("util/VersionSpec.zig");
-const Connection = @import("net/Connection.zig");
-const Project = @import("project/Project.zig");
-const Packer = @import("net/Packer.zig");
-const Nonce = @import("net/Nonce.zig");
-const NumPattern = @import("util/NumPattern.zig").NumPattern;
-const Target = @import("model/Target.zig");
-
-comptime {
-    _ = NumPattern;
-    _ = Glob;
-    _ = Parser;
-    _ = VersionSpec;
-    _ = Connection;
-    _ = Project;
-    _ = @import("net/connection_test.zig");
-    _ = Packer;
-    _ = Nonce;
-    _ = DaemonInstall;
-    _ = ClientInstall;
-    _ = Target;
-
-    std.testing.refAllDecls(@This());
-    std.debug.assert(Connection.packet_size > 0);
-}
+const Term = @import("Term.zig");
+const Project = @import("Project.zig");
+const Step = @import("Step.zig");

@@ -4,24 +4,7 @@ pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt
 pub const read_only_user_mode = read_only_user_permissions.toMode();
 pub const remotes_zon_file_name = "remotes.zon";
 
-pub const Remote = struct {
-    name: []const u8,
-    address: std.Io.net.IpAddress,
-    token: []const u8,
-
-    pub fn dupe(self: @This(), arena: *std.heap.ArenaAllocator) !@This() {
-        var buf = try arena.allocator().alloc(u8, self.name.len + self.token.len);
-
-        std.mem.copyForwards(u8, buf[0..self.name.len], self.name);
-        std.mem.copyForwards(u8, buf[self.name.len..], self.token);
-
-        return .{
-            .name = buf[0..self.name.len],
-            .address = self.address,
-            .token = buf[self.name.len..],
-        };
-    }
-};
+const Remote = @import("Remote.zig");
 
 config_dir: std.Io.Dir,
 
@@ -59,19 +42,20 @@ pub fn open_data_dir(alloc: std.mem.Allocator, io: std.Io, env: *const std.proce
 
 pub fn get_remotes(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) ![]Remote {
     const alloc = arena.allocator();
-    const content = self.config_dir.readFileAlloc(
+    const content = self.config_dir.readFileAllocOptions(
         io,
         remotes_zon_file_name,
         alloc,
         .unlimited,
+        .of(u8),
+        0,
     ) catch |err|
         return if (err == error.FileNotFound)
             &.{}
         else
             err;
     defer alloc.free(content);
-    const null_terminated = try alloc.dupeSentinel(u8, content, 0);
-    return std.zon.parse.fromSliceAlloc([]Remote, alloc, null_terminated, null, .{});
+    return std.zon.parse.fromSliceAlloc([]Remote, alloc, content, null, .{});
 }
 pub fn get_remote(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io, name: []const u8) !?Remote {
     var temp_arena: std.heap.ArenaAllocator = .init(arena.allocator());

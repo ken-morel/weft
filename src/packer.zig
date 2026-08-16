@@ -113,12 +113,12 @@ pub const Unpacker = struct {
     }
 
     pub fn folder(self: *@This(), io: std.Io, path: []const u8) !void {
-        try self.root.makePath(io, path);
+        try self.root.createDirPath(io, path);
     }
 
-    pub fn file(self: *@This(), io: std.Io, path: []const u8) void {
+    pub fn file(self: *@This(), io: std.Io, path: []const u8) !void {
         if (std.fs.path.dirname(path)) |parent_dir|
-            try self.root.makePath(io, parent_dir);
+            try self.root.createDirPath(io, parent_dir);
         if (self.handle) |h|
             h.close(io);
         self.handle = try self.root.createFile(io, path, .{ .truncate = true });
@@ -129,14 +129,13 @@ pub const Unpacker = struct {
 
         var reader: std.Io.Reader = .fixed(compressed_bytes);
 
-        var decompressor: flate.Decompress = try .init(
+        var decompressor: flate.Decompress = .init(
             &reader,
-            self.buffer,
             .zlib,
+            self.buffer,
         );
 
-        const bytes_decompressed = try decompressor.reader.readAll(self.output);
-
-        try file_handle.writeAll(io, self.output[0..bytes_decompressed]);
+        const bytes_decompressed = decompressor.reader.buffered();
+        try file_handle.writeStreamingAll(io, bytes_decompressed);
     }
 };

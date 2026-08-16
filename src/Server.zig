@@ -35,7 +35,7 @@ pub const Request = struct {
         );
     }
 
-    pub fn deinit(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
+    pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
         self.stream.close(io);
         self.conn.deinit(alloc);
         self.server.permits.post(io);

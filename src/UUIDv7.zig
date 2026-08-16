@@ -2,7 +2,7 @@ const std = @import("std");
 
 bytes: [16]u8,
 
-pub fn new(io: std.Io) !@This() {
+pub fn now(io: std.Io) !@This() {
     var bytes: [16]u8 = undefined;
 
     try io.randomSecure(&bytes);

@@ -1,10 +1,9 @@
 const Connection = @import("Connection.zig");
 const Server = @import("Server.zig");
 const std = @import("std");
-const Ids = @import("../model/Ids.zig");
 
-const Remote = @import("../install/client.zig").Remote;
-const Packer = @import("../util/packer.zig").Packer;
+const Remote = @import("Remote.zig").Remote;
+const Packer = @import("packer.zig").Packer;
 
 conn: Connection,
 rw: struct { std.Io.net.Stream.Reader, std.Io.net.Stream.Writer },
@@ -63,32 +62,10 @@ pub fn shutdown(self: @This(), io: std.Io) void {
     self.stream.shutdown(io, .both) catch {};
 }
 
-pub fn destroy(self: @This(), alloc: std.mem.Allocator, io: std.Io) void {
+pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
     self.stream.close(io);
     self.conn.deinit(alloc);
     alloc.free(self.rw_buffers.@"0");
     alloc.free(self.rw_buffers.@"1");
     alloc.destroy(self);
-}
-
-pub fn push_artifact(self: @This(), alloc: std.mem.Allocator, io: std.Io, art: Ids.ArtifactId, dir: std.Io.Dir) !void {
-    try self.conn.send(.{ .request = .artifact_push });
-    try self.conn.send(.{ .artifact_id = art });
-
-    var packer: *Packer = try .init(alloc, dir);
-    defer packer.destroy(alloc, io);
-
-    while (try packer.next(io)) |pack|
-        switch (pack) {
-            .file => |file| self.conn.send(.{ .file = file }),
-            .folder => |folder| self.conn.send(.{ .folder = folder }),
-            .data => |data| self.conn.send(.{ .data = data }),
-        };
-    self.conn.send(.{ .end = {} });
-    var recv_arena: std.heap.ArenaAllocator = .init(alloc);
-    defer recv_arena.deinit();
-    switch (self.conn.recv(&recv_arena)) {
-        .ok => {},
-        else => return error.ServerError,
-    }
 }
