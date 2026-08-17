@@ -11,5 +11,6 @@ const runner = @import("runner.zig");
 pub fn create_src_artifact(allocator: std.mem.Allocator, io: std.Io, term: *Term, project: Project) !void {
     _ = term;
     _ = allocator;
-    project.open_artifacts_dir(io);
+    _ = project;
+    _ = io;
 }

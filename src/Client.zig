@@ -2,7 +2,7 @@ const Connection = @import("Connection.zig");
 const Server = @import("Server.zig");
 const std = @import("std");
 
-const Remote = @import("Remote.zig").Remote;
+const Remote = @import("Remote.zig");
 const Packer = @import("packer.zig").Packer;
 
 conn: Connection,
@@ -68,4 +68,13 @@ pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
     alloc.free(self.rw_buffers.@"0");
     alloc.free(self.rw_buffers.@"1");
     alloc.destroy(self);
+}
+
+pub fn upload_pack(self: *@This(), io: std.Io, packer: *Packer) !void {
+    while (try packer.next(io)) |pack| switch (pack) {
+        .file => |str| try self.conn.send(.{ .file = str }),
+
+        .folder => |str| try self.conn.send(.{ .folder = str }),
+        .data => |str| try self.conn.send(.{ .data = str }),
+    };
 }

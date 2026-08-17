@@ -2,6 +2,7 @@ const std = @import("std");
 const Daemon = @import("../daemon/Daemon.zig");
 const Unpacker = @import("../packer.zig").Unpacker;
 const Server = @import("../Server.zig");
+const UUIDv7 = @import("../UUIDv7.zig");
 
 fn handle_one_request(self: *Daemon, req: *Server.Request) !?void {
     try self.term.printf("  Accepting client request...", .{});
@@ -29,14 +30,18 @@ fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req: *Se
         else => return error.SyntaxEror,
     };
 
-    const artifact_dir = try self.install.create_artifact_dir(alloc, self.io, artifact_id);
-    defer artifact_dir.close(self.io);
-    const path = try artifact_dir.realPathFileAlloc(self.io, ".", alloc);
-    defer alloc.free(path);
-    try self.term.printlnf("Created artifact dir: {s}", .{path});
+    var temp_dir_path: [41]u8 = undefined;
+    std.mem.copyForwards(u8, temp_dir_path[0..5], "/tmp/");
+    _ = try (try UUIDv7.now(self.io)).to_string(temp_dir_path[5..]);
+    const temp_dir = try std.Io.Dir.cwd().openDir(self.io, &temp_dir_path, .{ .iterate = true });
+    defer temp_dir.close(self.io);
+
+    const artifact_dir_path = try self.install.get_artifact_dir_path(alloc, artifact_id);
+    defer alloc.free(artifact_dir_path);
+    try self.term.printlnf("Receiving artifact {s} to: {s}", .{ artifact_dir_path, temp_dir_path });
 
     {
-        var unpacker: *Unpacker = try .init(alloc, artifact_dir);
+        var unpacker: *Unpacker = try .init(alloc, temp_dir);
         defer unpacker.destroy(alloc, self.io);
 
         while (true) {
@@ -52,6 +57,8 @@ fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req: *Se
             }
         }
     }
+
+    try std.Io.Dir.cwd().rename(&temp_dir_path, std.Io.Dir.cwd(), artifact_dir_path, self.io);
     try conn.send(.{ .ok = {} });
 }
 

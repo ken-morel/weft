@@ -4,17 +4,22 @@ pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt
 pub const read_only_user_mode = read_only_user_permissions.toMode();
 pub const remotes_zon_file_name = "remotes.zon";
 
-const Remote = @import("Remote.zig");
+pub const Remote = @import("Remote.zig");
 
 config_dir: std.Io.Dir,
+data_dir: std.Io.Dir,
+tmp_dir: std.Io.Dir,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !@This() {
     const config_dir = try open_config_dir(alloc, io, env);
     const data_dir = try open_data_dir(alloc, io, env);
-    defer data_dir.close(io);
+
+    const tmp_dir = try data_dir.openDir(io, "tmp", .{ .iterate = true });
 
     return .{
         .config_dir = config_dir,
+        .data_dir = data_dir,
+        .tmp_dir = tmp_dir,
     };
 }
 

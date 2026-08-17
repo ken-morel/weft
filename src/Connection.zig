@@ -57,6 +57,7 @@ pub const Message = union(enum) {
     end: void,
 
     ok: void,
+    bool: bool,
     err: anyerror,
 };
 
@@ -111,17 +112,16 @@ pub fn send(self: *@This(), msg: Message) !void {
     try self.write(self.write_buf[0 .. self.write_buf.len - ptr.len]);
 }
 pub fn recv(self: *@This(), arena: *std.heap.ArenaAllocator) !Message {
-    var alloc = arena.allocator();
     const data = try self.read(self.read_buf);
 
     if (data.len == 0)
         return error.EmptyMessage;
 
-    const owned = try alloc.dupe(u8, data);
-    errdefer alloc.free(owned);
+    const owned = try arena.allocator().dupe(u8, data);
     var const_slice: []const u8 = owned;
-    return zoto.deserializeValue(alloc, &const_slice, Message);
+    return zoto.deserializeValue(arena, &const_slice, Message);
 }
+
 pub fn write(self: *@This(), data: []const u8) !void {
     if (data.len == 0)
         return error.EmptyMessage;

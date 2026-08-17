@@ -7,7 +7,7 @@ pub const EnvBinding = union(enum) {
     port: []const u8,
     string: []const u8,
     env_var: []const u8,
-    interpolate: []EnvBinding,
+    interpolate: []const EnvBinding,
 };
 
 pub const Pipeline = struct {
@@ -23,36 +23,36 @@ pub const Pipeline = struct {
     const SecondInstance = union(enum) {
         wait: ?u32,
         safe: u32,
-        kill,
-        ignore,
+        kill: void,
+        ignore: void,
     };
 
     name: []const u8,
-    inputs: []Input = &.{},
-    output: []Ouptut,
+    inputs: []const Input = &.{},
+    output: []const Ouptut,
     script: []const u8,
 
     second_instance: SecondInstance = .ignore,
-    keep: []Glob = &.{},
-    required_env: [][]const u8,
+    keep: []const Glob = &.{},
+    required_env: []const []const u8,
 
-    databases: []void = &.{},
-    volumes: []void = &.{},
-    ports: []void = &.{},
-    runtimes: []void = &.{},
-    env: []EnvBinding,
+    databases: []const struct {} = &.{},
+    volumes: []const struct {} = &.{},
+    ports: []const struct {} = &.{},
+    runtimes: []const struct {} = &.{},
+    env: []const EnvBinding,
 };
 
 name: []const u8,
 workspace: []const u8,
 
-databases: []void = &.{},
-ports: []void = &.{},
-volumes: []void = &.{},
-runtimes: []void = &.{},
-env: []EnvBinding,
+databases: []const struct {} = &.{},
+ports: []const struct {} = &.{},
+volumes: []const struct {} = &.{},
+runtimes: []const struct {} = &.{},
+env: []const EnvBinding,
 
-pipelines: []Pipeline,
+pipelines: []const Pipeline,
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
     for (self.pipelines) |*pipeline|

@@ -9,6 +9,7 @@ pub const ServiceId = struct {
 pub const TaskId = struct {
     service: ServiceId,
     deployment: UUIDv7,
+    pipeline: []const u8,
 };
 
 pub const ArtifactId = TaskId;

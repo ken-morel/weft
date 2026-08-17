@@ -148,7 +148,7 @@ pub fn get_artifact_dir_path(
         art.service.name,
     });
 }
-pub fn create_artifact_dir(
+pub fn open_artifact_dir(
     self: @This(),
     alloc: std.mem.Allocator,
     io: std.Io,

@@ -57,8 +57,6 @@ pub fn main(init: std.process.Init) !void {
             }
             const targets_slice = try targets.toOwnedSlice(alloc);
             defer alloc.free(targets_slice);
-            defer for (targets_slice) |target|
-                target.deinit(alloc);
 
             return cmd_do.run(alloc, init.io, &term, project, installation, targets_slice);
         } else if (std.mem.eql(u8, args[1], "remote")) {

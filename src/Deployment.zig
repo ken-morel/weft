@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Step = @import("Step.zig");
+pub const Step = @import("Step.zig");
 const Project = @import("Project.zig");
 const UUIDv7 = @import("UUIDv7.zig");
 const Weft = @import("Weft.zig");
@@ -17,11 +17,6 @@ pub const Artifact = struct {
     size: u64,
 };
 
-pub fn next(self: *const @This()) !?Step {
-    const target = self.next_target().?;
-    return self.find_next_runnable_input(.from_target(target.*));
-}
-
 pub fn next_target(self: @This()) ?*const Step {
     target: for (self.targets) |*target| {
         for (self.artifacts) |artifact|
@@ -34,24 +29,28 @@ pub fn next_target(self: @This()) ?*const Step {
 
 pub fn next_step(self: @This()) !?Step {
     const target = self.next_target().?;
-    const pipeline = try self.resolve_pipeline(target.pipeline);
-    return .{
-        .remote = target.remote,
-        .pipeline = pipeline,
+    return switch (try self.resolve_pipeline(target.pipeline)) {
+        .waits, .running => null,
+        .needs => |n| .{
+            .remote = target.remote,
+            .pipeline = n,
+        },
+        .runnable => target.*,
+        .done => return error.Unreachable,
     };
 }
 
 pub const StepStatus = union(enum) {
     waits: []const u8,
     needs: []const u8,
-    done: void,
-    running: void,
-    runnable: void,
+    done,
+    running,
+    runnable,
 };
 
 pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8) !StepStatus {
     if (self.service.get_pipeline(pipeline_name)) |pipeline| {
-        if (self.get_artifact(pipeline.name))
+        if (self.get_artifact(pipeline.name)) |_|
             return .done;
         if (self.get_running_step(pipeline.name)) |_|
             return .running;
@@ -62,7 +61,7 @@ pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8) !StepStatus {
         for (pipeline.inputs) |input|
             switch (try self.resolve_pipeline(input.name)) {
                 .done => continue,
-                .running => |task| waiting = task,
+                .running => waiting = input.name,
                 .waits => |task| waiting = task,
                 .needs => |task| needs = task,
                 .runnable => needs = input.name,
@@ -113,7 +112,7 @@ pub fn save(self: @This(), io: std.Io, proj: Project) !void {
     filename = pos[0 .. filename.len + 4];
     pos = pos[filename.len + 4 ..];
 
-    const deployments_dir = try proj.open_deployments_dir(io);
+    const deployments_dir = try proj.open_deployment_dir(io, self.uuid);
     defer deployments_dir.close(io);
     var atomic = try deployments_dir.createFileAtomic(io, filename, .{
         .make_path = true,

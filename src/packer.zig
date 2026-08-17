@@ -14,12 +14,11 @@ pub const Packer = struct {
     walker: std.Io.Dir.Walker,
     handle: ?std.Io.File = null,
 
-    pub fn init(alloc: std.mem.Allocator, dir: std.Io.Dir) !*@This() {
+    pub fn create(alloc: std.mem.Allocator, dir: std.Io.Dir) !*@This() {
         const self = try alloc.create(@This());
         self.output = try alloc.alloc(u8, max_compressed_size);
         self.input = try alloc.alloc(u8, max_uncompressed_size);
         self.buffer = try alloc.alloc(u8, window_size);
-        self.writer = .fixed(self.output);
         self.root = dir;
         self.walker = try dir.walk(alloc);
         self.handle = null;
@@ -41,7 +40,7 @@ pub const Packer = struct {
     pub fn next(self: *@This(), io: std.Io) !?union(enum) { file: []const u8, folder: []const u8, data: []const u8 } {
         next: while (true) {
             if (self.handle) |file_handle| {
-                const bytes_read = try file_handle.readStreaming(io, self.input);
+                const bytes_read = try file_handle.readStreaming(io, &.{self.input});
                 if (bytes_read == 0) {
                     file_handle.close(io);
                     self.handle = null;
@@ -60,7 +59,7 @@ pub const Packer = struct {
                 try compressor.writer.writeAll(self.input[0..bytes_read]);
                 try compressor.bit_writer.byteAlignBlocks();
 
-                return writer.buffered();
+                return .{ .data = writer.buffered() };
             } else {
                 const entry = (try self.walker.next(io)).?;
 
@@ -73,13 +72,6 @@ pub const Packer = struct {
                     else => continue :next,
                 }
             }
-        }
-    }
-
-    pub fn close(self: *@This(), io: std.Io) void {
-        if (self.handle) |file| {
-            file.close(io);
-            self.handle = null;
         }
     }
 };
