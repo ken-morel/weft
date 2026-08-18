@@ -12,6 +12,7 @@ const ignore_files = [_][]const u8{
 const default_ignore = [_]Glob{
     .parse(".weft", null),
     .parse(".git", null),
+    .parse(".jj", null),
 };
 
 ignore_list: std.ArrayList(Glob),
@@ -48,10 +49,10 @@ fn add_ignores(
     root: std.Io.Dir,
     dir_path: []const u8,
 ) !void {
+    const stable_dir_path = try alloc.dupe(u8, dir_path);
     for (ignore_files) |ignore_file| {
         const ignore_rel_path = try std.fs.path.join(alloc, &.{ dir_path, ignore_file });
         defer alloc.free(ignore_rel_path);
-        // leaked into arena
         const content = root.readFileAlloc(
             io,
             ignore_rel_path,
@@ -64,11 +65,10 @@ fn add_ignores(
                 return err;
 
         var iter = std.mem.splitScalar(u8, content, '\n');
-        // yeah, we can't zero-copy here very fine just yet
         while (iter.next()) |raw_line| {
             const line = std.mem.trimEnd(u8, raw_line, " \t\r");
             if (line.len == 0 or line[0] == '#') continue;
-            try self.ignore_list.append(alloc, Glob.parse(line, dir_path));
+            try self.ignore_list.append(alloc, Glob.parse(line, stable_dir_path));
         }
     }
 }
@@ -81,16 +81,12 @@ pub fn next(self: *@This(), arena: *std.heap.ArenaAllocator, io: std.Io) !?Entry
                     continue :func;
                 try self.add_ignores(alloc, io, self.root, entry.path);
                 try self.walker.enter(io, entry);
-                std.debug.print("-> {s}\n", .{entry.path});
                 return .{ .dir = entry.path };
             },
             .file => if (self.is_ignored(entry.path, false))
                 continue :func
-            else {
-                std.debug.print("-> {s}\n", .{entry.path});
-
-                return .{ .file = entry.path };
-            },
+            else
+                return .{ .file = entry.path },
 
             else => {},
         }

@@ -55,7 +55,7 @@ pub fn match(self: @This(), path: []const u8, is_dir: bool) bool {
         if (!std.mem.startsWith(u8, rel_path, bd)) return false;
         const after = rel_path[bd.len..];
         if (after.len == 0)
-            rel_path = ""
+            return false
         else if (after[0] == '/')
             rel_path = after[1..]
         else
