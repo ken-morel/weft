@@ -30,9 +30,9 @@ fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req: *Se
         else => return error.SyntaxEror,
     };
 
-    var temp_dir_path: [41]u8 = undefined;
-    std.mem.copyForwards(u8, temp_dir_path[0..5], "/tmp/");
-    _ = try (try UUIDv7.now(self.io)).to_string(temp_dir_path[5..]);
+    var temp_dir_path: [55]u8 = undefined;
+    std.mem.copyForwards(u8, temp_dir_path[0..19], "/tmp/weft/artifacts");
+    _ = try (try UUIDv7.now(self.io)).to_string(temp_dir_path[19..]);
     const temp_dir = try std.Io.Dir.cwd().openDir(self.io, &temp_dir_path, .{ .iterate = true });
     defer temp_dir.close(self.io);
 

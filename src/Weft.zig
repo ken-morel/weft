@@ -50,9 +50,9 @@ databases: []const struct {} = &.{},
 ports: []const struct {} = &.{},
 volumes: []const struct {} = &.{},
 runtimes: []const struct {} = &.{},
-env: []const EnvBinding,
+env: []const EnvBinding = &.{},
 
-pipelines: []const Pipeline,
+pipelines: []const Pipeline = &.{},
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
     for (self.pipelines) |*pipeline|

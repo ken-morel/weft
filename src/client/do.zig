@@ -31,7 +31,7 @@ pub fn run(
         "Created deploymeent {s}",
         .{try deployment.uuid.to_string(&buff)},
     );
-    try src.create_src_artifact(allocator, io, term, project);
+    try src.create_src_artifact(allocator, io, term, inst, project, deployment.uuid);
     try runner.run_deployment(
         alloc,
         io,

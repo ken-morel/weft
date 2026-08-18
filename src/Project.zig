@@ -12,14 +12,18 @@ pub fn open(dir: std.Io.Dir) !@This() {
 
 pub fn get_config(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) !Weft {
     const alloc = arena.allocator();
-    const content = try self.dir.readFileAllocOptions(
+    const content = self.dir.readFileAllocOptions(
         io,
         "weft.zon",
         alloc,
         .limited(4 << 10),
         .of(u8),
         0,
-    );
+    ) catch |err|
+        if (err == error.FileNotFound)
+            return error.ConfigNotFound
+        else
+            return err;
     return try std.zon.parse.fromSliceAlloc(Weft, alloc, content, null, .{});
 }
 
@@ -53,10 +57,11 @@ pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, de
     const deployment_dir = try self.open_deployment_dir(io, deployment);
     defer deployment_dir.close(io);
 
-    const sub_path = try std.fs.path.join(
+    const deployment_dir_path = try deployment_dir.realPathFileAlloc(io, ".", alloc);
+    defer alloc.free(deployment_dir_path);
+
+    return try std.fs.path.join(
         alloc,
-        &.{ "artifacts", pipeline },
+        &.{ deployment_dir_path, "artifacts", pipeline },
     );
-    defer alloc.free(sub_path);
-    return deployment_dir.realPathFileAlloc(io, sub_path, alloc);
 }

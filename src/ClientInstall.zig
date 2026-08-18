@@ -1,4 +1,5 @@
 const std = @import("std");
+const UUIDv7 = @import("UUIDv7.zig");
 
 pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)));
 pub const read_only_user_mode = read_only_user_permissions.toMode();
@@ -8,19 +9,31 @@ pub const Remote = @import("Remote.zig");
 
 config_dir: std.Io.Dir,
 data_dir: std.Io.Dir,
-tmp_dir: std.Io.Dir,
+temp_dir: std.Io.Dir,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !@This() {
     const config_dir = try open_config_dir(alloc, io, env);
     const data_dir = try open_data_dir(alloc, io, env);
 
-    const tmp_dir = try data_dir.openDir(io, "tmp", .{ .iterate = true });
+    data_dir.createDirPath(io, "temp") catch {};
+    const temp_dir = try data_dir.openDir(io, "temp", .{ .iterate = true });
 
     return .{
         .config_dir = config_dir,
         .data_dir = data_dir,
-        .tmp_dir = tmp_dir,
+        .temp_dir = temp_dir,
     };
+}
+pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
+    var uuid_buf: [36]u8 = undefined;
+    const uuid = try (try UUIDv7.now(io)).to_string(&uuid_buf);
+
+    self.temp_dir.createDirPath(io, sub) catch {};
+    var sub_dir = try self.temp_dir.openDir(io, sub, .{});
+    defer sub_dir.close(io);
+
+    try sub_dir.createDirPath(io, uuid);
+    return try sub_dir.openDir(io, uuid, .{});
 }
 
 pub fn open_config_dir(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !std.Io.Dir {
