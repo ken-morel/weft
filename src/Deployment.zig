@@ -28,7 +28,7 @@ pub fn next_target(self: @This()) ?*const Step {
 }
 
 pub fn next_step(self: @This()) !?Step {
-    const target = self.next_target().?;
+    const target = self.next_target() orelse return null;
     return switch (try self.resolve_pipeline(target.pipeline)) {
         .waits, .running => null,
         .needs => |n| .{

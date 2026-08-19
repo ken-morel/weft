@@ -64,7 +64,7 @@ pub fn send_artifact(
 
     try conn.send(.{ .request = .artifact_push });
     try conn.send(.{ .artifact_id = artifact_id });
-    try term.printlnf("sent push request", .{});
+    try term.printf("sent push request, receiving has_artifact", .{});
     {
         const reply = try conn.recv(&msg_arena);
         defer _ = msg_arena.reset(.retain_capacity);
@@ -98,14 +98,16 @@ pub fn send_artifact(
     defer packer.destroy(alloc, io);
 
     try client.upload_pack(io, packer);
+    try term.printlnf("Finished ploading pack", .{});
+    try conn.send(.{ .end = {} });
 
     {
-        defer _ = msg_arena.reset(.retain_capacity);
         const msg = try conn.recv(&msg_arena);
         switch (msg) {
             .ok => try term.printlnf("Upload okay", .{}),
             else => try term.err("Upload error: {any}", .{msg}),
         }
+        _ = msg_arena.reset(.retain_capacity);
     }
 }
 

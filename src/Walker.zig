@@ -79,7 +79,12 @@ pub fn next(self: *@This(), arena: *std.heap.ArenaAllocator, io: std.Io) !?Entry
             .directory => {
                 if (self.is_ignored(entry.path, true))
                     continue :func;
-                try self.add_ignores(alloc, io, self.root, entry.path);
+                try self.add_ignores(
+                    alloc,
+                    io,
+                    self.root,
+                    entry.path,
+                );
                 try self.walker.enter(io, entry);
                 return .{ .dir = entry.path };
             },
@@ -88,7 +93,7 @@ pub fn next(self: *@This(), arena: *std.heap.ArenaAllocator, io: std.Io) !?Entry
             else
                 return .{ .file = entry.path },
 
-            else => {},
+            else => continue :func,
         }
     }
     return null;

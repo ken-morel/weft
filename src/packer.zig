@@ -40,12 +40,21 @@ pub const Packer = struct {
     pub fn next(self: *@This(), io: std.Io) !?union(enum) { file: []const u8, folder: []const u8, data: []const u8 } {
         next: while (true) {
             if (self.handle) |file_handle| {
-                const bytes_read = try file_handle.readStreaming(io, &.{self.input});
-                if (bytes_read == 0) {
+                const bytes_read = bytes_read: {
+                    const read = file_handle.readStreaming(
+                        io,
+                        &.{self.input},
+                    ) catch |err|
+                        if (err == error.EndOfStream)
+                            0
+                        else
+                            return err;
+                    if (read > 0)
+                        break :bytes_read read;
                     file_handle.close(io);
                     self.handle = null;
                     continue :next;
-                }
+                };
 
                 var writer: std.Io.Writer = .fixed(self.output);
 
@@ -61,7 +70,7 @@ pub const Packer = struct {
 
                 return .{ .data = writer.buffered() };
             } else {
-                const entry = (try self.walker.next(io)).?;
+                const entry = try self.walker.next(io) orelse return null;
 
                 switch (entry.kind) {
                     .directory => return .{ .folder = entry.path },
@@ -98,7 +107,6 @@ pub const Unpacker = struct {
         alloc.free(self.input);
         alloc.free(self.output);
         alloc.free(self.buffer);
-        self.root.close(io);
         if (self.handle) |f|
             f.close(io);
         alloc.destroy(self);

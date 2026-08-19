@@ -71,10 +71,19 @@ pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
 }
 
 pub fn upload_pack(self: *@This(), io: std.Io, packer: *Packer) !void {
-    while (try packer.next(io)) |pack| switch (pack) {
-        .file => |str| try self.conn.send(.{ .file = str }),
-
-        .folder => |str| try self.conn.send(.{ .folder = str }),
-        .data => |str| try self.conn.send(.{ .data = str }),
-    };
+    while (try packer.next(io)) |pack|
+        switch (pack) {
+            .file => |str| {
+                std.debug.print(" - file: {s}\n", .{str});
+                try self.conn.send(.{ .file = str });
+            },
+            .folder => |str| {
+                std.debug.print(" - folder: {s}\n", .{str});
+                try self.conn.send(.{ .folder = str });
+            },
+            .data => |str| {
+                std.debug.print(" - data: {s}\n", .{str});
+                try self.conn.send(.{ .data = str });
+            },
+        };
 }

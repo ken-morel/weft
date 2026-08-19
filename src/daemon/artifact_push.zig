@@ -17,29 +17,51 @@ pub fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req:
         else => return error.SyntaxEror,
     };
 
+    const artifact_dir_path = try self.install.get_artifact_dir_path(alloc, artifact_id);
+    defer alloc.free(artifact_dir_path);
+
+    const has_artifact = blk: {
+        std.Io.Dir.cwd().access(
+            self.io,
+            artifact_dir_path,
+            .{},
+        ) catch |err|
+            if (err == error.FileNotFound)
+                break :blk false
+            else
+                return err;
+        break :blk true;
+    };
+    try conn.send(.{ .bool = has_artifact });
+
     const temp_dir = try self.install.open_temp(self.io, "artifact");
     defer temp_dir.close(self.io);
+
     const temp_dir_path = try temp_dir.realPathFileAlloc(self.io, ".", alloc);
     defer alloc.free(temp_dir_path);
 
-    const artifact_dir_path = try self.install.get_artifact_dir_path(alloc, artifact_id);
-    defer alloc.free(artifact_dir_path);
     try self.term.printlnf("Receiving artifact {s} to: {s}", .{ artifact_dir_path, temp_dir_path });
 
     {
+        try self.term.printlnf("Initialized unpacker", .{});
         var unpacker: *Unpacker = try .init(alloc, temp_dir);
         defer unpacker.destroy(alloc, self.io);
 
         while (true) {
-            switch (try conn.recv(&msg_arena)) {
+            try self.term.printf("receiving pack...", .{});
+            const pack = try conn.recv(&msg_arena);
+            try self.term.printlnf("  {any}", .{pack});
+            switch (pack) {
                 .folder => |folder| try unpacker.folder(self.io, folder),
                 .file => |file| try unpacker.file(self.io, file),
                 .data => |data| try unpacker.chunk(self.io, data),
                 .end => break,
                 else => return error.SyntaxError,
             }
+            try self.term.printlnf("reseting arena", .{});
             _ = msg_arena.reset(.retain_capacity);
         }
+        try self.term.printlnf("received all packs", .{});
     }
 
     try std.Io.Dir.cwd().rename(temp_dir_path, std.Io.Dir.cwd(), artifact_dir_path, self.io);
