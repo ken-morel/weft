@@ -29,18 +29,18 @@ pub const Pipeline = struct {
 
     name: []const u8,
     inputs: []const Input = &.{},
-    output: []const Ouptut,
+    outputs: []const Ouptut = &.{},
     script: []const u8,
 
     second_instance: SecondInstance = .ignore,
     keep: []const Glob = &.{},
-    required_env: []const []const u8,
+    required_env: []const []const u8 = &.{},
 
     databases: []const struct {} = &.{},
     volumes: []const struct {} = &.{},
     ports: []const struct {} = &.{},
     runtimes: []const struct {} = &.{},
-    env: []const EnvBinding,
+    env: []const EnvBinding = &.{},
 };
 
 name: []const u8,

@@ -1,4 +1,30 @@
 .{
     .name = "weft",
     .workspace = "weft",
+    .pipelines = .{
+        .{
+            .name = "build",
+            .inputs = .{
+                .{
+                    .name = "src",
+                },
+            },
+            .outputs = .{
+                .{
+                    .name = "bin",
+                },
+            },
+            .script = "build",
+        },
+        .{
+            .name = "run",
+            .inputs = .{
+                .{
+                    .name = "bin",
+                },
+            },
+            .outputs = .{},
+            .script = "run",
+        },
+    },
 }

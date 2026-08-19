@@ -50,22 +50,32 @@ pub const StepStatus = union(enum) {
 
 pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8) !StepStatus {
     if (self.service.get_pipeline(pipeline_name)) |pipeline| {
-        if (self.get_artifact(pipeline.name)) |_|
-            return .done;
+        for (pipeline.outputs) |output|
+            if (self.get_artifact(output.name)) |_|
+                return .done;
         if (self.get_running_step(pipeline.name)) |_|
             return .running;
 
         var waiting: ?[]const u8 = null;
         var needs: ?[]const u8 = null;
 
-        for (pipeline.inputs) |input|
-            switch (try self.resolve_pipeline(input.name)) {
-                .done => continue,
-                .running => waiting = input.name,
-                .waits => |task| waiting = task,
-                .needs => |task| needs = task,
-                .runnable => needs = input.name,
-            };
+        for (pipeline.inputs) |input| {
+            other_pipeline: for (self.service.pipelines) |other_pipeline| {
+                blk: {
+                    for (other_pipeline.outputs) |output|
+                        if (std.mem.eql(u8, output.name, input.name))
+                            break :blk;
+                    continue :other_pipeline;
+                }
+                switch (try self.resolve_pipeline(other_pipeline.name)) {
+                    .done => continue,
+                    .running => waiting = other_pipeline.name,
+                    .waits => |task| waiting = task,
+                    .needs => |task| needs = task,
+                    .runnable => needs = other_pipeline.name,
+                }
+            }
+        }
         if (needs) |task|
             return .{ .needs = task }
         else if (waiting) |task|
