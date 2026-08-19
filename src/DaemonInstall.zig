@@ -5,12 +5,15 @@ const read_only_user_permissions = ClientInstall.read_only_user_permissions;
 const read_only_user_mode = ClientInstall.read_only_user_mode;
 const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
 const ids = @import("ids.zig");
+const UUIDv7 = @import("UUIDv7.zig");
 
 pub const Config = struct {
     secret: [32]u8 = undefined,
     port: u16 = 9338,
     max_conn: u32 = 5,
 };
+
+temp_dir: std.Io.Dir,
 
 const service_template =
     \\[Unit]
@@ -28,8 +31,23 @@ const service_template =
     \\WantedBy=multi-user.target
 ;
 
-pub fn init() !@This() {
-    return .{};
+pub fn init(io: std.Io) !@This() {
+    std.Io.Dir.cwd().createDirPath(io, "/tmp/weft") catch {};
+    return .{
+        .temp_dir = try std.Io.Dir.cwd().openDir(io, "/tmp/weft", .{}),
+    };
+}
+
+pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
+    var uuid_buf: [36]u8 = undefined;
+    const uuid = try (try UUIDv7.now(io)).to_string(&uuid_buf);
+
+    self.temp_dir.createDirPath(io, sub) catch {};
+    var sub_dir = try self.temp_dir.openDir(io, sub, .{});
+    defer sub_dir.close(io);
+
+    try sub_dir.createDirPath(io, uuid);
+    return try sub_dir.openDir(io, uuid, .{});
 }
 
 pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {

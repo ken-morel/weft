@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init) !void {
                     try DaemonInstall.install(init.io, alloc);
                     return;
                 } else if (std.mem.eql(u8, args[2], "run")) {
-                    const installation: DaemonInstall = try .init();
+                    const installation: DaemonInstall = try .init(init.io);
                     var daemon = try Daemon.init(alloc, init.io, installation, &term);
                     defer daemon.deinit();
                     try term.printlnf("Starting daemon on :{any}", .{daemon.config.port});

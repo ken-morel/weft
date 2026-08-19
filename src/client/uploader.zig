@@ -41,6 +41,7 @@ pub fn cache_artifact(
     // get the artifact from the remote...
     try term.printlnf("Requested the artifact from remote {s}", .{remote.name});
 }
+
 pub fn send_artifact(
     alloc: std.mem.Allocator,
     io: std.Io,
@@ -63,9 +64,11 @@ pub fn send_artifact(
 
     try conn.send(.{ .request = .artifact_push });
     try conn.send(.{ .artifact_id = artifact_id });
+    try term.printlnf("sent push request", .{});
     {
         const reply = try conn.recv(&msg_arena);
         defer _ = msg_arena.reset(.retain_capacity);
+        try term.printlnf("reply: {any}", .{reply});
         switch (reply) {
             .bool => |has_artifact| if (has_artifact) return,
             else => return error.SyntaxError,
@@ -81,6 +84,7 @@ pub fn send_artifact(
         deployment,
     );
 
+    try term.printlnf("packing artifact...", .{});
     var packer: *Packer = try .create(
         alloc,
         try std.Io.Dir.cwd().openDir(
@@ -108,14 +112,15 @@ pub fn send_artifact(
 pub fn send_artifact_concurrent(
     alloc: std.mem.Allocator,
     io: std.Io,
-    group: *std.Io.Group,
     term: *Term,
     inst: *const ClientInstall,
     artifact_id: ids.ArtifactId,
     project: *const Project,
     deployment: *const Deployment,
     remote: *const Remote,
+    failed: *?u16,
 ) error{Canceled}!void {
+    term.printlnf("Sending artifact {s} to remote {s}", .{ artifact_id.pipeline, remote.name }) catch {};
     send_artifact(
         alloc,
         io,
@@ -125,13 +130,10 @@ pub fn send_artifact_concurrent(
         project,
         deployment,
         remote,
-    ) catch |err|
-        if (err == error.Canceled)
-            return error.Canceled
-        else {
-            term.err("Error sending artifact: {any}", .{err}) catch {};
-            group.cancel(io);
-        };
+    ) catch |err| {
+        term.err("Error sending artifact: {any}", .{err}) catch {};
+        failed.* = @intFromError(err);
+    };
 }
 pub fn send_required_artifacts(
     alloc: std.mem.Allocator,
@@ -145,23 +147,22 @@ pub fn send_required_artifacts(
 ) !void {
     var group: std.Io.Group = .init;
 
+    var failed: ?u16 = null;
     for (pipeline.inputs) |input| {
         try group.concurrent(
             io,
             send_artifact_concurrent,
-            .{
-                alloc,    io,          &group,  term, &inst,
-                ids.ArtifactId{
-                    .deployment = deployment.uuid,
-                    .pipeline = input.name,
-                    .service = .{
-                        .name = deployment.service.name,
-                        .workspace = deployment.service.workspace,
-                    },
+            .{ alloc, io, term, &inst, ids.ArtifactId{
+                .deployment = deployment.uuid,
+                .pipeline = input.name,
+                .service = .{
+                    .name = deployment.service.name,
+                    .workspace = deployment.service.workspace,
                 },
-                &project, &deployment, &remote,
-            },
+            }, &project, &deployment, &remote, &failed },
         );
     }
     try group.await(io);
+    if (failed) |err|
+        return @errorFromInt(err);
 }
