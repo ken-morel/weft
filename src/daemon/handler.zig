@@ -12,7 +12,14 @@ fn handle_one_request(self: *Daemon, req: *Server.Request) !?void {
     defer arena.deinit();
     const conn = &req.conn;
 
-    const msg = try conn.recv(&arena);
+    const msg = conn.recv(
+        &arena,
+    ) catch |err|
+        return if (err == error.EndOfStream)
+            null
+        else
+            err;
+
     try self.term.printlnf(":{any}", .{msg});
     switch (msg) {
         .request => |r| switch (r) {

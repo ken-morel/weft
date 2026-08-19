@@ -32,9 +32,13 @@ const service_template =
 ;
 
 pub fn init(io: std.Io) !@This() {
-    std.Io.Dir.cwd().createDirPath(io, "/tmp/weft") catch {};
+    const temp_dir = try std.Io.Dir.cwd().createDirPathOpen(
+        io,
+        "/var/lib/weft/tmp",
+        .{ .open_options = .{ .iterate = true } },
+    );
     return .{
-        .temp_dir = try std.Io.Dir.cwd().openDir(io, "/tmp/weft", .{}),
+        .temp_dir = temp_dir,
     };
 }
 

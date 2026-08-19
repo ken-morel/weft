@@ -107,7 +107,6 @@ pub const Unpacker = struct {
         alloc.free(self.input);
         alloc.free(self.output);
         alloc.free(self.buffer);
-        self.root.close(io);
         if (self.handle) |f|
             f.close(io);
         alloc.destroy(self);

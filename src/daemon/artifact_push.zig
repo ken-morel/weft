@@ -33,6 +33,9 @@ pub fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req:
         break :blk true;
     };
     try conn.send(.{ .bool = has_artifact });
+    try self.term.printlnf("Sent has_artifact: {any}", .{has_artifact});
+    if (has_artifact)
+        return;
 
     const temp_dir = try self.install.open_temp(self.io, "artifact");
     defer temp_dir.close(self.io);
@@ -40,17 +43,12 @@ pub fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req:
     const temp_dir_path = try temp_dir.realPathFileAlloc(self.io, ".", alloc);
     defer alloc.free(temp_dir_path);
 
-    try self.term.printlnf("Receiving artifact {s} to: {s}", .{ artifact_dir_path, temp_dir_path });
-
     {
-        try self.term.printlnf("Initialized unpacker", .{});
         var unpacker: *Unpacker = try .init(alloc, temp_dir);
         defer unpacker.destroy(alloc, self.io);
 
         while (true) {
-            try self.term.printf("receiving pack...", .{});
             const pack = try conn.recv(&msg_arena);
-            try self.term.printlnf("  {any}", .{pack});
             switch (pack) {
                 .folder => |folder| try unpacker.folder(self.io, folder),
                 .file => |file| try unpacker.file(self.io, file),
@@ -58,12 +56,12 @@ pub fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req:
                 .end => break,
                 else => return error.SyntaxError,
             }
-            try self.term.printlnf("reseting arena", .{});
             _ = msg_arena.reset(.retain_capacity);
         }
-        try self.term.printlnf("received all packs", .{});
     }
 
+    if (std.fs.path.dirname(artifact_dir_path)) |parent|
+        std.Io.Dir.cwd().createDirPath(self.io, parent) catch {};
     try std.Io.Dir.cwd().rename(temp_dir_path, std.Io.Dir.cwd(), artifact_dir_path, self.io);
     try conn.send(.{ .ok = {} });
 }
