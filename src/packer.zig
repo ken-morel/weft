@@ -66,7 +66,7 @@ pub const Packer = struct {
                 );
 
                 try compressor.writer.writeAll(self.input[0..bytes_read]);
-                try compressor.bit_writer.byteAlignBlocks();
+                try compressor.finish();
 
                 return .{ .data = writer.buffered() };
             } else {
@@ -107,6 +107,7 @@ pub const Unpacker = struct {
         alloc.free(self.input);
         alloc.free(self.output);
         alloc.free(self.buffer);
+        self.root.close(io);
         if (self.handle) |f|
             f.close(io);
         alloc.destroy(self);
@@ -135,7 +136,10 @@ pub const Unpacker = struct {
             self.buffer,
         );
 
-        const bytes_decompressed = decompressor.reader.buffered();
-        try file_handle.writeStreamingAll(io, bytes_decompressed);
+        while (true) {
+            const bytes_decompressed = try decompressor.reader.readSliceShort(self.output);
+            if (bytes_decompressed == 0) break;
+            try file_handle.writeStreamingAll(io, self.output[0..bytes_decompressed]);
+        }
     }
 };
