@@ -6,6 +6,40 @@ Instead of running heavy container virtualization daemons, `weft` uses a lean na
 
 ---
 
+## 🎯 Project Goals & Design Philosophy
+
+`weft` is designed around a strict set of architectural principles tailored for ultra-cheap, resource-constrained infrastructure:
+
+### 1. Sub-10MB Idle & Operational Memory Footprint
+Traditional container engines and orchestrators idle at 100MB–300MB+ of RSS, consuming most of a 128MB–512MB VPS before user applications even boot. `weft` is implemented entirely in native Zig using static buffer limits, arena allocators, and zero runtime VMs, maintaining a `<10MB` baseline footprint so your applications get virtually all of the host's memory.
+
+### 2. Zero External Runtime Dependencies
+`weft` compiles down to a single standalone static binary with zero external package or library dependencies:
+* **Built-in Cryptography:** Native `XChaCha20-Poly1305` AEAD encryption (no OpenSSL/TLS runtime bloat).
+* **Built-in Compression:** Streaming chunked `zlib` compression via `std.compress.flate`.
+* **Built-in Serialization:** Compile-time type-hashed binary framing (`zoto`) without reflection engines.
+* The only host requirement on the target node is a standard Linux kernel with `systemd` / cgroups.
+
+### 3. Zero Remote Configuration ("Self-Provisioning" Deployments)
+Host administration is eliminated on target servers:
+* **Dumb Remotes, Smart Services:** The remote VPS only needs `weftd` installed once with its generated shared secret token.
+* **Declarative Service Bundles:** All environment variables, pipeline steps, script runtimes, cgroup resource limits, ports, volumes, and databases are declared inside the service repository (`weft.zon` and `weft/bin/`).
+* Pointing a deployment pipeline to any bare remote node automatically stages artifacts and provisions execution environments without manual SSH setup, custom Ansible playbooks, or host pollution.
+
+### 4. Aggressive Resource Preservation & Caching
+Low-end VPSs suffer from slow CPU cores and minimal RAM that choke on heavy compilation steps:
+* **Build Offloading:** Compute-intensive build steps (e.g. compiling native binaries, building frontend assets) are resolved locally or on dedicated build runners; the remote server only receives the minimal stripped runtime artifact.
+* **Incremental Artifact Deduplication:** The client verifies remote presence (`has_artifact`) before transmission. If an artifact already exists for the deployment DAG, network transfer is skipped entirely.
+* **Clean State Separation:** Staging occurs in `/var/lib/weft/tmp/<uuid>`, promoting atomically to `/var/lib/weft/artifacts/...` with read-only inputs (`$IN`) and clean output directories (`$OUT`) to eliminate filesystem debris.
+* **Path Preservation (`keep`):** Specific stateful directories are preserved across revisions without requiring heavyweight persistent volume plugins.
+
+### 5. Outbound Traffic & Resource Guardrails
+* **Network Gating:** Pipelines support disabling outbound network access (`disable_network = true` by default) to restrict unexpected egress traffic, conserve VPS bandwidth quotas, and mitigate supply-chain network leaks.
+* **Cgroup Resource Ceilings:** Fine-grained enforcement of hard memory limits (`max_ram`), memory locking (`mem_lock`), CPU quotas (`cpu_quota`), CPU weights (`cpu_weight`), timeouts (`timeout`), and OOM prioritization (`oom_score_adjust`).
+* **Concurrency Strategies:** Automatic collision policies (`second_instance` modes: `wait`, `safe`, `kill`, `ignore`) prevent concurrent pipeline runs from crashing memory-starved machines.
+
+---
+
 ## Technical Architecture
 
 ```
@@ -82,11 +116,12 @@ A project is defined by a `weft.zon` file at the repository root using Zig Objec
             },
             .outputs = .{},
             .script = "start",
-            // Cgroup resource allocations
+            // Cgroup resource allocations & guardrails
             .max_ram = 64 * 1024 * 1024, // 64 MB RAM limit
             .cpu_quota = 50,             // 50% CPU quota
             .oom_score_adjust = 500,     // OOM priority
-            .disable_network = false,
+            .disable_network = false,    // Enable outbound network if needed
+            .second_instance = .kill,    // Terminate old instance on new deployment
         },
     },
 }
