@@ -23,7 +23,7 @@ pub const Pipeline = struct {
     const Input = struct {
         name: []const u8,
     };
-    const Ouptut = struct {
+    const Output = struct {
         name: []const u8,
     };
     const SecondInstance = union(enum) {
@@ -35,11 +35,16 @@ pub const Pipeline = struct {
 
     name: []const u8,
     inputs: []const Input = &.{},
-    outputs: []const Ouptut = &.{},
+    outputs: []const Output = &.{},
     script: []const u8,
 
     max_ram: ?u64 = null,
     mem_lock: bool = false,
+    disable_network: bool = true,
+    oom_score_adjust: ?i32 = null,
+    timeout: ?u32 = null,
+    cpu_quota: ?u16 = null,
+    cpu_weight: ?u16 = null,
 
     second_instance: SecondInstance = .ignore,
     keep: []Keep = &.{},
