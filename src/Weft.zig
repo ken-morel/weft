@@ -1,5 +1,6 @@
 const std = @import("std");
 const Glob = @import("Glob.zig");
+const script = @import("script.zig");
 
 pub const EnvBinding = union(enum) {
     database: []const u8,
@@ -8,17 +9,22 @@ pub const EnvBinding = union(enum) {
     string: []const u8,
     env_var: []const u8,
     interpolate: []const EnvBinding,
+    pub fn parse(val: []const u8) !@This() {
+        _ = val;
+        unreachable;
+    }
 };
 
+pub const Keep = struct {
+    name: []const u8,
+    path: []const u8,
+};
 pub const Pipeline = struct {
     const Input = struct {
         name: []const u8,
-        env: ?[]const u8 = null,
-        readonly: bool = true,
     };
     const Ouptut = struct {
         name: []const u8,
-        env: ?[]const u8 = null,
     };
     const SecondInstance = union(enum) {
         wait: ?u32,
@@ -32,15 +38,19 @@ pub const Pipeline = struct {
     outputs: []const Ouptut = &.{},
     script: []const u8,
 
+    max_ram: ?u64 = null,
+    mem_lock: bool = false,
+
     second_instance: SecondInstance = .ignore,
-    keep: []const Glob = &.{},
+    keep: []Keep = &.{},
+
     required_env: []const []const u8 = &.{},
 
     databases: []const struct {} = &.{},
     volumes: []const struct {} = &.{},
     ports: []const struct {} = &.{},
     runtimes: []const struct {} = &.{},
-    env: []const EnvBinding = &.{},
+    env: []struct { []const u8, []const u8 } = &.{},
 };
 
 name: []const u8,
@@ -50,7 +60,7 @@ databases: []const struct {} = &.{},
 ports: []const struct {} = &.{},
 volumes: []const struct {} = &.{},
 runtimes: []const struct {} = &.{},
-env: []const EnvBinding = &.{},
+env: []struct { []const u8, []const u8 } = &.{},
 
 pipelines: []const Pipeline = &.{},
 

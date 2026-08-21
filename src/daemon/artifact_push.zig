@@ -4,7 +4,7 @@ const Unpacker = @import("../packer.zig").Unpacker;
 const Server = @import("../Server.zig");
 const UUIDv7 = @import("../UUIDv7.zig");
 
-pub fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req: *Server.Request) !void {
+pub fn handle(self: *Daemon, arena: *std.heap.ArenaAllocator, req: *Server.Request) !void {
     try self.term.printlnf("    artifact push: ", .{});
     const conn = &req.conn;
     const alloc = arena.allocator();
@@ -17,7 +17,7 @@ pub fn handle_artifact_push(self: *Daemon, arena: *std.heap.ArenaAllocator, req:
         else => return error.SyntaxEror,
     };
 
-    const artifact_dir_path = try self.install.get_artifact_dir_path(alloc, artifact_id);
+    const artifact_dir_path = try self.install.get_artifact_path(alloc, artifact_id);
     defer alloc.free(artifact_dir_path);
 
     const has_artifact = blk: {

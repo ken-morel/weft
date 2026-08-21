@@ -5,6 +5,7 @@ const Server = @import("../Server.zig");
 const UUIDv7 = @import("../UUIDv7.zig");
 
 const artifact_push = @import("artifact_push.zig");
+const task_spawn = @import("task_spawn.zig");
 
 fn handle_one_request(self: *Daemon, req: *Server.Request) !?void {
     try self.term.printf("  Accepting client request...", .{});
@@ -23,7 +24,8 @@ fn handle_one_request(self: *Daemon, req: *Server.Request) !?void {
     try self.term.printlnf(":{any}", .{msg});
     switch (msg) {
         .request => |r| switch (r) {
-            .artifact_push => try artifact_push.handle_artifact_push(self, &arena, req),
+            .artifact_push => try artifact_push.handle(self, &arena, req),
+            .task_spawn => try task_spawn.handle(self, &arena, req),
             else => {},
         },
         else => return error.InvalidRequest,

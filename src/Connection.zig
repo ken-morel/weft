@@ -6,6 +6,7 @@ const Nonce = @import("Nonce.zig");
 const Deployment = @import("Deployment.zig");
 const UUIDv7 = @import("UUIDv7.zig");
 const ids = @import("ids.zig");
+const Task = @import("Task.zig");
 
 pub const packet_size = std.math.maxInt(u16);
 
@@ -31,7 +32,7 @@ pub const Message = union(enum) {
         task_status,
         task_abort,
 
-        task_create,
+        task_spawn,
 
         logs_snapshot,
         logs_stream,
@@ -42,23 +43,17 @@ pub const Message = union(enum) {
     artifact_id: ids.ArtifactId,
 
     task_id: ids.TaskId,
-
-    pipeline: Weft.Pipeline,
-
-    log: ids.TaskId,
-    log_stream: ids.TaskId,
+    task_spec: Task.Spec,
 
     file: []const u8,
-
     folder: []const u8,
 
     data: []const u8,
 
-    end: void,
-
     ok: void,
     bool: bool,
     err: anyerror,
+    end: void,
 };
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *std.Io.Reader, writer: *std.Io.Writer) !@This() {

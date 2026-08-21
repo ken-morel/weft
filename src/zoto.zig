@@ -290,14 +290,16 @@ fn writeInt(buffer: *[]u8, comptime IntT: type, value: IntT) !void {
 }
 
 fn readByte(src: *[]const u8) !u8 {
-    if (src.len < 1) return error.BufferTooSmall;
+    if (src.len < 1)
+        return error.BufferTooSmall;
     const b = src.*[0];
     src.* = src.*[1..];
     return b;
 }
 
 fn readSlice(src: *[]const u8, len: usize) ![]const u8 {
-    if (src.len < len) return error.BufferTooSmall;
+    if (src.len < len)
+        return error.BufferTooSmall;
     const s = src.*[0..len];
     src.* = src.*[len..];
     return s;
@@ -305,7 +307,8 @@ fn readSlice(src: *[]const u8, len: usize) ![]const u8 {
 
 fn readInt(src: *[]const u8, comptime IntT: type) !IntT {
     const size = @sizeOf(IntT);
-    if (src.len < size) return error.BufferTooSmall;
+    if (src.len < size)
+        return error.BufferTooSmall;
     const val = std.mem.readInt(IntT, src.*[0..size], .little);
     src.* = src.*[size..];
     return val;

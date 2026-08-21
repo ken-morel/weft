@@ -155,7 +155,7 @@ pub fn get_config(self: @This(), io: std.Io, arena: *std.heap.ArenaAllocator) !C
     );
 }
 
-pub fn get_artifact_dir_path(
+pub fn get_artifact_path(
     self: @This(),
     alloc: std.mem.Allocator,
     art: ids.ArtifactId,
@@ -166,8 +166,10 @@ pub fn get_artifact_dir_path(
     return try std.fs.path.join(alloc, &.{
         "/var/lib/weft/artifacts/",
         art.service.workspace,
-        uuid,
         art.service.name,
+        art.env,
+        uuid,
+        art.pipeline,
     });
 }
 pub fn open_artifact_dir(
@@ -176,7 +178,7 @@ pub fn open_artifact_dir(
     io: std.Io,
     art: ids.ArtifactId,
 ) !std.Io.Dir {
-    const path = try self.get_artifact_dir_path(alloc, art);
+    const path = try self.get_artifact_path(alloc, art);
     defer alloc.free(path);
     try std.Io.Dir.cwd().createDirPath(io, path);
     return try std.Io.Dir.cwd().openDir(io, path, .{

@@ -24,7 +24,7 @@
                 },
             },
             .outputs = .{},
-            .script = "run",
+            .script = .{},
         },
     },
 }
