@@ -1,0 +1,39 @@
+install
++- install weft
+   +- compile exe weft Debug native 4 errors
+src/daemon/task_spawn.zig:24:11: error: unused local constant
+
+    const task_spec = switch (try conn.recv(arena)) {
+          ^~~~~~~~~
+/usr/lib/zig/std/mem.zig:1894:57: error: exact division produced remainder
+pub inline fn readInt(comptime T: type, buffer: *const [@divExact(@typeInfo(T).int.bits, 8)]u8, endian: Endian) T {
+                                                        ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/zoto.zig:312:32: note: generic function instantiated here
+    const val = std.mem.readInt(IntT, src.*[0..size], .little);
+                ~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    deserializeValue__anon_61040: src/zoto.zig:153:42
+    deserializeValue__anon_61033: src/zoto.zig:178:72
+    14 reference(s) hidden; use '-freference-trace=16' to see all references
+/usr/lib/zig/std/mem.zig:2021:52: error: exact division produced remainder
+pub inline fn writeInt(comptime T: type, buffer: *[@divExact(@typeInfo(T).int.bits, 8)]u8, value: T, endian: Endian) void {
+                                                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/zoto.zig:288:21: note: generic function instantiated here
+    std.mem.writeInt(IntT, buffer.*[0..size], value, .little);
+    ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/client/uploader.zig:155:54: error: missing struct field: env
+            .{ alloc, io, term, &inst, ids.ArtifactId{
+                                       ~~~~~~~~~~~~~~^
+src/ids.zig:9:20: note: struct declared here
+pub const TaskId = struct {
+                   ^~~~~~
+error: 4 compilation errors
+failed command: /usr/bin/zig build-exe -ODebug -Mroot=/home/engon/weft/src/main.zig --cache-dir .zig-cache --global-cache-dir /home/engon/.cache/zig --name weft --zig-lib-dir /usr/lib/zig/ --listen=-
+
+Build Summary: 0/3 steps succeeded (1 failed)
+install transitive failure
++- install weft transitive failure
+   +- compile exe weft Debug native 4 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/7ab9e91cdd7a67eb7539a5efaf0e5892/build /usr/bin/zig /usr/lib/zig /home/engon/weft .zig-cache /home/engon/.cache/zig --seed 0x9e44b2dd -Zacca4dd73bcf39c8

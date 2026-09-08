@@ -10,8 +10,9 @@ const UUIDv7 = @import("../UUIDv7.zig");
 // setup build env:
 // - setup input artifacts as readonly.
 // - $IN to /var/lib/weft/artifacts/{w}/{s}/{e}/{d} ($IN/pipeline gives artifact)
-// - $OUT to ~/weft/
-// - cwd to ~/
+//
+// - $OUT to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/out/{a}
+// - cwd to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/cwd
 
 pub fn handle(self: *Daemon, arena: *std.heap.ArenaAllocator, req: *Server.Request) !void {
     try self.term.printlnf("  task spawn", .{});
