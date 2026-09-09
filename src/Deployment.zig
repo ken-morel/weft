@@ -114,13 +114,10 @@ pub fn get_artifact(self: @This(), pipeline: []const u8) ?*const Artifact {
     return null;
 }
 
-pub fn save(self: @This(), io: std.Io, proj: Project) !void {
+pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) !void {
     var buffer: [1 << 10]u8 = undefined;
-    var pos: []u8 = &buffer;
-    var filename = try self.uuid.to_string(pos);
-    std.mem.copyForwards(u8, pos[filename.len .. filename.len + 4], ".zon");
-    filename = pos[0 .. filename.len + 4];
-    pos = pos[filename.len + 4 ..];
+
+    const filename = try std.fmt.allocPrint(alloc, "{x}.zon", .{self.uuid});
 
     const deployments_dir = try proj.open_deployment_dir(io, self.uuid);
     defer deployments_dir.close(io);
@@ -129,7 +126,7 @@ pub fn save(self: @This(), io: std.Io, proj: Project) !void {
         .replace = true,
     });
     defer atomic.deinit(io);
-    var writer = atomic.file.writer(io, pos);
+    var writer = atomic.file.writer(io, &buffer);
     try std.zon.stringify.serializeArbitraryDepth(self, .{}, &writer.interface);
     try writer.flush();
     try atomic.replace(io);

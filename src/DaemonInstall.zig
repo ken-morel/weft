@@ -10,7 +10,7 @@ const UUIDv7 = @import("UUIDv7.zig");
 pub const Config = struct {
     secret: [32]u8 = undefined,
     port: u16 = 9338,
-    max_conn: u32 = 5,
+    max_workers: u32 = 10,
 };
 
 temp_dir: std.Io.Dir,
@@ -31,6 +31,11 @@ const service_template =
     \\WantedBy=multi-user.target
 ;
 
+//  /usr/lib/sysusers.d/weft.conf
+const sysusers_config =
+    \\ u weft-runner - "Weft pipeline runner" /var/lib/weft /usr/bin/nologin
+;
+
 pub fn init(io: std.Io) !@This() {
     const temp_dir = try std.Io.Dir.cwd().createDirPathOpen(
         io,
@@ -43,79 +48,92 @@ pub fn init(io: std.Io) !@This() {
 }
 
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
-    var uuid_buf: [36]u8 = undefined;
-    const uuid = try (try UUIDv7.now(io)).to_string(&uuid_buf);
+    const uuid = try (try UUIDv7.now(io)).to_string();
 
     self.temp_dir.createDirPath(io, sub) catch {};
     var sub_dir = try self.temp_dir.openDir(io, sub, .{});
     defer sub_dir.close(io);
 
-    try sub_dir.createDirPath(io, uuid);
-    return try sub_dir.openDir(io, uuid, .{});
+    try sub_dir.createDirPath(io, &uuid);
+    return try sub_dir.openDir(io, &uuid, .{});
 }
 
 pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
     const cwd = std.Io.Dir.cwd();
-
     try cwd.createDirPath(io, "/var/lib/weft/workspaces");
+    try cwd.createDirPath(io, "/var/lib/weft/run");
+    try cwd.createDirPath(io, "/var/lib/weft/artifacts");
+    install_exe: {
+        const exe_path = try std.process.executablePathAlloc(io, alloc);
+        defer alloc.free(exe_path);
 
-    const exe_path = try std.process.executablePathAlloc(io, alloc);
-    defer alloc.free(exe_path);
+        if (!std.mem.eql(u8, exe_path, "/usr/local/bin/weft")) {
+            const bin_dir = try cwd.openDir(io, "/usr/local/bin", .{});
+            defer bin_dir.close(io);
 
-    if (!std.mem.eql(u8, exe_path, "/usr/local/bin/weft")) {
-        const bin_dir = try cwd.openDir(io, "/usr/local/bin", .{});
-        defer bin_dir.close(io);
-
-        try cwd.copyFile(exe_path, bin_dir, "weft", io, .{});
+            try cwd.copyFile(exe_path, bin_dir, "weft", io, .{});
+        }
+        break :install_exe;
     }
+    write_config: {
+        var config = Config{};
+        try io.randomSecure(&config.secret);
 
-    var config = Config{};
-    try io.randomSecure(&config.secret);
+        var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
+            .permissions = read_only_user_permissions,
+            .replace = true,
+        });
 
-    var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
-        .permissions = read_only_user_permissions,
-        .replace = true,
-    });
+        var write_buffer: [4 << 10]u8 = undefined;
+        var config_writer = config_file.file.writer(io, &write_buffer);
 
-    var write_buffer: [4 << 10]u8 = undefined;
-    var config_writer = config_file.file.writer(io, &write_buffer);
+        try std.zon.stringify.serialize(config, .{}, &config_writer.interface);
+        try config_writer.interface.flush();
 
-    try std.zon.stringify.serialize(config, .{}, &config_writer.interface);
-    try config_writer.interface.flush();
+        try config_file.replace(io);
 
-    try config_file.replace(io);
+        const hex_key = std.fmt.bytesToHex(config.secret, .upper);
 
-    const systemd_dir = try cwd.openDir(io, "/etc/systemd/system", .{});
-    defer systemd_dir.close(io);
+        var stdout = std.Io.File.stdout();
+        try stdout.writeStreamingAll(
+            io,
+            "\n=== Weft Daemon Installed Successfully ===\nsecret: ",
+        );
+        try stdout.writeStreamingAll(io, &hex_key);
 
-    var service_file = try systemd_dir.createFile(io, "weftd.service", .{});
-    defer service_file.close(io);
+        break :write_config;
+    }
+    setup_service: {
+        const systemd_dir = try cwd.openDir(io, "/etc/systemd/system", .{});
+        defer systemd_dir.close(io);
 
-    try service_file.writeStreamingAll(io, service_template);
+        var service_file = try systemd_dir.createFile(io, "weftd.service", .{});
+        defer service_file.close(io);
 
-    var child_sdr = try std.process.spawn(io, .{
-        .argv = &.{ "systemctl", "daemon-reload" },
-    });
-    _ = try child_sdr.wait(io);
+        try service_file.writeStreamingAll(io, service_template);
 
-    var child_en = try std.process.spawn(io, .{
-        .argv = &.{ "systemctl", "enable", "--now", "weftd.service" },
-    });
-    _ = try child_en.wait(io);
+        var child_sdr = try std.process.spawn(io, .{
+            .argv = &.{ "systemctl", "daemon-reload" },
+        });
+        _ = try child_sdr.wait(io);
 
-    const hex_key = std.fmt.bytesToHex(config.secret, .upper);
+        var child_en = try std.process.spawn(io, .{
+            .argv = &.{ "systemctl", "enable", "--now", "weftd.service" },
+        });
+        _ = try child_en.wait(io);
 
-    var stdout = std.Io.File.stdout();
-    try stdout.writeStreamingAll(
-        io,
-        "\n=== Weft Daemon Installed Successfully ===\nsecret: ",
-    );
-    try stdout.writeStreamingAll(io, &hex_key);
+        break :setup_service;
+    }
+    setup_sysusers: {
+        var sysusers_file = try cwd.createFile(io, "/usr/lib/sysusers.d/weft.conf", .{});
+        defer sysusers_file.close(io);
+        sysusers_file.writeStreamingAll(io, sysusers_config);
+        break :setup_sysusers;
+    }
 }
 
-pub fn get_config(self: @This(), io: std.Io, arena: *std.heap.ArenaAllocator) !Config {
+pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator) !Config {
     _ = self;
-    const alloc = arena.allocator();
     const cwd = std.Io.Dir.cwd();
 
     var file = cwd.openFile(io, "/etc/weft.zon", .{}) catch |err| {
@@ -161,14 +179,13 @@ pub fn get_artifact_path(
     art: ids.ArtifactId,
 ) ![]const u8 {
     _ = self;
-    var uuid_buf: [36]u8 = undefined;
-    const uuid = try art.deployment.to_string(&uuid_buf);
+    const uuid = try art.deployment.to_string();
     return try std.fs.path.join(alloc, &.{
         "/var/lib/weft/artifacts/",
         art.service.workspace,
         art.service.name,
         art.env,
-        uuid,
+        &uuid,
         art.pipeline,
     });
 }

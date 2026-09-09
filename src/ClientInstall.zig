@@ -1,5 +1,5 @@
-const std = @import("std");
 const UUIDv7 = @import("UUIDv7.zig");
+const std = @import("std");
 
 pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)));
 pub const read_only_user_mode = read_only_user_permissions.toMode();
@@ -25,15 +25,14 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Enviro
     };
 }
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
-    var uuid_buf: [36]u8 = undefined;
-    const uuid = try (try UUIDv7.now(io)).to_string(&uuid_buf);
+    const uuid = try (try UUIDv7.now(io)).to_string();
 
     self.temp_dir.createDirPath(io, sub) catch {};
     var sub_dir = try self.temp_dir.openDir(io, sub, .{});
     defer sub_dir.close(io);
 
-    try sub_dir.createDirPath(io, uuid);
-    return try sub_dir.openDir(io, uuid, .{});
+    try sub_dir.createDirPath(io, &uuid);
+    return try sub_dir.openDir(io, &uuid, .{});
 }
 
 pub fn open_config_dir(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !std.Io.Dir {
@@ -58,8 +57,7 @@ pub fn open_data_dir(alloc: std.mem.Allocator, io: std.Io, env: *const std.proce
     return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
 }
 
-pub fn get_remotes(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) ![]Remote {
-    const alloc = arena.allocator();
+pub fn get_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io) ![]Remote {
     const content = self.config_dir.readFileAllocOptions(
         io,
         remotes_zon_file_name,
@@ -75,13 +73,15 @@ pub fn get_remotes(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) !
     defer alloc.free(content);
     return std.zon.parse.fromSliceAlloc([]Remote, alloc, content, null, .{});
 }
-pub fn get_remote(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io, name: []const u8) !?Remote {
-    var temp_arena: std.heap.ArenaAllocator = .init(arena.allocator());
-    defer temp_arena.deinit();
+pub fn get_remote(self: @This(), alloc: std.mem.Allocator, io: std.Io, name: []const u8) !?Remote {
+    var arena: std.heap.ArenaAllocator = .init(alloc);
+    defer arena.deinit();
 
-    for (try self.get_remotes(&temp_arena, io)) |remote|
+    for (try self.get_remotes(arena.allocator(), io)) |remote|
         if (std.mem.eql(u8, remote.name, name))
-            return try remote.dupe(arena);
+            return try remote.dupe(alloc)
+        else
+            arena.reset(.retain_capacity);
 
     return null;
 }
@@ -99,9 +99,9 @@ pub fn set_remotes(self: @This(), io: std.Io, remotes: []const Remote) !void {
 pub fn add_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io, items: []const Remote) !void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
-
     const aac = arena.allocator();
-    const old_remotes = try self.get_remotes(&arena, io);
+
+    const old_remotes = try self.get_remotes(aac, io);
     const remotes = try aac.realloc(old_remotes, old_remotes.len + items.len);
 
     std.mem.copyForwards(Remote, remotes[old_remotes.len..], items);

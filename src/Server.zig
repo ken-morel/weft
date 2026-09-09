@@ -3,7 +3,6 @@ pub const unix_socket_path = "/run/weft/weft.sock";
 secret: [32]u8,
 tcp_listener: std.Io.net.Server,
 unix_listener: std.Io.net.Server,
-permits: std.Io.Semaphore,
 
 pub const Request = struct {
     server: *Self,
@@ -16,7 +15,8 @@ pub const Request = struct {
         self.stream.shutdown(io, .both) catch {};
     }
 
-    fn initInPlace(self: *@This(), alloc: std.mem.Allocator, io: std.Io, stream: std.Io.net.Stream, server: *Self) !void {
+    fn init(alloc: std.mem.Allocator, io: std.Io, stream: std.Io.net.Stream, server: *Self) !*@This() {
+        const self = try alloc.create(@This());
         const writer_buf = try alloc.alloc(u8, 4 << 10);
         errdefer alloc.free(writer_buf);
         const reader_buf = try alloc.alloc(u8, 4 << 10);
@@ -38,7 +38,6 @@ pub const Request = struct {
     pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
         self.stream.close(io);
         self.conn.deinit(alloc);
-        self.server.permits.post(io);
         alloc.free(self.rw_buffers.@"0");
         alloc.free(self.rw_buffers.@"1");
         alloc.destroy(self);
@@ -48,17 +47,12 @@ pub const Request = struct {
 pub fn init(
     io: std.Io,
     secret: *const [32]u8,
-    opts: struct {
-        port: u16 = 9336,
-        max_conn: u32 = 10,
-    },
+    port: u16,
 ) !@This() {
-    const addr = try std.Io.net.IpAddress.parse("0.0.0.0", opts.port);
+    const addr = try std.Io.net.IpAddress.parse("0.0.0.0", port);
     const tcp_listener = try addr.listen(
         io,
-        .{
-            .kernel_backlog = @as(u31, @intCast(opts.max_conn)),
-        },
+        .{},
     );
     errdefer tcp_listener.socket.close(io);
 
@@ -73,16 +67,13 @@ pub fn init(
     const unix_addr = try std.Io.net.UnixAddress.init(unix_socket_path);
     const unix_listener = try unix_addr.listen(
         io,
-        .{
-            .kernel_backlog = @as(u31, @intCast(opts.max_conn)),
-        },
+        .{},
     );
 
     return .{
         .tcp_listener = tcp_listener,
         .unix_listener = unix_listener,
         .secret = secret.*,
-        .permits = .{ .permits = opts.max_conn },
     };
 }
 
@@ -94,9 +85,6 @@ const AcceptUnion = union(enum) {
 };
 
 pub fn accept(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !*Request {
-    try self.permits.wait(io);
-    errdefer self.permits.post(io);
-
     var buf: [2]AcceptUnion = undefined;
     var sel = std.Io.Select(AcceptUnion).init(io, &buf);
 
@@ -121,10 +109,7 @@ pub fn accept(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !*Request {
     } catch |err| return err;
     errdefer stream.close(io);
 
-    const req = try alloc.create(Request);
-    errdefer alloc.destroy(req);
-    try req.initInPlace(alloc, io, stream, self);
-    return req;
+    return try Request.init(alloc, io, stream, self);
 }
 
 pub fn deinit(self: *@This(), io: std.Io) void {

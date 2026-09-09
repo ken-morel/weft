@@ -126,7 +126,7 @@ pub fn serializeValue(ptr: *[]u8, value: anytype) error{BufferTooSmall}!void {
     }
 }
 
-pub fn deserialize(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comptime T: type) !T {
+pub fn deserialize(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type) !T {
     const header = try readSlice(src, 4);
     if (!std.mem.eql(u8, header, "ZOTO"))
         return error.InvalidHeader;
@@ -135,7 +135,7 @@ pub fn deserialize(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comptime 
     if (actual_hash != comptime hashType(T))
         return error.TypeMismatch;
 
-    return try deserializeValue(arena, src, T);
+    return try deserializeValue(alloc, src, T);
 }
 
 pub const DeserializeError = std.mem.Allocator.Error || error{
@@ -146,7 +146,7 @@ pub const DeserializeError = std.mem.Allocator.Error || error{
     TypeMismatch,
 };
 
-pub fn deserializeValue(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comptime T: type) DeserializeError!T {
+pub fn deserializeValue(alloc: ?*std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
     const info = @typeInfo(T);
 
     switch (info) {
@@ -163,7 +163,7 @@ pub fn deserializeValue(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comp
         inline .optional => |o| {
             const has_value = try readByte(src);
             if (has_value == 1)
-                return try deserializeValue(arena, src, o.child)
+                return try deserializeValue(alloc, src, o.child)
             else
                 return null;
         },
@@ -171,11 +171,11 @@ pub fn deserializeValue(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comp
         inline .@"struct" => |s| {
             var result: T = undefined;
             inline for (s.fields) |f|
-                @field(result, f.name) = try deserializeValue(arena, src, f.type);
+                @field(result, f.name) = try deserializeValue(alloc, src, f.type);
             return result;
         },
 
-        inline .@"enum" => |e| return @enumFromInt(try deserializeValue(arena, src, e.tag_type)),
+        inline .@"enum" => |e| return @enumFromInt(try deserializeValue(alloc, src, e.tag_type)),
 
         inline .@"union" => |u| {
             const tag_id = try readByte(src);
@@ -189,7 +189,7 @@ pub fn deserializeValue(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comp
                         if (comptime f.type == anyerror)
                             @errorFromInt(try readInt(src, u16))
                         else
-                            try deserializeValue(arena, src, f.type),
+                            try deserializeValue(alloc, src, f.type),
                     );
 
             return error.InvalidUnionTag;
@@ -202,13 +202,12 @@ pub fn deserializeValue(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comp
                 // u8 are always aligned and thus zero-copy easily
                 if (p.child == u8)
                     return try readSlice(src, len)
-                else if (arena) |aren| {
-                    var alloc = aren.allocator();
-                    var slice = try alloc.alloc(p.child, len);
-                    errdefer alloc.free(slice);
+                else if (alloc) |alloc_| {
+                    var slice = try alloc_.alloc(p.child, len);
+                    errdefer alloc_.free(slice);
 
                     for (0..len) |i|
-                        slice[i] = try deserializeValue(aren, src, p.child);
+                        slice[i] = try deserializeValue(alloc, src, p.child);
 
                     return slice;
                 } else if (comptime !hasPointers(p.child)) {
@@ -221,12 +220,11 @@ pub fn deserializeValue(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comp
             },
             inline .one => {
                 // Single pointers dereference on serialize, but require allocation on deserialize
-                if (arena) |aren| {
-                    var alloc = aren.allocator();
-                    const ptr = try alloc.create(p.child);
-                    errdefer alloc.destroy(ptr);
+                if (alloc) |alloc_| {
+                    const ptr = try alloc_.create(p.child);
+                    errdefer alloc_.destroy(ptr);
 
-                    ptr.* = try deserializeValue(arena, src, p.child);
+                    ptr.* = try deserializeValue(alloc, src, p.child);
                     return ptr;
                 } else if (comptime !hasPointers(p.child)) { //BUG: check this
                     const raw_bytes = try readSlice(src, @sizeOf(p.child));
@@ -240,7 +238,7 @@ pub fn deserializeValue(arena: ?*std.heap.ArenaAllocator, src: *[]const u8, comp
         inline .array => |a| {
             var arr: T = undefined;
             for (0..a.len) |i| {
-                arr[i] = try deserializeValue(arena, src, a.child);
+                arr[i] = try deserializeValue(alloc, src, a.child);
             }
             return arr;
         },

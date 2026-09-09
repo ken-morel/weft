@@ -11,8 +11,7 @@ pub fn open(dir: std.Io.Dir) !@This() {
     };
 }
 
-pub fn get_config(self: @This(), arena: *std.heap.ArenaAllocator, io: std.Io) !Weft {
-    const alloc = arena.allocator();
+pub fn get_config(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
     const content = self.dir.readFileAllocOptions(
         io,
         "weft.zon",
@@ -41,17 +40,16 @@ pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: UUIdv7) !std.I
     const weft_dir = try self.open_weft_dir(io);
     defer weft_dir.close(io);
 
-    var deployment_name_buff: [36]u8 = undefined;
-    const deployment_name = try deployment.to_string(&deployment_name_buff);
+    const deployment_name = try deployment.to_string();
 
     weft_dir.createDirPath(
         io,
-        deployment_name,
+        &deployment_name,
     ) catch |err|
         if (err != error.PathAlreadyExists)
             return err;
 
-    return weft_dir.openDir(io, deployment_name, .{ .iterate = true });
+    return weft_dir.openDir(io, &deployment_name, .{ .iterate = true });
 }
 
 pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deployment: UUIdv7, pipeline: []const u8) ![]const u8 {

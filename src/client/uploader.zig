@@ -66,7 +66,7 @@ pub fn send_artifact(
     try conn.send(.{ .artifact_id = artifact_id });
     {
         defer _ = msg_arena.reset(.retain_capacity);
-        const reply = try conn.recv(&msg_arena);
+        const reply = try conn.recv_dupe(&msg_arena);
         switch (reply) {
             .bool => |has_artifact| if (has_artifact) return,
             else => return error.SyntaxError,
@@ -100,7 +100,7 @@ pub fn send_artifact(
 
     {
         defer _ = msg_arena.reset(.retain_capacity);
-        const msg = try conn.recv(&msg_arena);
+        const msg = try conn.recv_dupe(&msg_arena);
         switch (msg) {
             .ok => try term.printlnf("Upload okay", .{}),
             .err => |err| return err,

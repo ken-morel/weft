@@ -4,6 +4,7 @@ const std = @import("std");
 const DaemonInstall = @import("../DaemonInstall.zig");
 const Term = @import("../Term.zig");
 const handler = @import("handler.zig");
+const Worker = @import("Worker.zig");
 
 io: std.Io,
 alloc: std.mem.Allocator,
@@ -22,10 +23,11 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
     errdefer arena.deinit();
     const config = try install.get_config(io, &arena);
 
-    const server = try Server.init(io, &config.secret, .{
-        .port = config.port,
-        .max_conn = config.max_conn,
-    });
+    const server = try Server.init(
+        io,
+        &config.secret,
+        config.port,
+    );
     return .{
         .alloc = alloc,
         .io = io,
@@ -43,17 +45,34 @@ pub fn run(self: *@This()) !void {
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
+    const workers = try self.alloc.alloc(Worker, self.config.max_workers);
+    const permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
+
+    for (workers) |*worker|
+        worker.* = .init(self.alloc, self.io, self.term);
+
     while (true) {
-        const req = self.server.accept(self.alloc, self.io) catch |err| {
-            if (err == error.Canceled) return;
-            try self.term.err("accept error: {any}", .{err});
-            continue;
-        };
+        try permits.wait(self.io);
+
+        var worker: *Worker = undefined; //BUG
+        for (workers) |*worker_ref|
+            if (!worker_ref.running) {
+                worker = worker_ref;
+            };
+        worker.running = true;
+
+        const req = req: while (true)
+            break :req self.server.accept(self.arena.allocator(), self.io) catch |err| {
+                if (err == error.Canceled)
+                    return;
+                try self.term.err("accept error: {any}", .{err});
+                continue :req;
+            };
         try self.term.printlnf("new connection", .{});
         group.async(
             self.io,
-            handler.handle_conn,
-            .{ self, req },
+            worker.run,
+            .{ worker, req, &permits },
         );
     }
 }

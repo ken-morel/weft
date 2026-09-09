@@ -106,15 +106,23 @@ pub fn send(self: *@This(), msg: Message) !void {
     try zoto.serializeValue(&ptr, msg);
     try self.write(self.write_buf[0 .. self.write_buf.len - ptr.len]);
 }
-pub fn recv(self: *@This(), arena: *std.heap.ArenaAllocator) !Message {
+pub fn recv_dupe(self: *@This(), alloc: std.mem.Allocator) !Message {
     const data = try self.read(self.read_buf);
 
     if (data.len == 0)
         return error.EmptyMessage;
 
-    const owned = try arena.allocator().dupe(u8, data);
+    const owned = try alloc.dupe(u8, data);
     var const_slice: []const u8 = owned;
-    return zoto.deserializeValue(arena, &const_slice, Message);
+    return zoto.deserializeValue(alloc, &const_slice, Message);
+}
+pub fn recv_ref(self: *@This(), alloc: ?std.mem.Allocator) !Message {
+    const data = try self.read(self.read_buf);
+
+    if (data.len == 0)
+        return error.EmptyMessage;
+
+    return zoto.deserializeValue(alloc, &data, Message);
 }
 
 pub fn write(self: *@This(), data: []const u8) !void {

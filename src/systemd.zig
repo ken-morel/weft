@@ -1,14 +1,18 @@
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
+    unit: []const u8,
     opts: struct {
         cmd: [][]const u8,
         raw: []const u8 = &.{},
         unit: struct {
-            name: [][]const u8,
             description: []const u8,
+            type: enum { exec, oneshot, simply } = .exec,
         },
         run: struct {
+            user: ?[]const u8 = null,
+            group: ?[]const u8 = null,
+            dynamic_user: bool = false,
             pipe: bool = true,
             pty: bool = false,
             collect: bool = true,
@@ -57,7 +61,6 @@ pub fn run(
     defer cmd.deinit(alloc);
 
     try cmd.append(alloc, "systemd-run");
-    try cmd.append(alloc, "--service-type=exec");
 
     unit: {
         try cmd.append(
@@ -66,7 +69,7 @@ pub fn run(
                 alloc,
                 "--unit={s}",
                 .{
-                    std.mem.join(alloc, "-", opts.unit.name),
+                    unit,
                 },
             ),
         );
@@ -80,13 +83,30 @@ pub fn run(
                 },
             ),
         );
+        const c = "--service-type=";
+        try cmd.append(
+            alloc,
+            switch (opts.unit.type) {
+                .exec => c ++ "exec",
+                .oneshot => c ++ "oneshot",
+                .simply => c ++ "simply",
+            },
+        );
         break :unit;
     }
     run: {
+        if (opts.run.user) |user|
+            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pUser={s}", .{user}));
+        if (opts.run.group) |group|
+            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pGroup={s}", .{group}));
+
         if (opts.run.wait)
             try cmd.append(alloc, "--wait");
         if (opts.run.pipe)
             try cmd.append(alloc, "--pipe");
+
+        if (opts.run.dynamic_user)
+            try cmd.append(alloc, "-pDynamicUser=yes");
 
         if (opts.run.pty)
             try cmd.append(alloc, "--pty");
@@ -207,10 +227,65 @@ pub fn run(
 
     return try std.process.spawn(io, .{
         .argv = argv,
-        .stdin = .pipe,
+        .stdin = .ignore,
         .stdout = .pipe,
-        .stderr = .pipe,
+        .stderr = .inherit,
     });
+}
+
+pub const UnitStatus = struct {};
+pub fn show(alloc: std.mem.Allocator, io: std.Io, unit: []const u8) !UnitStatus {
+    _ = alloc;
+    const child = try std.process.spawn(
+        io,
+        .{
+            .argv = &.{ "systemctl", "show", unit },
+            .stdin = .ignore,
+            .stdout = .pipe,
+            .stderr = .inherit,
+        },
+    );
+    _ = child.wait(io);
+    if (child.stdout) |stdout| {
+        var buffer: [4 << 10]u8 = undefined;
+        var reader = stdout.reader(io, &buffer);
+        reader.interface.discard(.unlimited);
+        return .{};
+    } else return error.NoStdout;
+}
+
+pub fn logs(io: std.Io, unit: []const u8) !std.process.Child {
+    const child = try std.process.spawn(io, .{
+        .argv = &.{ "journalctl", "-u", unit, "-f", "-o", "cat", "--no-pager" },
+        .stdin = .ignore,
+        .stderr = .inherit,
+        .stdout = .pipe,
+    });
+    return child;
+}
+pub fn freeze(io: std.Io, unit: []const u8) !void {
+    const child = try std.process.spawn(
+        io,
+        .{
+            .argv = &.{ "systemctl", "freeze", unit },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .inherit,
+        },
+    );
+    _ = child.wait(io);
+}
+pub fn kill(io: std.Io, unit: []const u8) !void {
+    const child = try std.process.spawn(
+        io,
+        .{
+            .argv = &.{ "systemctl", "kill", unit },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .inherit,
+        },
+    );
+    _ = child.wait(io);
 }
 
 const std = @import("std");
