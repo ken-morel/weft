@@ -1,46 +1,48 @@
+const std = @import("std");
+
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
     unit: []const u8,
     opts: struct {
         cmd: [][]const u8,
-        raw: []const u8 = &.{},
+        raw: [][]const u8 = &.{},
         unit: struct {
-            description: []const u8,
-            type: enum { exec, oneshot, simply } = .exec,
-        },
+            description: ?[]const u8 = null,
+            type: enum { simple, exec, oneshot, forking, notify, notify_reload, dbus, idle } = .simple,
+        } = .{},
         run: struct {
             user: ?[]const u8 = null,
             group: ?[]const u8 = null,
             dynamic_user: bool = false,
-            pipe: bool = true,
+            pipe: bool = false,
             pty: bool = false,
-            collect: bool = true,
-            remain_after_exit: bool = true,
+            collect: bool = false,
+            remain_after_exit: bool = false,
             cwd: ?[]const u8 = null,
             env: [][]const u8 = &.{},
-            wait: bool,
-        } = &.{},
+            wait: bool = false,
+        } = .{},
         fs: struct {
-            protect_home: enum { no, yes, tmpfs } = .yes,
-            protect_system: ?enum { strict } = null,
+            protect_home: enum { no, yes, tmpfs, read_only } = .no,
+            protect_system: enum { no, yes, full, strict } = .no,
             read: [][]const u8 = &.{},
             write: [][]const u8 = &.{},
             inaccessible: [][]const u8 = &.{},
-            private_tmp: bool = true,
+            private_tmp: bool = false,
             tmpfs: [][]const u8 = &.{},
             root_image: ?[]const u8 = null,
-        } = &.{},
+        } = .{},
         permissions: struct {
-            priviledges: bool = true,
-            kernel_tunables: bool = false,
-            kernel_modules: bool = false,
-            control_groups: bool = false,
-            network: bool = true,
-            capability_bounding_set: ?[]const u8 = &.{}, // drop root
-            devices: bool = true,
-            address_families: ?[][]const u8 = &.{ "AF_UNIX", "AF_INET", "AF_INET6" },
-        } = &.{},
+            no_new_privileges: bool = false,
+            protect_kernel_tunables: bool = false,
+            protect_kernel_modules: bool = false,
+            protect_control_groups: bool = false,
+            private_network: bool = false,
+            capability_bounding_set: ?[]const u8 = null,
+            private_devices: bool = false,
+            restrict_address_families: ?[][]const u8 = null,
+        } = .{},
         resources: struct {
             memory_max: ?u64 = null,
             memory_high: ?u64 = null,
@@ -48,9 +50,7 @@ pub fn run(
             tasks_max: ?u32 = null,
             io_weight: ?u32 = null,
             timeout: ?u32 = null,
-        } = &.{},
-        user: ?[]const u8 = null,
-        group: ?[]const u8 = null,
+        } = .{},
     },
 ) !std.process.Child {
     var arena: std.heap.ArenaAllocator = .init(allocator);
@@ -65,49 +65,42 @@ pub fn run(
     unit: {
         try cmd.append(
             alloc,
-            try std.fmt.allocPrint(
-                alloc,
-                "--unit={s}",
-                .{
-                    unit,
-                },
-            ),
+            try std.fmt.allocPrint(alloc, "--unit={s}", .{unit}),
         );
-        try cmd.append(
-            alloc,
-            try std.fmt.allocPrint(
+
+        if (opts.unit.description) |desc|
+            try cmd.append(
                 alloc,
-                "--description={s}",
-                .{
-                    opts.unit.description,
-                },
-            ),
-        );
-        const c = "--service-type=";
+                try std.fmt.allocPrint(alloc, "--description={s}", .{desc}),
+            );
+
         try cmd.append(
             alloc,
             switch (opts.unit.type) {
-                .exec => c ++ "exec",
-                .oneshot => c ++ "oneshot",
-                .simply => c ++ "simply",
+                .notify_reload => "--service-type=notify-reload",
+                .simple => "--service-type=simple",
+                .exec => "--service-type=exec",
+                .oneshot => "--service-type=oneshot",
+                .forking => "--service-type=forking",
+                .notify => "--service-type=notify",
+                .dbus => "--service-type=dbus",
+                .idle => "--service-type=idle",
             },
         );
         break :unit;
     }
     run: {
         if (opts.run.user) |user|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pUser={s}", .{user}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pUser={s}", .{user}));
         if (opts.run.group) |group|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pGroup={s}", .{group}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pGroup={s}", .{group}));
 
         if (opts.run.wait)
             try cmd.append(alloc, "--wait");
         if (opts.run.pipe)
             try cmd.append(alloc, "--pipe");
-
         if (opts.run.dynamic_user)
             try cmd.append(alloc, "-pDynamicUser=yes");
-
         if (opts.run.pty)
             try cmd.append(alloc, "--pty");
         if (opts.run.collect)
@@ -116,7 +109,7 @@ pub fn run(
             try cmd.append(alloc, "--remain-after-exit");
 
         if (opts.run.cwd) |cwd|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "--working-directory={s}", cwd));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "--working-directory={s}", .{cwd}));
 
         for (opts.run.env) |env| {
             try cmd.append(alloc, "-E");
@@ -127,60 +120,64 @@ pub fn run(
     }
     fs: {
         switch (opts.fs.protect_home) {
+            .no => {},
             .yes => try cmd.append(alloc, "-pProtectHome=yes"),
-            .no => try cmd.append(alloc, "-pProtectHome=no"),
             .tmpfs => try cmd.append(alloc, "-pProtectHome=tmpfs"),
+            .read_only => try cmd.append(alloc, "-pProtectHome=read-only"),
         }
 
-        if (opts.fs.protect_system) |val|
-            switch (val) {
-                .strict => try cmd.append(alloc, "-pProtectSystem=strict"),
-            };
+        switch (opts.fs.protect_system) {
+            .no => {},
+            .yes => try cmd.append(alloc, "-pProtectSystem=yes"),
+            .full => try cmd.append(alloc, "-pProtectSystem=full"),
+            .strict => try cmd.append(alloc, "-pProtectSystem=strict"),
+        }
 
         for (opts.fs.read) |read_path|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pReadOnlyPaths={s}", .{read_path}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pReadOnlyPaths={s}", .{read_path}));
 
         for (opts.fs.write) |write_path|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pReadWritePaths={s}", .{write_path}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pReadWritePaths={s}", .{write_path}));
 
         for (opts.fs.inaccessible) |inaccessible_path|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pInaccessiblePaths={s}", .{inaccessible_path}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pInaccessiblePaths={s}", .{inaccessible_path}));
 
         if (opts.fs.private_tmp)
             try cmd.append(alloc, "-pPrivateTmp=yes");
 
         for (opts.fs.tmpfs) |spec|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pTemporaryFileSystem={s}", spec));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pTemporaryFileSystem={s}", .{spec}));
 
         if (opts.fs.root_image) |img|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pRootImage={s}", img));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pRootImage={s}", .{img}));
 
         break :fs;
     }
     permissions: {
-        if (!opts.permissions.priviledges)
+        if (opts.permissions.no_new_privileges)
             try cmd.append(alloc, "-pNoNewPrivileges=yes");
-        if (!opts.permissions.kernel_tunables)
+        if (opts.permissions.protect_kernel_tunables)
             try cmd.append(alloc, "-pProtectKernelTunables=yes");
-        if (!opts.permissions.kernel_modules)
+        if (opts.permissions.protect_kernel_modules)
             try cmd.append(alloc, "-pProtectKernelModules=yes");
-        if (!opts.permissions.control_groups)
+        if (opts.permissions.protect_control_groups)
             try cmd.append(alloc, "-pProtectControlGroups=yes");
+
         if (opts.permissions.capability_bounding_set) |cap|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pCapabilityBoundingSet={s}", .{cap}));
-        if (!opts.permissions.devices)
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pCapabilityBoundingSet={s}", .{cap}));
+
+        if (opts.permissions.private_devices)
             try cmd.append(alloc, "-pPrivateDevices=yes");
-        if (!opts.permissions.network)
+        if (opts.permissions.private_network)
             try cmd.append(alloc, "-pPrivateNetwork=yes");
-        if (opts.permissions.address_families) |addr|
+
+        if (opts.permissions.restrict_address_families) |addr|
             try cmd.append(
                 alloc,
-                std.fmt.allocPrint(
+                try std.fmt.allocPrint(
                     alloc,
                     "-pRestrictAddressFamilies={s}",
-                    .{
-                        std.mem.join(alloc, " ", addr),
-                    },
+                    .{try std.mem.join(alloc, " ", addr)},
                 ),
             );
 
@@ -188,30 +185,25 @@ pub fn run(
     }
     resources: {
         if (opts.resources.memory_max) |memax|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pMemoryMax={any}M", .{memax}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pMemoryMax={d}M", .{memax}));
 
         if (opts.resources.memory_high) |memhigh|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pMemoryHigh={any}M", .{memhigh}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pMemoryHigh={d}M", .{memhigh}));
 
         if (opts.resources.cpu_quota) |quota|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pCpuQuota={any}%", .{quota}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pCPUQuota={d}%", .{quota}));
 
         if (opts.resources.tasks_max) |max_tasks|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pTasksMax={any}", .{max_tasks}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pTasksMax={d}", .{max_tasks}));
 
         if (opts.resources.io_weight) |io_weight|
-            try cmd.append(alloc, std.fmt.allocPrint(alloc, "-pIoWeight={any}", .{io_weight}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pIOWeight={d}", .{io_weight}));
 
         if (opts.resources.timeout) |timeout|
-            try cmd.append(alloc, "-pTimeoutStartSec={any}", .{timeout});
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pTimeoutStartSec={d}", .{timeout}));
 
         break :resources;
     }
-
-    if (opts.user) |u|
-        try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pUser={s}", .{u}));
-    if (opts.group) |g|
-        try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pGroup={s}", .{g}));
 
     for (opts.raw) |arg|
         try cmd.append(alloc, arg);
@@ -234,6 +226,7 @@ pub fn run(
 }
 
 pub const UnitStatus = struct {};
+
 pub fn show(alloc: std.mem.Allocator, io: std.Io, unit: []const u8) !UnitStatus {
     _ = alloc;
     const child = try std.process.spawn(
@@ -245,7 +238,8 @@ pub fn show(alloc: std.mem.Allocator, io: std.Io, unit: []const u8) !UnitStatus 
             .stderr = .inherit,
         },
     );
-    _ = child.wait(io);
+    _ = try child.wait(io);
+
     if (child.stdout) |stdout| {
         var buffer: [4 << 10]u8 = undefined;
         var reader = stdout.reader(io, &buffer);
@@ -263,6 +257,7 @@ pub fn logs(io: std.Io, unit: []const u8) !std.process.Child {
     });
     return child;
 }
+
 pub fn freeze(io: std.Io, unit: []const u8) !void {
     const child = try std.process.spawn(
         io,
@@ -273,8 +268,9 @@ pub fn freeze(io: std.Io, unit: []const u8) !void {
             .stderr = .inherit,
         },
     );
-    _ = child.wait(io);
+    _ = try child.wait(io);
 }
+
 pub fn kill(io: std.Io, unit: []const u8) !void {
     const child = try std.process.spawn(
         io,
@@ -285,7 +281,5 @@ pub fn kill(io: std.Io, unit: []const u8) !void {
             .stderr = .inherit,
         },
     );
-    _ = child.wait(io);
+    _ = try child.wait(io);
 }
-
-const std = @import("std");

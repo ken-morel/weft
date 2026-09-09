@@ -214,12 +214,9 @@ pub fn deserializeValue(alloc: ?*std.mem.Allocator, src: *[]const u8, comptime T
                     const raw_bytes = try readSlice(src, len * @sizeOf(p.child));
                     const typed_ptr: [*]const p.child = @ptrCast(@alignCast(raw_bytes.ptr));
                     return @constCast(typed_ptr[0..len]);
-                }
-
-                return error.AllocationRequired;
+                } else return error.AllocationRequired;
             },
             inline .one => {
-                // Single pointers dereference on serialize, but require allocation on deserialize
                 if (alloc) |alloc_| {
                     const ptr = try alloc_.create(p.child);
                     errdefer alloc_.destroy(ptr);
@@ -229,8 +226,7 @@ pub fn deserializeValue(alloc: ?*std.mem.Allocator, src: *[]const u8, comptime T
                 } else if (comptime !hasPointers(p.child)) { //BUG: check this
                     const raw_bytes = try readSlice(src, @sizeOf(p.child));
                     return @as(*const p.child, @ptrCast(@alignCast(raw_bytes.ptr)));
-                }
-                return error.AllocationRequired;
+                } else return error.AllocationRequired;
             },
             else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
         },
@@ -255,10 +251,12 @@ fn hasPointers(comptime T: type) bool {
     return switch (info) {
         .pointer => true,
         .@"struct" => |s| inline for (s.fields) |f| {
-            if (hasPointers(f.type)) break true;
+            if (hasPointers(f.type))
+                break true;
         } else false,
         .@"union" => |u| inline for (u.fields) |f| {
-            if (hasPointers(f.type)) break true;
+            if (hasPointers(f.type))
+                break true;
         } else false,
         .optional => |o| hasPointers(o.child),
         .array => |a| hasPointers(a.child),

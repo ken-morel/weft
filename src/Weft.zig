@@ -1,6 +1,5 @@
 const std = @import("std");
 const Glob = @import("Glob.zig");
-const script = @import("script.zig");
 
 pub const EnvBinding = union(enum) {
     database: []const u8,

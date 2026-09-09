@@ -3,7 +3,6 @@ const Server = @import("../Server.zig");
 const std = @import("std");
 const DaemonInstall = @import("../DaemonInstall.zig");
 const Term = @import("../Term.zig");
-const handler = @import("handler.zig");
 const Worker = @import("Worker.zig");
 
 io: std.Io,
@@ -11,7 +10,6 @@ alloc: std.mem.Allocator,
 install: DaemonInstall,
 server: Server,
 config: DaemonInstall.Config,
-arena: std.heap.ArenaAllocator,
 term: *Term,
 
 pub fn deinit(self: *@This()) void {
@@ -19,9 +17,7 @@ pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
-    var arena: std.heap.ArenaAllocator = .init(alloc);
-    errdefer arena.deinit();
-    const config = try install.get_config(io, &arena);
+    const config = try install.get_config(io, alloc);
 
     const server = try Server.init(
         io,
@@ -32,7 +28,6 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
         .alloc = alloc,
         .io = io,
         .install = install,
-        .arena = arena,
         .config = config,
         .server = server,
         .term = term,
@@ -62,7 +57,7 @@ pub fn run(self: *@This()) !void {
         worker.running = true;
 
         const req = req: while (true)
-            break :req self.server.accept(self.arena.allocator(), self.io) catch |err| {
+            break :req self.server.accept(worker.alloc, self.io) catch |err| {
                 if (err == error.Canceled)
                     return;
                 try self.term.err("accept error: {any}", .{err});

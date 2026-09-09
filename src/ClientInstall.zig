@@ -25,7 +25,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Enviro
     };
 }
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
-    const uuid = try (try UUIDv7.now(io)).to_string();
+    const uuid = (try UUIDv7.now(io)).to_string();
 
     self.temp_dir.createDirPath(io, sub) catch {};
     var sub_dir = try self.temp_dir.openDir(io, sub, .{});
@@ -78,7 +78,7 @@ pub fn get_remote(self: @This(), alloc: std.mem.Allocator, io: std.Io, name: []c
     defer arena.deinit();
 
     for (try self.get_remotes(arena.allocator(), io)) |remote|
-        if (std.mem.eql(u8, remote.name, name))
+        _ = if (std.mem.eql(u8, remote.name, name))
             return try remote.dupe(alloc)
         else
             arena.reset(.retain_capacity);

@@ -46,7 +46,7 @@ pub fn spawn_step(
     try term.printlnf("spawning deployment step: {s} on {s}", .{ step.pipeline, step.remote });
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
-    const remote = (try inst.get_remote(&arena, io, step.remote)) orelse {
+    const remote = (try inst.get_remote(arena.allocator(), io, step.remote)) orelse {
         try term.err("Invalid remote: {s}", .{step.remote});
         return error.InvalidRemote;
     };

@@ -1,7 +1,6 @@
 const std = @import("std");
 const UUIdv7 = @import("UUIDv7.zig");
 const Weft = @import("Weft.zig");
-const script = @import("script.zig");
 
 dir: std.Io.Dir,
 
@@ -40,7 +39,7 @@ pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: UUIdv7) !std.I
     const weft_dir = try self.open_weft_dir(io);
     defer weft_dir.close(io);
 
-    const deployment_name = try deployment.to_string();
+    const deployment_name = deployment.to_string();
 
     weft_dir.createDirPath(
         io,
@@ -63,47 +62,4 @@ pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, de
         alloc,
         &.{ deployment_dir_path, "artifacts", pipeline },
     );
-}
-
-pub const Script = struct {
-    path: []const u8,
-    lang: script.Lang,
-    pub fn init(alloc: std.mem.Allocator, path: []const u8) !@This() {
-        const lang = script.get_lang_by_file_name(path) orelse return error.UnsupportedScript;
-        return .{
-            .path = alloc.dupe(path),
-            .lang = lang,
-        };
-    }
-    pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
-        alloc.free(self.path);
-    }
-};
-pub fn get_script_by_name(self: @This(), alloc: std.mem.Allocator, io: std.Io, name: []const u8) !?Script {
-    const name_with_dot = try alloc.alloc(u8, name.len + 1);
-    defer alloc.free(name_with_dot);
-    name_with_dot[name.len] = '.';
-
-    const walkable = self.dir.openDir(
-        io,
-        "weft/bin",
-        .{ .iterate = true },
-    ) catch |err|
-        return if (err == error.FileNotFound)
-            error.NoBinDir
-        else
-            err;
-
-    var walker = try walkable.walkSelectively(alloc);
-    while (try walker.next(io)) |entry|
-        if (entry.kind == .file and std.mem.startsWith(u8, entry.basename, name_with_dot)) {
-            const full_path = try entry.dir.realPathFileAlloc(io, entry.path, alloc);
-            defer alloc.free(full_path);
-            const lang = script.get_lang_by_file_name(full_path) orelse return error.UnsuportedScript;
-            return .{
-                .path = full_path,
-                .lang = lang,
-            };
-        };
-    return null;
 }

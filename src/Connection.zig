@@ -50,10 +50,10 @@ pub const Message = union(enum) {
 
     data: []const u8,
 
-    ok: void,
+    ok,
     bool: bool,
     err: anyerror,
-    end: void,
+    end,
 };
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *std.Io.Reader, writer: *std.Io.Writer) !@This() {

@@ -20,6 +20,30 @@ pub fn now(io: std.Io) !UUIDv7 {
     };
 }
 
+pub fn formatNumber(
+    self: @This(),
+    writer: *std.Io.Writer,
+    num: std.fmt.Number,
+) !void {
+    const base = num.mode.base() orelse 16;
+    const opts: std.fmt.Options = .{
+        .alignment = num.alignment,
+        .fill = num.fill,
+        .precision = num.precision,
+        .width = num.width,
+    };
+    inline for (0..16) |i| {
+        if (i == 4 or i == 6 or i == 8 or i == 10)
+            try writer.writeByte('-');
+        try writer.printInt(self.bytes[i], base, num.case, opts);
+    }
+}
+pub fn to_string(self: UUIDv7) [36]u8 {
+    var buf: [36]u8 = undefined;
+    _ = std.fmt.bufPrint(&buf, "{x:0>2}", .{self}) catch unreachable;
+    return buf;
+}
+
 pub fn timestamp(self: UUIDv7) u48 {
     return std.mem.readInt(u48, self.bytes[0..6], .big);
 }
@@ -28,29 +52,6 @@ pub fn rand(self: UUIDv7) struct { u12, u62 } {
     const raw1 = std.mem.readInt(u16, self.bytes[6..8], .big);
     const raw2 = std.mem.readInt(u64, self.bytes[8..16], .big);
     return .{ @intCast(raw1 & 0x0fff), @intCast(raw2 & 0x3fff_ffff_ffff_ffff) };
-}
-
-pub fn format(
-    self: UUIDv7,
-    comptime fmt: []const u8,
-    options: std.fmt.FormatOptions,
-    writer: anytype,
-) !void {
-    _ = options;
-    const full_fmt = ("{" ++ fmt ++ "}-") ** 5;
-    try writer.print(full_fmt[0 .. full_fmt.len - 1], .{
-        self.bytes[0..4],
-        self.bytes[4..6],
-        self.bytes[6..8],
-        self.bytes[8..10],
-        self.bytes[10..16],
-    });
-}
-
-pub fn to_string(self: UUIDv7) [36]u8 {
-    var buf: [36]u8 = undefined;
-    std.fmt.bufPrint(&buf, "{}", .{self}) catch unreachable;
-    return buf;
 }
 
 pub fn parse(input: []const u8) !UUIDv7 {

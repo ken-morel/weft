@@ -3,17 +3,17 @@ const Server = @import("../Server.zig");
 const std = @import("std");
 const DaemonInstall = @import("../DaemonInstall.zig");
 const Term = @import("../Term.zig");
-const handler = @import("handler.zig");
 const Worker = @import("Worker.zig");
 const packer = @import("../packer.zig");
+const Daemon = @import("Daemon.zig");
+const systemd = @import("../systemd.zig");
 
 const max_worker_mem = 1 << 20;
 
 alloc: std.heap.FixedBufferAllocator,
-io: std.Io,
 permit: std.Io.Semaphore,
 running: bool,
-term: *Term,
+daemon: *Daemon,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io, term: *Term) @This() {
     return .{
@@ -24,9 +24,9 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, term: *Term) @This() {
 }
 
 pub fn run(self: *@This(), req: *Server.Request, permits: *std.Io.Semaphore) void {
-    defer permits.post(self.io);
+    defer permits.post(self.daemon.io);
     defer self.alloc.reset();
-    defer req.destroy(self.alloc, self.io);
+    defer req.destroy(self.alloc, self.daemon.io);
 
     const msg = req.conn.recv_ref(
         null,
@@ -36,7 +36,7 @@ pub fn run(self: *@This(), req: *Server.Request, permits: *std.Io.Semaphore) voi
         else
             err;
 
-    try self.term.printlnf(":{any}", .{msg});
+    try self.daemon.term.printlnf(":{any}", .{msg});
 
     switch (msg) {
         .request => |r| switch (r) {
@@ -48,14 +48,10 @@ pub fn run(self: *@This(), req: *Server.Request, permits: *std.Io.Semaphore) voi
     }
 }
 fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
-    try self.term.printlnf("    artifact push: ", .{});
+    try self.daemon.term.printlnf("    artifact push: ", .{});
     const conn = &req.conn;
 
-    var temp_arena: std.heap.ArenaAllocator = .init(self.alloc);
-    defer temp_arena.deinit();
-    var arena: std.heap.ArenaAllocator = .init(self.alloc);
-
-    const artifact_id = switch (try conn.recv_dupe(arena)) {
+    const artifact_id = switch (try conn.recv_dupe(self.alloc)) {
         .artifact_id => |art_id| art_id,
         else => return error.SyntaxEror,
     };
@@ -68,52 +64,57 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
         artifact_id.deployment,
         artifact_id.pipeline,
     });
-    defer alloc.free(artifact_dir_path);
 
-    const has_artifact = blk: {
+    const has_artifact = has_artifact: {
         std.Io.Dir.cwd().access(
-            self.io,
+            self.daemon.io,
             artifact_dir_path,
             .{},
         ) catch |err|
             if (err == error.FileNotFound)
-                break :blk false
+                break :has_artifact false
             else
                 return err;
-        break :blk true;
+        break :has_artifact true;
     };
     try conn.send(.{ .bool = has_artifact });
-    try self.term.printlnf("Sent has_artifact: {any}", .{has_artifact});
+
     if (has_artifact)
         return;
 
-    const temp_dir = try self.install.open_temp(self.io, "artifact");
-    defer temp_dir.close(self.io);
-
-    const temp_dir_path = try temp_dir.realPathFileAlloc(self.io, ".", alloc);
-    defer alloc.free(temp_dir_path);
+    const temp_dir = try self.daemon.install.open_temp(self.daemon.io, "artifact");
+    defer temp_dir.close(self.daemon.io);
 
     {
-        var unpacker: *packer.Unpacker = try .init(alloc, temp_dir);
-        defer unpacker.destroy(alloc, self.io);
+        var unpacker: *packer.Unpacker = try .init(self.alloc, temp_dir);
+        defer unpacker.destroy(self.alloc, self.daemon.io);
 
         while (true) {
-            const pack = try conn.recv_dupe(&temp_arena);
+            const pack = try conn.recv_ref(null);
             switch (pack) {
-                .folder => |folder| try unpacker.folder(self.io, folder),
-                .file => |file| try unpacker.file(self.io, file),
-                .data => |data| try unpacker.chunk(self.io, data),
+                .folder => |folder| try unpacker.folder(self.daemon.io, folder),
+                .file => |file| try unpacker.file(self.daemon.io, file),
+                .data => |data| try unpacker.chunk(self.daemon.io, data),
                 .end => break,
                 else => return error.SyntaxError,
             }
-            _ = temp_arena.reset(.retain_capacity);
         }
     }
 
     if (std.fs.path.dirname(artifact_dir_path)) |parent|
-        std.Io.Dir.cwd().createDirPath(self.io, parent) catch {};
-    try std.Io.Dir.cwd().rename(temp_dir_path, std.Io.Dir.cwd(), artifact_dir_path, self.io);
-    try conn.send(.{ .ok = {} });
+        std.Io.Dir.cwd().createDirPath(self.daemon.io, parent) catch {};
+
+    try std.Io.Dir.cwd().rename(
+        try temp_dir.realPathFileAlloc(
+            self.daemon.io,
+            ".",
+            self.alloc,
+        ),
+        std.Io.Dir.cwd(),
+        artifact_dir_path,
+        self.daemon.io,
+    );
+    try conn.send(.ok);
 }
 
 // tasks
@@ -127,30 +128,147 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
 // - cwd to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/cwd
 
 pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *Server.Request) !void {
-    try self.term.printlnf("  task spawn", .{});
-    const conn = &req.conn;
+    try self.daemon.term.printlnf("  task spawn", .{});
     const alloc = arena.allocator();
 
     var msg_arena: std.heap.ArenaAllocator = .init(alloc);
     defer msg_arena.deinit();
 
-    const task = switch (try conn.recv_dupe(arena)) {
+    const task = switch (try req.conn.recv_dupe(arena)) {
         .task_spec => |spec| spec,
         else => return error.SyntaxEror,
     };
 
     const deployment = task.deployment.to_string();
-    const service_name = try std.mem.join(alloc, "--", &.{
-        "weft-runner",
-        task.workspace,
-        task.env,
-        task.service,
-        task.pipline,
-        &deployment,
+    const unit_name = try std.mem.join(
+        alloc,
+        "--",
+        &.{
+            "weft-runner",
+            task.workspace,
+            task.env,
+            task.service,
+            &deployment,
+            task.pipline,
+        },
+    );
+    const input_dir = try std.fs.path.join(
+        alloc,
+        &.{
+            "/var/lib/weft/artifacts/",
+            task.workspace,
+            task.service,
+            task.env,
+            &deployment,
+        },
+    );
+
+    var input_dirs = try alloc.alloc(
+        []const u8,
+        task.pipline.inputs.len,
+    );
+    for (task.pipline.inputs, 0..) |input, i| {
+        const path = try std.fs.path.join(
+            alloc,
+            &.{ input_dir, input.name },
+        );
+        std.Io.Dir.cwd().access(
+            self.daemon.io,
+            path,
+            .{},
+        ) catch |err|
+            if (err == error.FileNotFound)
+                return error.MissingInput;
+        input_dirs[i] = path;
+    }
+
+    const run_dir_path = try std.fs.path.join(
+        alloc,
+        &.{
+            "/var/lib/weft/run",
+            task.workspace,
+            task.service,
+            task.env,
+            &deployment,
+            task.pipline,
+        },
+    );
+    try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
+
+    const script_path = try std.fs.path.join(alloc, &.{ run_dir_path, "bin" });
+    const script_file = try std.Io.Dir.cwd().createFile(self.daemon.io, script_path, .{
+        .permissions = .executable_file,
     });
-    defer alloc.free(service_name);
-    const input_dir = try std.fs.path.join(alloc, &.{ "/var/lib/weft/artifacts/", task.workspace, task.service, task.env, &deployment });
-    defer alloc.free(input_dir);
+    errdefer script_file.close(self.daemon.io);
+
+    while (true)
+        switch (try req.conn.recv_ref(null)) {
+            .data => |data| script_file.writeStreamingAll(self.daemon.io, data),
+            .end => break,
+            else => return error.SyntaxError,
+        };
+    script_file.close(self.daemon.io);
+
+    const cwd_dir = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
+    try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir);
+
+    const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
+
+    var output_dirs = try alloc.alloc([]const u8, task.pipline.outputs.len);
+    for (task.pipline.outputs, 0..) |output, i| {
+        const path = try std.fs.path.join(alloc, &.{
+            output_dir_path,
+            output.name,
+        });
+        try std.Io.Dir.cwd().createDirPath(self.daemon.io, path);
+        output_dirs[i] = path;
+    }
+
+    try systemd.run(
+        alloc,
+        self.daemon.io,
+        unit_name,
+        .{
+            .cmd = &.{script_path},
+            .raw = &.{},
+            .unit = .{
+                .type = .exec,
+                .description = std.fmt.allocPrint(alloc, "Weft runner", .{}),
+            },
+            .fs = .{
+                .inaccessible = "/var/lib/weft",
+                .private_tmp = true,
+                .protect_system = .strict,
+                .read = input_dirs,
+                .root_image = null,
+                .tmpfs = &.{},
+                .write = output_dirs,
+            },
+            .permissions = .{
+                .capability_bounding_set = &.{},
+                .protect_control_groups = true,
+                .private_devices = true,
+                .protect_kernel_modules = true,
+                .protect_kernel_tunables = true,
+                .private_network = true,
+                .no_new_privileges = true,
+                .restrict_address_families = &.{ "AF_UNIX", "AF_INET", "AF_INET6" },
+            },
+            .run = .{
+                .user = "weft-runner",
+                .group = null,
+                .wait = false,
+                .collect = true,
+                .cwd = run_dir_path,
+                .dynamic_user = false,
+                .env = &.{
+                    std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}),
+                    std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
+                },
+            },
+            .resources = .{},
+        },
+    );
 
     return;
 }

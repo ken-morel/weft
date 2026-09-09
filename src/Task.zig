@@ -1,5 +1,4 @@
 const Weft = @import("Weft.zig");
-const Lang = @import("script.zig").Lang;
 const UUIDv7 = @import("UUIDv7.zig");
 
 pub const Spec = struct {
@@ -8,5 +7,4 @@ pub const Spec = struct {
     deployment: UUIDv7,
     env: []const u8,
     pipline: Weft.Pipeline,
-    lang: Lang,
 };

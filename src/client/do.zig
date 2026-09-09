@@ -23,13 +23,12 @@ pub fn run(
     var alloc = arena.allocator();
     const owned_targets = try alloc.dupe(Step, targets);
 
-    const config = try project.get_config(&arena, io);
+    const config = try project.get_config(arena.allocator(), io);
     var deployment = try Deployment.create(io, config, owned_targets);
-    try deployment.save(io, project);
-    var buff: [36]u8 = undefined;
+    try deployment.save(alloc, io, project);
     try term.printlnf(
         "Created deploymeent {s}",
-        .{try deployment.uuid.to_string(&buff)},
+        .{&deployment.uuid.to_string()},
     );
     try src.create_src_artifact(allocator, io, term, inst, project, deployment.uuid);
     try runner.run_deployment(

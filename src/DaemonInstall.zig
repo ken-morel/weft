@@ -10,7 +10,7 @@ const UUIDv7 = @import("UUIDv7.zig");
 pub const Config = struct {
     secret: [32]u8 = undefined,
     port: u16 = 9338,
-    max_workers: u32 = 10,
+    max_workers: u32 = 15,
 };
 
 temp_dir: std.Io.Dir,
@@ -127,7 +127,7 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
     setup_sysusers: {
         var sysusers_file = try cwd.createFile(io, "/usr/lib/sysusers.d/weft.conf", .{});
         defer sysusers_file.close(io);
-        sysusers_file.writeStreamingAll(io, sysusers_config);
+        try sysusers_file.writeStreamingAll(io, sysusers_config);
         break :setup_sysusers;
     }
 }
