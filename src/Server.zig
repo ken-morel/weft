@@ -17,6 +17,7 @@ pub const Request = struct {
 
     fn init(alloc: std.mem.Allocator, io: std.Io, stream: std.Io.net.Stream, server: *Self) !*@This() {
         const self = try alloc.create(@This());
+        errdefer alloc.destroy(self);
         const writer_buf = try alloc.alloc(u8, 4 << 10);
         errdefer alloc.free(writer_buf);
         const reader_buf = try alloc.alloc(u8, 4 << 10);
@@ -26,6 +27,7 @@ pub const Request = struct {
         self.rw = .{ stream.reader(io, reader_buf), stream.writer(io, writer_buf) };
         self.stream = stream;
         self.server = server;
+
         self.conn = try Connection.init(
             alloc,
             io,

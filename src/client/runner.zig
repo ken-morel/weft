@@ -86,7 +86,7 @@ pub fn spawn_step(
                 break
             else
                 return err;
-        try client.conn.send(.{ .data = buffer[0..size] });
+        try client.conn.send(.{ .raw = buffer[0..size] });
     }
     try client.conn.send(.end);
 

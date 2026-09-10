@@ -109,7 +109,7 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
             switch (pack) {
                 .folder => |folder| try unpacker.folder(self.daemon.io, folder),
                 .file => |file| try unpacker.file(self.daemon.io, file),
-                .data => |data| try unpacker.chunk(self.daemon.io, data),
+                .raw => |data| try unpacker.chunk(self.daemon.io, data),
                 .end => break,
                 else => return error.SyntaxError,
             }
@@ -232,7 +232,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
 
     while (true)
         switch (try req.conn.recv_ref(null)) {
-            .data => |data| try script_file.writeStreamingAll(self.daemon.io, data),
+            .raw => |data| try script_file.writeStreamingAll(self.daemon.io, data),
             .end => break,
             else => return error.SyntaxError,
         };

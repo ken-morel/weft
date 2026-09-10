@@ -13,16 +13,13 @@ pub const packet_size = std.math.maxInt(u16);
 reader: *std.Io.Reader,
 writer: *std.Io.Writer,
 
-token: [32]u8,
+token: [32]u8, // must be a [32]u8
 
 out_nonce: Nonce,
 in_nonce: Nonce,
 
 read_buf: []u8,
 write_buf: []u8,
-
-read_cyph_buf: []u8,
-write_cyph_buf: []u8,
 
 pub const Message = union(enum) {
     request: enum(u8) {
@@ -48,7 +45,8 @@ pub const Message = union(enum) {
     file: []const u8,
     folder: []const u8,
 
-    data: []const u8,
+    raw: []const u8,
+    compressed: []const u8,
 
     ok,
     bool: bool,
@@ -69,14 +67,9 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *s
     const write_buf = try alloc.alloc(u8, packet_size);
     errdefer alloc.free(write_buf);
 
-    const read_cyph_buf = try alloc.alloc(u8, packet_size);
-    errdefer alloc.free(read_cyph_buf);
-
-    const write_cyph_buf = try alloc.alloc(u8, packet_size);
-    errdefer alloc.free(write_cyph_buf);
-
     if (secret.len != 32)
         return error.InvalidSecret;
+
     var stack_secret: [32]u8 = undefined;
     std.mem.copyForwards(u8, &stack_secret, secret);
 
@@ -88,8 +81,6 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *s
 
         .read_buf = read_buf,
         .write_buf = write_buf,
-        .read_cyph_buf = read_cyph_buf,
-        .write_cyph_buf = write_cyph_buf,
         .token = stack_secret,
     };
 }
@@ -97,90 +88,78 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, secret: []const u8, reader: *s
 pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
     alloc.free(self.read_buf);
     alloc.free(self.write_buf);
-    alloc.free(self.write_cyph_buf);
-    alloc.free(self.read_cyph_buf);
 }
 
 pub fn send(self: *@This(), msg: Message) !void {
     var ptr = self.write_buf;
     try zoto.serializeValue(&ptr, msg);
-    try self.write(self.write_buf[0 .. self.write_buf.len - ptr.len]);
+    try self.write(@intCast(self.write_buf.len - ptr.len));
 }
 pub fn recv_dupe(self: *@This(), alloc: std.mem.Allocator) !Message {
-    const data = try self.read(self.read_buf);
+    const len = try self.read();
 
-    if (data.len == 0)
+    if (len == 0)
         return error.EmptyMessage;
 
-    const owned = try alloc.dupe(u8, data);
+    const owned = try alloc.dupe(u8, self.read_buf[0..len]);
     var const_slice: []const u8 = owned;
     return zoto.deserializeValue(alloc, &const_slice, Message);
 }
 pub fn recv_ref(self: *@This(), alloc: ?std.mem.Allocator) !Message {
-    var data: []const u8 = try self.read(self.read_buf);
-
-    if (data.len == 0)
+    const len = try self.read();
+    if (len == 0)
         return error.EmptyMessage;
 
-    const ptr: *[]const u8 = &data;
+    var ptr: []const u8 = self.read_buf[0..len];
 
-    return zoto.deserializeValue(alloc, ptr, Message);
+    return zoto.deserializeValue(alloc, &ptr, Message);
 }
 
-pub fn write(self: *@This(), data: []const u8) !void {
-    if (data.len == 0)
+fn write(self: *@This(), len: u16) !void {
+    if (len == 0)
         return error.EmptyMessage;
-    if (data.len > packet_size)
+    if (len > packet_size)
         return error.MessageToLarge;
 
     const nonce = self.out_nonce.to_bytes();
     var tag: [16]u8 = undefined;
 
     XChaCha20Poly1305.encrypt(
-        self.write_cyph_buf[0..data.len],
+        self.write_buf[0..len],
         &tag,
-        data,
+        self.write_buf[0..len],
         &.{},
         nonce,
         self.token,
     );
-    var len: [2]u8 = undefined;
-    std.mem.writeInt(u16, &len, @as(u16, @intCast(data.len)), .little);
 
-    try self.writer.writeAll(&len);
-    try self.writer.writeAll(self.write_cyph_buf[0..data.len]);
+    try self.writer.writeInt(u16, len, .little);
+    try self.writer.writeAll(self.write_buf[0..len]);
     try self.writer.writeAll(&tag);
     try self.writer.flush();
 
     self.out_nonce.inc();
 }
-pub fn read(self: *@This(), buf: []u8) ![]u8 {
-    // if (buf.len < packet_size)
-    //     return error.BufferTooSmall;
-
+fn read(self: *@This()) !u16 {
     var tag: [16]u8 = undefined;
     var len: [2]u8 = undefined;
 
     try self.reader.readSliceAll(&len);
     const size = std.mem.readInt(u16, &len, .little);
 
-    if (size > buf.len or size > packet_size)
-        return error.FrameTooLarge;
+    const nonce = self.in_nonce.to_bytes();
+    self.in_nonce.inc();
 
-    try self.reader.readSliceAll(self.read_cyph_buf[0..size]);
-
+    try self.reader.readSliceAll(self.read_buf[0..size]);
     try self.reader.readSliceAll(&tag);
 
-    const nonce = self.in_nonce.to_bytes();
-
     try XChaCha20Poly1305.decrypt(
-        buf[0..size],
-        self.read_cyph_buf[0..size],
+        self.read_buf[0..size],
+        self.read_buf[0..size],
         tag,
         &.{},
         nonce,
         self.token,
     );
-    self.in_nonce.inc();
-    return buf[0..size];
+    return size;
 }
