@@ -10,29 +10,27 @@ const systemd = @import("../systemd.zig");
 
 const max_worker_mem = 1 << 20;
 
-alloc: std.heap.FixedBufferAllocator,
-permit: std.Io.Semaphore,
-running: bool,
+allocator: std.heap.FixedBufferAllocator,
+running: bool = false,
 daemon: *Daemon,
 
-pub fn init(alloc: std.mem.Allocator, io: std.Io, term: *Term) @This() {
+pub fn init(alloc: std.mem.Allocator, daemon: *Daemon) !@This() {
     return .{
-        .alloc = .init(try alloc.alloc(u8, max_worker_mem)),
-        .io = io,
-        .term = term,
+        .allocator = .init(try alloc.alloc(u8, max_worker_mem)),
+        .daemon = daemon,
     };
 }
 
-pub fn run(self: *@This(), req: *Server.Request, permits: *std.Io.Semaphore) void {
-    defer permits.post(self.daemon.io);
-    defer self.alloc.reset();
-    defer req.destroy(self.alloc, self.daemon.io);
+pub fn handle(self: *@This(), req: *Server.Request) !void {
+    const alloc = self.allocator.allocator();
+    defer self.allocator.reset();
+    defer req.destroy(alloc, self.daemon.io);
 
     const msg = req.conn.recv_ref(
         null,
     ) catch |err|
         return if (err == error.EndOfStream)
-            null
+            return error.EmptyRequest
         else
             err;
 
@@ -51,17 +49,19 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
     try self.daemon.term.printlnf("    artifact push: ", .{});
     const conn = &req.conn;
 
-    const artifact_id = switch (try conn.recv_dupe(self.alloc)) {
+    const alloc = self.allocator.allocator();
+
+    const artifact_id = switch (try conn.recv_dupe(alloc)) {
         .artifact_id => |art_id| art_id,
         else => return error.SyntaxEror,
     };
 
-    const artifact_dir_path = try std.fs.path.join(self.alloc, &.{
+    const artifact_dir_path = try std.fs.path.join(alloc, &.{
         "/var/lib/weft/artifacts",
         artifact_id.service.workspace,
         artifact_id.service.workspace,
         artifact_id.env,
-        artifact_id.deployment,
+        &artifact_id.deployment.to_string(),
         artifact_id.pipeline,
     });
 
@@ -86,8 +86,8 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
     defer temp_dir.close(self.daemon.io);
 
     {
-        var unpacker: *packer.Unpacker = try .init(self.alloc, temp_dir);
-        defer unpacker.destroy(self.alloc, self.daemon.io);
+        var unpacker: *packer.Unpacker = try .init(alloc, temp_dir);
+        defer unpacker.destroy(alloc, self.daemon.io);
 
         while (true) {
             const pack = try conn.recv_ref(null);
@@ -108,7 +108,7 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
         try temp_dir.realPathFileAlloc(
             self.daemon.io,
             ".",
-            self.alloc,
+            alloc,
         ),
         std.Io.Dir.cwd(),
         artifact_dir_path,
@@ -127,14 +127,14 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
 // - $OUT to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/out/{a}
 // - cwd to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/cwd
 
-pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *Server.Request) !void {
+pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     try self.daemon.term.printlnf("  task spawn", .{});
-    const alloc = arena.allocator();
+    const alloc = self.allocator.allocator();
 
     var msg_arena: std.heap.ArenaAllocator = .init(alloc);
     defer msg_arena.deinit();
 
-    const task = switch (try req.conn.recv_dupe(arena)) {
+    const task = switch (try req.conn.recv_dupe(alloc)) {
         .task_spec => |spec| spec,
         else => return error.SyntaxEror,
     };
@@ -149,7 +149,7 @@ pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *
             task.env,
             task.service,
             &deployment,
-            task.pipline,
+            task.pipline.name,
         },
     );
     const input_dir = try std.fs.path.join(
@@ -190,7 +190,7 @@ pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *
             task.service,
             task.env,
             &deployment,
-            task.pipline,
+            task.pipline.name,
         },
     );
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
@@ -203,7 +203,7 @@ pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *
 
     while (true)
         switch (try req.conn.recv_ref(null)) {
-            .data => |data| script_file.writeStreamingAll(self.daemon.io, data),
+            .data => |data| try script_file.writeStreamingAll(self.daemon.io, data),
             .end => break,
             else => return error.SyntaxError,
         };
@@ -224,7 +224,7 @@ pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *
         output_dirs[i] = path;
     }
 
-    try systemd.run(
+    var child = try systemd.run(
         alloc,
         self.daemon.io,
         unit_name,
@@ -233,10 +233,10 @@ pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *
             .raw = &.{},
             .unit = .{
                 .type = .exec,
-                .description = std.fmt.allocPrint(alloc, "Weft runner", .{}),
+                .description = try std.fmt.allocPrint(alloc, "Weft runner", .{}),
             },
             .fs = .{
-                .inaccessible = "/var/lib/weft",
+                .inaccessible = &.{"/var/lib/weft"},
                 .private_tmp = true,
                 .protect_system = .strict,
                 .read = input_dirs,
@@ -262,13 +262,14 @@ pub fn handle_task_spawn(self: *@This(), arena: *std.heap.ArenaAllocator, req: *
                 .cwd = run_dir_path,
                 .dynamic_user = false,
                 .env = &.{
-                    std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}),
-                    std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
+                    try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}),
+                    try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
                 },
             },
             .resources = .{},
         },
     );
+    _ = try child.wait(self.daemon.io);
 
     return;
 }

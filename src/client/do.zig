@@ -18,13 +18,14 @@ pub fn run(
     inst: ClientInstall,
     targets: []const Step,
 ) !void {
+    const env = "main";
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var alloc = arena.allocator();
     const owned_targets = try alloc.dupe(Step, targets);
 
     const config = try project.get_config(arena.allocator(), io);
-    var deployment = try Deployment.create(io, config, owned_targets);
+    var deployment = try Deployment.create(io, config, env, owned_targets);
     try deployment.save(alloc, io, project);
     try term.printlnf(
         "Created deploymeent {s}",

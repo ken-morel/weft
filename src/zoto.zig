@@ -146,7 +146,7 @@ pub const DeserializeError = std.mem.Allocator.Error || error{
     TypeMismatch,
 };
 
-pub fn deserializeValue(alloc: ?*std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
+pub fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
     const info = @typeInfo(T);
 
     switch (info) {

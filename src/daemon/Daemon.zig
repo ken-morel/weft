@@ -13,7 +13,6 @@ config: DaemonInstall.Config,
 term: *Term,
 
 pub fn deinit(self: *@This()) void {
-    self.arena.deinit();
     self.server.deinit(self.io);
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
@@ -41,23 +40,22 @@ pub fn run(self: *@This()) !void {
     defer group.cancel(self.io);
 
     const workers = try self.alloc.alloc(Worker, self.config.max_workers);
-    const permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
+    var permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
 
     for (workers) |*worker|
-        worker.* = .init(self.alloc, self.io, self.term);
+        worker.* = try .init(self.alloc, self);
 
     while (true) {
         try permits.wait(self.io);
 
-        var worker: *Worker = undefined; //BUG
-        for (workers) |*worker_ref|
-            if (!worker_ref.running) {
-                worker = worker_ref;
-            };
+        const worker: *Worker = worker: for (workers) |*w| {
+            if (!w.running)
+                break :worker w;
+        } else unreachable;
         worker.running = true;
 
         const req = req: while (true)
-            break :req self.server.accept(worker.alloc, self.io) catch |err| {
+            break :req self.server.accept(worker.allocator.allocator(), self.io) catch |err| {
                 if (err == error.Canceled)
                     return;
                 try self.term.err("accept error: {any}", .{err});
@@ -66,8 +64,16 @@ pub fn run(self: *@This()) !void {
         try self.term.printlnf("new connection", .{});
         group.async(
             self.io,
-            worker.run,
-            .{ worker, req, &permits },
+            struct {
+                fn do(do_worker: *Worker, do_permits: *std.Io.Semaphore, do_req: *Server.Request) void {
+                    defer do_permits.post(do_worker.daemon.io);
+                    defer worker.running = false;
+                    do_worker.handle(do_req) catch |err| {
+                        _ = do_worker.daemon.term.printlnf("Error: {any}", .{err}) catch return;
+                    };
+                }
+            }.do,
+            .{ worker, &permits, req },
         );
     }
 }

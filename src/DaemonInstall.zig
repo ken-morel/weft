@@ -48,7 +48,7 @@ pub fn init(io: std.Io) !@This() {
 }
 
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
-    const uuid = try (try UUIDv7.now(io)).to_string();
+    const uuid = (try UUIDv7.now(io)).to_string();
 
     self.temp_dir.createDirPath(io, sub) catch {};
     var sub_dir = try self.temp_dir.openDir(io, sub, .{});
@@ -128,6 +128,11 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
         var sysusers_file = try cwd.createFile(io, "/usr/lib/sysusers.d/weft.conf", .{});
         defer sysusers_file.close(io);
         try sysusers_file.writeStreamingAll(io, sysusers_config);
+        // var child_en = try std.process.spawn(io, .{
+        //     .argv = &.{ "systemctl", "enable", "--now", "weftd.service" },
+        // });
+        // _ = try child_en.wait(io);
+
         break :setup_sysusers;
     }
 }

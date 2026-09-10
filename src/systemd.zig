@@ -5,8 +5,8 @@ pub fn run(
     io: std.Io,
     unit: []const u8,
     opts: struct {
-        cmd: [][]const u8,
-        raw: [][]const u8 = &.{},
+        cmd: []const []const u8,
+        raw: []const []const u8 = &.{},
         unit: struct {
             description: ?[]const u8 = null,
             type: enum { simple, exec, oneshot, forking, notify, notify_reload, dbus, idle } = .simple,
@@ -20,17 +20,17 @@ pub fn run(
             collect: bool = false,
             remain_after_exit: bool = false,
             cwd: ?[]const u8 = null,
-            env: [][]const u8 = &.{},
+            env: []const []const u8 = &.{},
             wait: bool = false,
         } = .{},
         fs: struct {
             protect_home: enum { no, yes, tmpfs, read_only } = .no,
             protect_system: enum { no, yes, full, strict } = .no,
-            read: [][]const u8 = &.{},
+            read: []const []const u8 = &.{},
             write: [][]const u8 = &.{},
-            inaccessible: [][]const u8 = &.{},
+            inaccessible: []const []const u8 = &.{},
             private_tmp: bool = false,
-            tmpfs: [][]const u8 = &.{},
+            tmpfs: []const []const u8 = &.{},
             root_image: ?[]const u8 = null,
         } = .{},
         permissions: struct {
@@ -41,7 +41,7 @@ pub fn run(
             private_network: bool = false,
             capability_bounding_set: ?[]const u8 = null,
             private_devices: bool = false,
-            restrict_address_families: ?[][]const u8 = null,
+            restrict_address_families: ?[]const []const u8 = null,
         } = .{},
         resources: struct {
             memory_max: ?u64 = null,
@@ -220,7 +220,7 @@ pub fn run(
     return try std.process.spawn(io, .{
         .argv = argv,
         .stdin = .ignore,
-        .stdout = .pipe,
+        .stdout = .inherit,
         .stderr = .inherit,
     });
 }

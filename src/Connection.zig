@@ -117,12 +117,14 @@ pub fn recv_dupe(self: *@This(), alloc: std.mem.Allocator) !Message {
     return zoto.deserializeValue(alloc, &const_slice, Message);
 }
 pub fn recv_ref(self: *@This(), alloc: ?std.mem.Allocator) !Message {
-    const data = try self.read(self.read_buf);
+    var data: []const u8 = try self.read(self.read_buf);
 
     if (data.len == 0)
         return error.EmptyMessage;
 
-    return zoto.deserializeValue(alloc, &data, Message);
+    const ptr: *[]const u8 = &data;
+
+    return zoto.deserializeValue(alloc, ptr, Message);
 }
 
 pub fn write(self: *@This(), data: []const u8) !void {

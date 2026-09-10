@@ -8,6 +8,7 @@ const Weft = @import("Weft.zig");
 uuid: UUIDv7,
 
 service: Weft,
+env: []const u8,
 artifacts: []Artifact = &.{},
 running: []Step = &.{},
 targets: []Step = &.{},
@@ -95,7 +96,7 @@ pub fn completed(self: @This()) bool {
     return self.next_target() == null;
 }
 
-pub fn create(io: std.Io, service: Weft, targets: []Step) !@This() {
+pub fn create(io: std.Io, service: Weft, env: []const u8, targets: []Step) !@This() {
     const id = try UUIDv7.now(io);
     return .{
         .uuid = id,
@@ -103,6 +104,7 @@ pub fn create(io: std.Io, service: Weft, targets: []Step) !@This() {
         .artifacts = &.{},
         .running = &.{},
         .targets = targets,
+        .env = env,
     };
 }
 

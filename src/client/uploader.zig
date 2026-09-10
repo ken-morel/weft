@@ -37,7 +37,7 @@ pub fn cache_artifact(
                 break :artifact artifact;
         unreachable;
     };
-    const remote = (try inst.get_remote(&arena, io, source_artifact.step.remote)) orelse return error.InvalidRemote;
+    const remote = (try inst.get_remote(arena.allocator(), io, source_artifact.step.remote)) orelse return error.InvalidRemote;
     // get the artifact from the remote...
     try term.printlnf("Requested the artifact from remote {s}", .{remote.name});
 }
@@ -52,8 +52,6 @@ pub fn send_artifact(
     deployment: *const Deployment,
     remote: *const Remote,
 ) !void {
-    var msg_arena: std.heap.ArenaAllocator = .init(alloc);
-    defer msg_arena.deinit();
     const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.uuid, artifact_id.pipeline);
     defer alloc.free(artifact_dir_path);
 
@@ -64,13 +62,9 @@ pub fn send_artifact(
 
     try conn.send(.{ .request = .artifact_push });
     try conn.send(.{ .artifact_id = artifact_id });
-    {
-        defer _ = msg_arena.reset(.retain_capacity);
-        const reply = try conn.recv_dupe(&msg_arena);
-        switch (reply) {
-            .bool => |has_artifact| if (has_artifact) return,
-            else => return error.SyntaxError,
-        }
+    switch (try conn.recv_ref(null)) {
+        .bool => |has_artifact| if (has_artifact) return,
+        else => return error.SyntaxError,
     }
 
     try cache_artifact(
@@ -98,14 +92,10 @@ pub fn send_artifact(
     try client.upload_pack(io, packer);
     try conn.send(.{ .end = {} });
 
-    {
-        defer _ = msg_arena.reset(.retain_capacity);
-        const msg = try conn.recv_dupe(&msg_arena);
-        switch (msg) {
-            .ok => try term.printlnf("Upload okay", .{}),
-            .err => |err| return err,
-            else => return error.SyntaxError,
-        }
+    switch (try conn.recv_ref(null)) {
+        .ok => try term.printlnf("Upload okay", .{}),
+        .err => |err| return err,
+        else => return error.SyntaxError,
     }
 }
 
@@ -155,6 +145,7 @@ pub fn send_required_artifacts(
             .{ alloc, io, term, &inst, ids.ArtifactId{
                 .deployment = deployment.uuid,
                 .pipeline = input.name,
+                .env = deployment.env,
                 .service = .{
                     .name = deployment.service.name,
                     .workspace = deployment.service.workspace,

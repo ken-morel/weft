@@ -33,6 +33,7 @@ pub const Request = struct {
             &self.rw.@"0".interface,
             &self.rw.@"1".interface,
         );
+        return self;
     }
 
     pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
