@@ -28,7 +28,7 @@ pub fn handle(self: *@This(), req: *Server.Request) !void {
     const alloc = self.allocator.allocator();
     defer {
         self.allocator.reset();
-        std.os.linux.madvise(self.memory, self.memory.len, std.os.linux.MADV.DONTNEED);
+        _ = std.os.linux.madvise(self.memory.ptr, self.memory.len, std.os.linux.MADV.DONTNEED);
     }
     defer req.destroy(alloc, self.daemon.io);
 
