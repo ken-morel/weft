@@ -11,7 +11,7 @@ const runner = @import("runner.zig");
 const Walker = @import("../Walker.zig");
 
 pub fn create_src_artifact(alloc: std.mem.Allocator, io: std.Io, term: *Term, inst: ClientInstall, project: Project, deployment_id: UUIDv7) !void {
-    try term.printlnf("Snapshoting src artifact", .{});
+    try term.info("snapshotting src artifact", .{});
     const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment_id, "src");
     defer alloc.free(artifact_dir_path);
 
@@ -54,5 +54,5 @@ pub fn create_src_artifact(alloc: std.mem.Allocator, io: std.Io, term: *Term, in
         artifact_dir_path,
         io,
     );
-    try term.printlnf("Done", .{});
+    try term.success("src artifact stored at {s}", .{artifact_dir_path});
 }

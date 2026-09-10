@@ -34,19 +34,18 @@ pub fn handle(self: *@This(), req: *Server.Request) !void {
         else
             err;
 
-    try self.daemon.term.printlnf(":{any}", .{msg});
+    try self.daemon.term.debug("recv: {any}", .{msg});
 
     switch (msg) {
         .request => |r| switch (r) {
             .artifact_push => try self.handle_artifact_push(req),
             .task_spawn => try self.handle_task_spawn(req),
-            else => {},
+            else => try self.daemon.term.warn("unhandled request type: {any}", .{r}),
         },
         else => return error.InvalidRequest,
     }
 }
 fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
-    try self.daemon.term.printlnf("    artifact push: ", .{});
     const conn = &req.conn;
 
     const alloc = self.allocator.allocator();
@@ -55,6 +54,14 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
         .artifact_id => |art_id| art_id,
         else => return error.SyntaxEror,
     };
+
+    try self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
+        artifact_id.service.workspace,
+        artifact_id.service.workspace,
+        artifact_id.env,
+        &artifact_id.deployment.to_string(),
+        artifact_id.pipeline,
+    });
 
     const artifact_dir_path = try std.fs.path.join(alloc, &.{
         "/var/lib/weft/artifacts",
@@ -79,8 +86,10 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
     };
     try conn.send(.{ .bool = has_artifact });
 
-    if (has_artifact)
+    if (has_artifact) {
+        try self.daemon.term.info("artifact already present, skipping upload", .{});
         return;
+    }
 
     const temp_dir = try self.daemon.install.open_temp(self.daemon.io, "artifact");
     defer temp_dir.close(self.daemon.io);
@@ -115,10 +124,11 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
         self.daemon.io,
     );
     try conn.send(.ok);
+    try self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path});
 }
 
 // tasks
-// $IN ->  dir with / symlinks
+// $IN ->  dir with / symprintln
 
 // setup build env:
 // - setup input artifacts as readonly.
@@ -128,7 +138,6 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
 // - cwd to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/cwd
 
 pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
-    try self.daemon.term.printlnf("  task spawn", .{});
     const alloc = self.allocator.allocator();
 
     var msg_arena: std.heap.ArenaAllocator = .init(alloc);
@@ -138,6 +147,14 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
         .task_spec => |spec| spec,
         else => return error.SyntaxEror,
     };
+
+    try self.daemon.term.info("task spawn: {s}/{s}/{s}/{s}/{s}", .{
+        task.workspace,
+        task.env,
+        task.service,
+        &task.deployment.to_string(),
+        task.pipline.name,
+    });
 
     const deployment = task.deployment.to_string();
     const unit_name = try std.mem.join(
@@ -152,6 +169,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
             task.pipline.name,
         },
     );
+    try self.daemon.term.debug("unit name: {s}", .{unit_name});
     const input_dir = try std.fs.path.join(
         alloc,
         &.{
@@ -177,8 +195,11 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
             path,
             .{},
         ) catch |err|
-            if (err == error.FileNotFound)
+            if (err == error.FileNotFound) {
+                try self.daemon.term.err("missing input artifact: {s}", .{path});
                 return error.MissingInput;
+            };
+        try self.daemon.term.debug("input artifact: {s}", .{path});
         input_dirs[i] = path;
     }
 
@@ -194,6 +215,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
         },
     );
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
+    try self.daemon.term.debug("run dir: {s}", .{run_dir_path});
 
     const script_path = try std.fs.path.join(alloc, &.{ run_dir_path, "bin" });
     const script_file = try std.Io.Dir.cwd().createFile(self.daemon.io, script_path, .{
@@ -208,6 +230,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
             else => return error.SyntaxError,
         };
     script_file.close(self.daemon.io);
+    try self.daemon.term.debug("wrote script: {s}", .{script_path});
 
     const cwd_dir = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir);
@@ -224,6 +247,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
         output_dirs[i] = path;
     }
 
+    try self.daemon.term.info("starting systemd unit {s}", .{unit_name});
     var child = try systemd.run(
         alloc,
         self.daemon.io,
@@ -270,6 +294,8 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
         },
     );
     _ = try child.wait(self.daemon.io);
+
+    try self.daemon.term.success("task {s} started", .{task.pipline.name});
 
     return;
 }

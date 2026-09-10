@@ -16,7 +16,7 @@ pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
-    const config = try install.get_config(io, alloc);
+    const config = try install.get_config(io, alloc, term);
 
     const server = try Server.init(
         io,
@@ -34,13 +34,15 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
 }
 
 pub fn run(self: *@This()) !void {
-    try self.term.printlnf("Listening on TCP :{d} and Unix {s}", .{ self.config.port, Server.unix_socket_path });
+    try self.term.info("listening on TCP :{d} and Unix {s}", .{ self.config.port, Server.unix_socket_path });
+    try self.term.debug("max workers: {d}", .{self.config.max_workers});
 
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
     const workers = try self.alloc.alloc(Worker, self.config.max_workers);
     var permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
+    try self.term.debug("spawned {d} workers", .{workers.len});
 
     for (workers) |*worker|
         worker.* = try .init(self.alloc, self);
@@ -61,15 +63,15 @@ pub fn run(self: *@This()) !void {
                 try self.term.err("accept error: {any}", .{err});
                 continue :req;
             };
-        try self.term.printlnf("new connection", .{});
+        try self.term.info("new connection", .{});
         group.async(
             self.io,
             struct {
                 fn do(do_worker: *Worker, do_permits: *std.Io.Semaphore, do_req: *Server.Request) void {
                     defer do_permits.post(do_worker.daemon.io);
-                    defer worker.running = false;
+                    defer do_worker.running = false;
                     do_worker.handle(do_req) catch |err| {
-                        _ = do_worker.daemon.term.printlnf("Error: {any}", .{err}) catch return;
+                        do_worker.daemon.term.err("worker error: {any}", .{err}) catch return;
                     };
                 }
             }.do,

@@ -1,5 +1,6 @@
 const std = @import("std");
 const ClientInstall = @import("ClientInstall.zig");
+const Term = @import("Term.zig");
 
 const read_only_user_permissions = ClientInstall.read_only_user_permissions;
 const read_only_user_mode = ClientInstall.read_only_user_mode;
@@ -58,11 +59,12 @@ pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
     return try sub_dir.openDir(io, &uuid, .{});
 }
 
-pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
+pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, "/var/lib/weft/workspaces");
     try cwd.createDirPath(io, "/var/lib/weft/run");
     try cwd.createDirPath(io, "/var/lib/weft/artifacts");
+    try term.debug("created /var/lib/weft directory tree", .{});
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);
         defer alloc.free(exe_path);
@@ -75,6 +77,7 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
         }
         break :install_exe;
     }
+    try term.debug("installed binary to /usr/local/bin/weft", .{});
     write_config: {
         var config = Config{};
         try io.randomSecure(&config.secret);
@@ -92,14 +95,9 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
 
         try config_file.replace(io);
 
-        const hex_key = std.fmt.bytesToHex(config.secret, .upper);
-
-        var stdout = std.Io.File.stdout();
-        try stdout.writeStreamingAll(
-            io,
-            "\n=== Weft Daemon Installed Successfully ===\nsecret: ",
-        );
-        try stdout.writeStreamingAll(io, &hex_key);
+        try term.print("secret: ", .{});
+        try term.print("{s}", .{std.fmt.bytesToHex(config.secret, .upper)});
+        try term.flush();
 
         break :write_config;
     }
@@ -137,12 +135,13 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator) !void {
     }
 }
 
-pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator) !Config {
+pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*Term) !Config {
     _ = self;
     const cwd = std.Io.Dir.cwd();
 
     var file = cwd.openFile(io, "/etc/weft.zon", .{}) catch |err| {
-        std.debug.print("FATAL: Daemon configuration missing. Run 'weft install-daemon' first.\n", .{});
+        if (term) |t|
+            try t.err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
         return err;
     };
     defer file.close(io);
@@ -150,10 +149,8 @@ pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator) !Config {
     const stat = try file.stat(io);
 
     if ((stat.permissions.toMode() & 0o777) != read_only_user_mode) {
-        std.debug.print(
-            "FATAL: /etc/weft.zon has insecure permissions. Must be 0600.\n",
-            .{},
-        );
+        if (term) |t|
+            try t.err("/etc/weft.zon has insecure permissions, must be 0600", .{});
         return error.InsecurePermissions;
     }
     var buff: [4 << 10]u8 = undefined;

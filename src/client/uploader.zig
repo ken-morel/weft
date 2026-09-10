@@ -39,7 +39,7 @@ pub fn cache_artifact(
     };
     const remote = (try inst.get_remote(arena.allocator(), io, source_artifact.step.remote)) orelse return error.InvalidRemote;
     // get the artifact from the remote...
-    try term.printlnf("Requested the artifact from remote {s}", .{remote.name});
+    try term.info("requesting artifact '{s}' from remote {s}", .{ artifact_id.pipeline, remote.name });
 }
 
 pub fn send_artifact(
@@ -93,7 +93,7 @@ pub fn send_artifact(
     try conn.send(.{ .end = {} });
 
     switch (try conn.recv_ref(null)) {
-        .ok => try term.printlnf("Upload okay", .{}),
+        .ok => try term.success("artifact '{s}' uploaded to {s}", .{ artifact_id.pipeline, remote.name }),
         .err => |err| return err,
         else => return error.SyntaxError,
     }
@@ -110,7 +110,7 @@ pub fn send_artifact_concurrent(
     remote: *const Remote,
     failed: *?u16,
 ) error{Canceled}!void {
-    term.printlnf("Sending artifact {s} to remote {s}", .{ artifact_id.pipeline, remote.name }) catch {};
+    term.info("sending artifact {s} to remote {s}", .{ artifact_id.pipeline, remote.name }) catch {};
     send_artifact(
         alloc,
         io,
@@ -121,7 +121,7 @@ pub fn send_artifact_concurrent(
         deployment,
         remote,
     ) catch |err| {
-        term.err("Error sending artifact: {any}", .{err}) catch {};
+        term.err("error sending artifact '{s}': {any}", .{ artifact_id.pipeline, err }) catch {};
         failed.* = @intFromError(err);
     };
 }

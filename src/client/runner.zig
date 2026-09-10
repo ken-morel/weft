@@ -33,7 +33,6 @@ pub fn run_deployment(
         // wait for event
     }
 }
-
 pub fn spawn_step(
     alloc: std.mem.Allocator,
     io: std.Io,
@@ -43,14 +42,21 @@ pub fn spawn_step(
     deployment: *Deployment,
     step: Deployment.Step,
 ) !void {
-    try term.printlnf("spawning deployment step: {s} on {s}", .{ step.pipeline, step.remote });
+    try term.info("spawning deployment step: {s} on {s}", .{ step.pipeline, step.remote });
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
     const remote = (try inst.get_remote(arena.allocator(), io, step.remote)) orelse {
-        try term.err("Invalid remote: {s}", .{step.remote});
+        try term.err("invalid remote: {s}", .{step.remote});
         return error.InvalidRemote;
     };
-    const pipeline = deployment.service.get_pipeline(step.pipeline) orelse return error.InvalidPipeline;
+    const pipeline = deployment.service.get_pipeline(step.pipeline) orelse {
+        try term.err("invalid pipeline: {s}", .{step.pipeline});
+        return error.InvalidPipeline;
+    };
 
     try uploader.send_required_artifacts(alloc, io, term, inst, project, deployment.*, pipeline.*, remote);
+
+    deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);
+    const item = &deployment.running[deployment.running.len - 1];
+    item.* = step;
 }
