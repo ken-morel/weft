@@ -8,22 +8,28 @@ const packer = @import("../packer.zig");
 const Daemon = @import("Daemon.zig");
 const systemd = @import("../systemd.zig");
 
-const max_worker_mem = 1 << 20;
+const max_worker_mem = 256 << 10;
 
+memory: []u8,
 allocator: std.heap.FixedBufferAllocator,
 running: bool = false,
 daemon: *Daemon,
 
 pub fn init(alloc: std.mem.Allocator, daemon: *Daemon) !@This() {
+    const memory = try alloc.alloc(u8, max_worker_mem);
     return .{
-        .allocator = .init(try alloc.alloc(u8, max_worker_mem)),
+        .memory = memory,
+        .allocator = .init(memory),
         .daemon = daemon,
     };
 }
 
 pub fn handle(self: *@This(), req: *Server.Request) !void {
     const alloc = self.allocator.allocator();
-    defer self.allocator.reset();
+    defer {
+        self.allocator.reset();
+        std.os.linux.madvise(self.memory, self.memory.len, std.os.linux.MADV.DONTNEED);
+    }
     defer req.destroy(alloc, self.daemon.io);
 
     const msg = req.conn.recv_ref(
@@ -218,7 +224,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     const cwd_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir_path);
 
-    const script_path = try std.fs.path.join(alloc, &.{ cwd_dir_path, "bin" });
+    const script_path = try std.fs.path.join(alloc, &.{ run_dir_path, "bin" });
     const script_file = try std.Io.Dir.cwd().createFile(self.daemon.io, script_path, .{
         .permissions = .executable_file,
     });
@@ -253,14 +259,14 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
         self.daemon.io,
         unit_name,
         .{
-            .cmd = &.{ "sh", "-c", "echo 'hello world, I am running'; ls; ./run" },
+            .cmd = &.{script_path},
             .raw = &.{},
             .unit = .{
                 .type = .exec,
                 .description = try std.fmt.allocPrint(alloc, "Weft runner", .{}),
             },
             .fs = .{
-                .inaccessible = &.{"/var/lib/weft"},
+                .inaccessible = &.{},
                 .private_tmp = true,
                 .protect_system = .strict,
                 .read = input_dirs,
@@ -283,7 +289,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
                 .group = null,
                 .wait = false,
                 .collect = true,
-                .cwd = run_dir_path,
+                .cwd = cwd_dir_path,
                 .dynamic_user = false,
                 .env = &.{
                     try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}),
@@ -296,6 +302,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     _ = try child.wait(self.daemon.io);
 
     try self.daemon.term.success("task {s} started", .{task.pipline.name});
+    try req.conn.send(.ok);
 
     return;
 }

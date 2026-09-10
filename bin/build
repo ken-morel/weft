@@ -1,4 +1,5 @@
 #!/usr/bin/sh
 
-touch hello-world
+cp -r $IN/src/* .
 
+zig build

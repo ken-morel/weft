@@ -1,0 +1,20 @@
+install
++- install weft
+   +- compile exe weft Debug native 1 errors
+src/daemon/Worker.zig:299:24: error: type 'Connection.Message' does not support array initialization syntax
+    try req.conn.send(.{.ok});
+                      ~^~~~~
+referenced by:
+    handle: src/daemon/Worker.zig:42:54
+    do: src/daemon/Daemon.zig:73:37
+    9 reference(s) hidden; use '-freference-trace=11' to see all references
+error: 1 compilation errors
+failed command: /usr/bin/zig build-exe -ODebug -Mroot=/home/engon/weft/src/main.zig --cache-dir .zig-cache --global-cache-dir /home/engon/.cache/zig --name weft --zig-lib-dir /usr/lib/zig/ --listen=-
+
+Build Summary: 0/3 steps succeeded (1 failed)
+install transitive failure
++- install weft transitive failure
+   +- compile exe weft Debug native 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/7ab9e91cdd7a67eb7539a5efaf0e5892/build /usr/bin/zig /usr/lib/zig /home/engon/weft .zig-cache /home/engon/.cache/zig --seed 0xb47c795f -Zc5f4791dfce5519f

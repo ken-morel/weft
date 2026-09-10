@@ -29,9 +29,9 @@ pub fn run_deployment(
             );
 
         break;
-
         // wait for event
     }
+    try term.success("Deployment completed", .{});
 }
 pub fn spawn_step(
     alloc: std.mem.Allocator,
@@ -102,5 +102,5 @@ pub fn spawn_step(
     deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);
     const item = &deployment.running[deployment.running.len - 1];
     item.* = step;
-    try term.err("Spawned task succesfully", .{});
+    try term.success("Spawned task succesfully", .{});
 }
