@@ -50,7 +50,7 @@ rw_io: struct { std.Io.File, std.Io.File },
 rw_file: struct { std.Io.File.Reader, std.Io.File.Writer },
 rw_buf: struct { []u8, []u8 },
 
-log_level: Level = .info,
+log_level: Level = .debug,
 timestamps: bool = true,
 io: std.Io,
 color: bool,

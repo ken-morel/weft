@@ -32,7 +32,8 @@ const service_template =
     \\WantedBy=multi-user.target
 ;
 
-//  /usr/lib/sysusers.d/weft.conf
+//
+const sysusers_config_path = "/usr/lib/sysusers.d/weft.conf";
 const sysusers_config =
     \\ u weft-runner - "Weft pipeline runner" /var/lib/weft /usr/bin/nologin
 ;
@@ -123,13 +124,14 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
         break :setup_service;
     }
     setup_sysusers: {
-        var sysusers_file = try cwd.createFile(io, "/usr/lib/sysusers.d/weft.conf", .{});
+        var sysusers_file = try cwd.createFile(io, sysusers_config_path, .{});
         defer sysusers_file.close(io);
         try sysusers_file.writeStreamingAll(io, sysusers_config);
-        // var child_en = try std.process.spawn(io, .{
-        //     .argv = &.{ "systemctl", "enable", "--now", "weftd.service" },
-        // });
-        // _ = try child_en.wait(io);
+
+        var child_en = try std.process.spawn(io, .{
+            .argv = &.{ "systemd-sysusers", sysusers_config_path },
+        });
+        _ = try child_en.wait(io);
 
         break :setup_sysusers;
     }

@@ -140,9 +140,6 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
 pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     const alloc = self.allocator.allocator();
 
-    var msg_arena: std.heap.ArenaAllocator = .init(alloc);
-    defer msg_arena.deinit();
-
     const task = switch (try req.conn.recv_dupe(alloc)) {
         .task_spec => |spec| spec,
         else => return error.SyntaxEror,
@@ -214,10 +211,14 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
             task.pipline.name,
         },
     );
+
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
     try self.daemon.term.debug("run dir: {s}", .{run_dir_path});
 
-    const script_path = try std.fs.path.join(alloc, &.{ run_dir_path, "bin" });
+    const cwd_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
+    try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir_path);
+
+    const script_path = try std.fs.path.join(alloc, &.{ cwd_dir_path, "bin" });
     const script_file = try std.Io.Dir.cwd().createFile(self.daemon.io, script_path, .{
         .permissions = .executable_file,
     });
@@ -232,28 +233,27 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     script_file.close(self.daemon.io);
     try self.daemon.term.debug("wrote script: {s}", .{script_path});
 
-    const cwd_dir = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
-    try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir);
-
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
-    var output_dirs = try alloc.alloc([]const u8, task.pipline.outputs.len);
+    var write_dirs = try alloc.alloc([]const u8, task.pipline.outputs.len + 1);
     for (task.pipline.outputs, 0..) |output, i| {
         const path = try std.fs.path.join(alloc, &.{
             output_dir_path,
             output.name,
         });
         try std.Io.Dir.cwd().createDirPath(self.daemon.io, path);
-        output_dirs[i] = path;
+        write_dirs[i] = path;
     }
+    write_dirs[write_dirs.len - 1] = cwd_dir_path;
 
     try self.daemon.term.info("starting systemd unit {s}", .{unit_name});
+
     var child = try systemd.run(
         alloc,
         self.daemon.io,
         unit_name,
         .{
-            .cmd = &.{script_path},
+            .cmd = &.{ "sh", "-c", "echo 'hello world, I am running'; ls; ./run" },
             .raw = &.{},
             .unit = .{
                 .type = .exec,
@@ -264,9 +264,9 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
                 .private_tmp = true,
                 .protect_system = .strict,
                 .read = input_dirs,
+                .write = write_dirs,
                 .root_image = null,
                 .tmpfs = &.{},
-                .write = output_dirs,
             },
             .permissions = .{
                 .capability_bounding_set = &.{},

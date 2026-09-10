@@ -1,4 +1,4 @@
-const Connection = @import("Connection.zig");
+pub const Connection = @import("Connection.zig");
 const Server = @import("Server.zig");
 const std = @import("std");
 

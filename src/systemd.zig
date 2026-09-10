@@ -217,6 +217,10 @@ pub fn run(
 
     const argv = try cmd.toOwnedSlice(alloc);
 
+    const all = try std.mem.join(alloc, " ", argv);
+    defer alloc.free(all);
+    std.debug.print("Spawnig:  {s}", .{all});
+
     return try std.process.spawn(io, .{
         .argv = argv,
         .stdin = .ignore,

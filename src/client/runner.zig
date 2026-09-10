@@ -56,7 +56,51 @@ pub fn spawn_step(
 
     try uploader.send_required_artifacts(alloc, io, term, inst, project, deployment.*, pipeline.*, remote);
 
+    const client = try Client.connect(alloc, io, remote);
+    defer client.destroy(alloc, io);
+
+    try client.conn.send(.{ .request = .task_spawn });
+
+    try client.conn.send(.{
+        .task_spec = .{
+            .deployment = deployment.uuid,
+            .env = deployment.env,
+            .pipline = pipeline.*,
+            .service = deployment.service.name,
+            .workspace = deployment.service.workspace,
+        },
+    });
+    const script_path = try std.fs.path.join(alloc, &.{
+        "bin",
+        pipeline.script,
+    });
+    defer alloc.free(script_path);
+
+    const script = try project.dir.openFile(io, script_path, .{});
+
+    var buffer = try alloc.alloc(u8, Client.Connection.packet_size - 10);
+
+    while (true) {
+        const size = script.readStreaming(io, &.{buffer}) catch |err|
+            if (err == error.EndOfStream)
+                break
+            else
+                return err;
+        try client.conn.send(.{ .data = buffer[0..size] });
+    }
+    try client.conn.send(.end);
+
+    switch (try client.conn.recv_ref(null)) {
+        .ok => {},
+        .err => |err| {
+            try term.err("Remote error: {any}", .{err});
+            return err;
+        },
+        else => return error.SyntaxError,
+    }
+
     deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);
     const item = &deployment.running[deployment.running.len - 1];
     item.* = step;
+    try term.err("Spawned task succesfully", .{});
 }

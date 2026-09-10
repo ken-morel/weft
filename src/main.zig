@@ -30,8 +30,6 @@ fn show_usage(term: *Term) void {
     term.print(usage_text, .{}) catch {};
 }
 
-/// Consume leading global options, updating `term`. Returns the index of
-/// the first non-option argument.
 fn parse_options(args: []const []const u8, term: *Term) usize {
     var idx: usize = 1;
     while (idx < args.len) : (idx += 1) {
