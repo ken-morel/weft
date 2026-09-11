@@ -24,6 +24,10 @@ pub fn random(io: std.Io) !@This() {
 pub fn inc(self: *@This()) void {
     self.counter += 1;
 }
+pub fn dec(self: *@This()) void {
+    self.counter -= 1;
+}
+
 pub fn write(self: @This(), out: *std.Io.Writer) !void {
     try out.writeInt(u128, self.base, .little);
     try out.writeInt(u64, self.counter, .little);
