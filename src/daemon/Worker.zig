@@ -13,8 +13,6 @@ const paths = @import("paths.zig");
 const proto = @import("../proto.zig");
 const Pressor = @import("../Pressor.zig");
 
-const max_worker_mem = 256 << 10;
-
 const stream_buffer_size = 4 << 10;
 
 allocator: std.heap.FixedBufferAllocator,
@@ -23,18 +21,19 @@ daemon: *Daemon,
 
 pub fn init(memory: []u8, daemon: *Daemon) !@This() {
     return .{
-        .mem = .init(memory),
+        .allocator = .init(memory),
         .daemon = daemon,
     };
 }
 
-pub fn run(self: *@This(), permits: *std.Io.Semaphore, stream: std.stream) void {
+pub fn run(self: *@This(), permits: *std.Io.Semaphore, stream: std.Io.net.Stream) void {
     self._run(stream) catch |err|
         self.daemon.term.err("worker error: {any}", .{err}) catch {};
 
+    stream.close(self.daemon.io);
     self.running = false;
     permits.post(self.daemon.io);
-    _ = std.os.linux.madvise(self.memory.ptr, self.memory.len, std.os.linux.MADV.DONTNEED);
+    _ = std.os.linux.madvise(self.allocator.buffer, self.allocator.buffer.len, std.os.linux.MADV.DONTNEED);
 }
 
 fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
@@ -47,10 +46,13 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     const conn: Connection = .init(io, &self.daemon.config.secret, &reader, &writer);
 
     const request = request: {
-        const req_buffer = try alloc.alloc(u8, Connection.max_packet_size);
-        var data = try conn.recv(req_buffer);
-        alloc.resize(req_buffer, data.len);
-        break :request zoto.deserializeValue(null, &data, Server.Request) catch |err|
+        const req_buffer: [16]u8 = undefined;
+        var data = conn.recv(std.heap.FixedBufferAllocator.init(&req_buffer)) catch |err|
+            return if (err == error.BufferTooSmall)
+                error.InvalidRequest
+            else
+                err;
+        break :request zoto.deserializeValue(null, &data, proto.Request) catch |err|
             return if (err == error.EndOfStream)
                 return error.EmptyRequest
             else
@@ -59,15 +61,20 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     try self.daemon.term.info("Request: {any}", request);
 
     switch (request) {
-        .artifact_push => |req| try self.handle_artifact_push(req, &conn),
-        .task_spawn => |req| try self.handle_task_spawn(req, &conn),
+        .artifact_push => try self.handle_artifact_push(&conn),
+        .task_spawn => try self.handle_task_spawn(&conn),
         else => return error.NotImplemented,
     }
 }
 
-fn handle_artifact_push(self: *@This(), id: Task.Id, conn: *Connection) !void {
+fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
     const alloc = self.allocator.allocator();
     const io = self.daemon.io;
+
+    const msg = try conn.recv(alloc);
+    var _msg_ptr = msg;
+
+    const id = try zoto.deserializeValue(null, &_msg_ptr, proto.artifact.push.Req);
 
     try self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
         id.workspace,
@@ -114,11 +121,9 @@ fn handle_artifact_push(self: *@This(), id: Task.Id, conn: *Connection) !void {
         const flated = try alloc.alloc(u8, Pressor.max_uncompressed_size);
         defer alloc.free(flated);
 
-        const recv_buffer = try alloc.alloc(u8, Connection.max_packet_size);
-        defer alloc.free(recv_buffer);
-
         while (true) {
-            const raw = try conn.recv(recv_buffer);
+            const raw = try conn.recv(alloc);
+            defer alloc.free(raw);
             const data = raw[1..];
             switch (raw[0]) {
                 proto.artifact.push.folder => {
@@ -170,55 +175,56 @@ fn handle_artifact_push(self: *@This(), id: Task.Id, conn: *Connection) !void {
 // - $OUT to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/out/{a}
 // - cwd to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/cwd
 
-pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
+fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
     const alloc = self.allocator.allocator();
+    const io = self.daemon.io;
+    const term = self.daemon.term;
 
-    const task = switch (try req.conn.recv_dupe(alloc)) {
-        .task_spec => |spec| spec,
-        else => return error.SyntaxEror,
-    };
+    const msg = try conn.recv(alloc);
+    var _msg_ptr = msg;
 
-    try self.daemon.term.info("task spawn: {s}/{s}/{s}/{s}/{s}", .{
-        task.workspace,
-        task.env,
-        task.service,
-        &task.deployment.to_string(),
-        task.pipline.name,
+    const req = try zoto.deserializeValue(null, &_msg_ptr, proto.task.spawn.Req);
+
+    const deployment = req.task.deployment.to_string();
+
+    try term.info("task spawn: {s}/{s}/{s}/{s}/{s}", .{
+        req.task.workspace,
+        req.task.env,
+        req.task.service,
+        &deployment,
+        req.task.pipeline,
     });
 
-    const deployment = task.deployment.to_string();
-    const unit_name = try std.mem.join(
+    const unit_name = paths.unit_name(
         alloc,
-        "--",
-        &.{
-            "weft-runner",
-            task.workspace,
-            task.env,
-            task.service,
-            &deployment,
-            task.pipline.name,
-        },
+        req.task.workspace,
+        req.task.env,
+        req.task.service,
+        &deployment,
+        req.task.pipeline,
     );
-    try self.daemon.term.debug("unit name: {s}", .{unit_name});
-    const input_dir = try std.fs.path.join(
+    try term.debug("unit name: {s}", .{unit_name});
+
+    const input_dir = try paths.artifacts(
         alloc,
-        &.{
-            "/var/lib/weft/artifacts/",
-            task.workspace,
-            task.service,
-            task.env,
-            &deployment,
-        },
+        req.task.workspace,
+        req.task.service,
+        req.task.env,
+        &deployment,
     );
 
     var input_dirs = try alloc.alloc(
         []const u8,
-        task.pipline.inputs.len,
+        req.task.pipeline.inputs.len,
     );
-    for (task.pipline.inputs, 0..) |input, i| {
-        const path = try std.fs.path.join(
+    for (req.pipeline.inputs, 0..) |input, i| {
+        const path = try paths.artifact(
             alloc,
-            &.{ input_dir, input.name },
+            req.task.workspace,
+            req.task.service,
+            req.task.env,
+            &deployment,
+            input.name,
         );
         std.Io.Dir.cwd().access(
             self.daemon.io,
@@ -226,27 +232,24 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
             .{},
         ) catch |err|
             if (err == error.FileNotFound) {
-                try self.daemon.term.err("missing input artifact: {s}", .{path});
-                return error.MissingInput;
+                try term.err("missing input artifact: {s}", .{path});
+                return error.MissingInputArtifact;
             };
-        try self.daemon.term.debug("input artifact: {s}", .{path});
+        try term.debug("input artifact: {s}", .{path});
         input_dirs[i] = path;
     }
 
-    const run_dir_path = try std.fs.path.join(
+    const run_dir_path = try paths.run(
         alloc,
-        &.{
-            "/var/lib/weft/run",
-            task.workspace,
-            task.service,
-            task.env,
-            &deployment,
-            task.pipline.name,
-        },
+        req.task.workspace,
+        req.task.service,
+        req.task.env,
+        &deployment,
+        req.task.pipeline.name,
     );
 
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
-    try self.daemon.term.debug("run dir: {s}", .{run_dir_path});
+    try term.debug("run dir: {s}", .{run_dir_path});
 
     const cwd_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir_path);
@@ -255,35 +258,39 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     const script_file = try std.Io.Dir.cwd().createFile(self.daemon.io, script_path, .{
         .permissions = .executable_file,
     });
-    errdefer script_file.close(self.daemon.io);
+    errdefer script_file.close(io);
 
-    while (true)
-        switch (try req.conn.recv_ref(null)) {
-            .raw => |data| try script_file.writeStreamingAll(self.daemon.io, data),
-            .end => break,
-            else => return error.SyntaxError,
-        };
-    script_file.close(self.daemon.io);
-    try self.daemon.term.debug("wrote script: {s}", .{script_path});
+    while (true) {
+        const data = try conn.recv(alloc);
+        switch (data[0]) {
+            proto.task.spawn.data => {
+                try script_file.writeStreamingAll(io, data[1..]);
+            },
+            proto.task.spawn.end => break,
+            else => return error.InvalidPack,
+        }
+    }
+    script_file.close(io);
+    try term.debug("wrote script: {s}", .{script_path});
 
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
-    var write_dirs = try alloc.alloc([]const u8, task.pipline.outputs.len + 1);
-    for (task.pipline.outputs, 0..) |output, i| {
+    var write_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.task.pipeline.outputs.len + 1);
+    for (req.task.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
             output_dir_path,
             output.name,
         });
         try std.Io.Dir.cwd().createDirPath(self.daemon.io, path);
-        write_dirs[i] = path;
+        write_dirs.append(path);
     }
-    write_dirs[write_dirs.len - 1] = cwd_dir_path;
+    write_dirs.append(cwd_dir_path);
 
-    try self.daemon.term.info("starting systemd unit {s}", .{unit_name});
+    try term.info("starting systemd unit {s}", .{unit_name});
 
     var child = try systemd.run(
         alloc,
-        self.daemon.io,
+        io,
         unit_name,
         .{
             .cmd = &.{script_path},
@@ -328,7 +335,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     );
     _ = try child.wait(self.daemon.io);
 
-    try self.daemon.term.success("task {s} started", .{task.pipline.name});
+    try term.success("task {s} started", .{req.task.pipeline.name});
     try req.conn.send_bytes(.ok);
 
     return;

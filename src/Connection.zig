@@ -41,7 +41,7 @@ pub fn send(self: *@This(), buffer: []u8) !void {
     try self.writer.flush();
 }
 
-pub fn recv(self: *@This(), buffer: []u8) ![]u8 {
+pub fn recv(self: *@This(), alloc: std.mem.Allocator) ![]u8 {
     var tag: [16]u8 = undefined;
     var len: [2]u8 = undefined;
 
@@ -49,12 +49,11 @@ pub fn recv(self: *@This(), buffer: []u8) ![]u8 {
 
     const size = std.mem.readInt(u16, &len, .little);
 
-    if (size > buffer.len)
-        return error.BufferTooSmall;
+    const data = try alloc.alloc(u8, size);
 
-    try self.reader.readSliceAll(buffer[0..size]);
+    try self.reader.readSliceAll(data);
     try self.reader.readSliceAll(&tag);
-    try self.read_crypt.decrypt(&tag, buffer[0..size]);
+    try self.read_crypt.decrypt(&tag, data[0..size]);
 
-    return buffer[0..size];
+    return data;
 }

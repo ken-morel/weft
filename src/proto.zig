@@ -30,6 +30,8 @@ pub const task = struct {
     };
 
     pub const spawn = struct {
+        pub const data: u8 = 0xba;
+        pub const end: u8 = 0xbb;
         pub const Req = struct {
             task: task.Id,
             pipeline: Weft.Pipeline,
