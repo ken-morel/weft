@@ -1,74 +1,44 @@
 const std = @import("std");
-const flate = std.compress.flate;
-
-const window_size = 64 << 10;
-const max_compressed_size = std.math.maxInt(u16) - 20;
-// Strip possible deflate overhead (above 0.03%)
-const max_uncompressed_size = max_compressed_size - (max_compressed_size / 1000);
 
 pub const Packer = struct {
-    input: []u8,
-    output: []u8,
-    buffer: []u8,
     root: std.Io.Dir,
     walker: std.Io.Dir.Walker,
     handle: ?std.Io.File = null,
 
-    pub fn create(alloc: std.mem.Allocator, dir: std.Io.Dir) !*@This() {
+    pub fn init(alloc: std.mem.Allocator, dir: std.Io.Dir) !@This() {
         const self = try alloc.create(@This());
-        self.output = try alloc.alloc(u8, max_compressed_size);
-        self.input = try alloc.alloc(u8, max_uncompressed_size);
-        self.buffer = try alloc.alloc(u8, window_size);
         self.root = dir;
         self.walker = try dir.walk(alloc);
         self.handle = null;
-        return self;
+        return .{
+            .root = dir,
+            .walker = try dir.walk(alloc),
+        };
     }
 
-    pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
-        alloc.free(self.input);
-        alloc.free(self.output);
-        alloc.free(self.buffer);
+    pub fn deinit(self: @This(), io: std.Io) void {
         self.root.close(io);
         self.walker.deinit();
         if (self.handle) |file|
             file.close(io);
-
-        alloc.destroy(self);
     }
 
-    pub fn next(self: *@This(), io: std.Io) !?union(enum) { file: []const u8, folder: []const u8, data: []const u8 } {
+    pub fn next(self: *@This(), io: std.Io, buffer: []u8) !?union(enum) { file: []const u8, folder: []const u8, data: []const u8 } {
         next: while (true) {
             if (self.handle) |file_handle| {
-                const bytes_read = bytes_read: {
-                    const read = file_handle.readStreaming(
-                        io,
-                        &.{self.input},
-                    ) catch |err|
-                        if (err == error.EndOfStream)
-                            0
-                        else
-                            return err;
-                    if (read > 0)
-                        break :bytes_read read;
-                    file_handle.close(io);
-                    self.handle = null;
-                    continue :next;
-                };
-
-                var writer: std.Io.Writer = .fixed(self.output);
-
-                var compressor = try flate.Compress.init(
-                    &writer,
-                    self.buffer,
-                    .zlib,
-                    flate.Compress.Options.level_5,
-                );
-
-                try compressor.writer.writeAll(self.input[0..bytes_read]);
-                try compressor.finish();
-
-                return .{ .data = writer.buffered() };
+                const read = file_handle.readStreaming(
+                    io,
+                    &.{buffer},
+                ) catch |err|
+                    if (err == error.EndOfStream)
+                        0
+                    else
+                        return err;
+                if (read > 0)
+                    return .{ .data = read };
+                file_handle.close(io);
+                self.handle = null;
+                continue :next;
             } else {
                 const entry = try self.walker.next(io) orelse return null;
 
@@ -86,30 +56,19 @@ pub const Packer = struct {
 };
 
 pub const Unpacker = struct {
-    input: []u8,
-    output: []u8,
-    buffer: []u8,
     root: std.Io.Dir,
+    handle: ?std.Io.File = null,
 
-    handle: ?std.Io.File,
-
-    pub fn init(alloc: std.mem.Allocator, dir: std.Io.Dir) !*@This() {
-        const self = try alloc.create(@This());
-        self.output = try alloc.alloc(u8, max_uncompressed_size);
-        self.input = try alloc.alloc(u8, max_compressed_size);
-        self.buffer = try alloc.alloc(u8, window_size);
-        self.root = dir;
-        self.handle = null;
-        return self;
+    pub fn init(dir: std.Io.Dir) !@This() {
+        return .{
+            .root = dir,
+        };
     }
 
-    pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
-        alloc.free(self.input);
-        alloc.free(self.output);
-        alloc.free(self.buffer);
+    pub fn deinit(self: *@This(), io: std.Io) void {
         if (self.handle) |f|
             f.close(io);
-        alloc.destroy(self);
+        self.root.close(io);
     }
 
     pub fn folder(self: *@This(), io: std.Io, path: []const u8) !void {
@@ -124,21 +83,9 @@ pub const Unpacker = struct {
         self.handle = try self.root.createFile(io, path, .{ .truncate = true });
     }
 
-    pub fn chunk(self: *@This(), io: std.Io, compressed_bytes: []const u8) !void {
+    pub fn chunk(self: *@This(), io: std.Io, bytes: []const u8) !void {
         const file_handle = self.handle orelse return error.FileNotOpened;
 
-        var reader: std.Io.Reader = .fixed(compressed_bytes);
-
-        var decompressor: flate.Decompress = .init(
-            &reader,
-            .zlib,
-            self.buffer,
-        );
-
-        while (true) {
-            const bytes_decompressed = try decompressor.reader.readSliceShort(self.output);
-            if (bytes_decompressed == 0) break;
-            try file_handle.writeStreamingAll(io, self.output[0..bytes_decompressed]);
-        }
+        try file_handle.writeStreamingAll(io, bytes);
     }
 };
