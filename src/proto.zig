@@ -1,17 +1,27 @@
-const Task = @import("Task.zig");
 const Weft = @import("Weft.zig");
 const UUIDv7 = @import("UUIDv7.zig");
 
-const artifact = struct {
-    const Push = struct {
-        task: Task.Id,
+pub const artifact = struct {
+    pub const push = struct {
+        const folder: u8 = 0xaa;
+        const file: u8 = 0xbb;
+        const raw: u8 = 0xcc;
+        const compressed: u8 = 0xdd;
+        const end: u8 = 0xee;
+
+        pub const Req = struct {
+            task: task.Id,
+        };
+        pub const Res = struct {};
     };
-    const Pull = struct {
-        task: Task.Id,
+    pub const pull = struct {
+        pub const Req = struct {
+            task: task.Id,
+        };
     };
 };
-const task = struct {
-    const Id = struct {
+pub const task = struct {
+    pub const Id = struct {
         workspace: []const u8,
         service: []const u8,
         env: []const u8,
@@ -19,24 +29,37 @@ const task = struct {
         pipeline: []const u8,
     };
 
-    const Spawn = struct {
-        task: Task.Id,
-        pipeline: Weft.Pipeline,
+    pub const spawn = struct {
+        pub const Req = struct {
+            task: task.Id,
+            pipeline: Weft.Pipeline,
+        };
     };
-    const Kill = struct {
-        Task.Id,
+    pub const kill = struct {
+        pub const Req = struct {
+            task: task.Id,
+        };
+    };
+    pub const status = struct {
+        pub const Req = struct {
+            task: task.Id,
+        };
+    };
+    pub const logs = struct {
+        pub const Req = struct {
+            task: task.Id,
+            stream: bool,
+        };
     };
 };
 
-pub const Request = union(enum(u8)) {
-    artifact_push: artifact.Push,
-    artifact_pull: artifact.Pull,
+pub const Request = enum(u8) {
+    artifact_push,
+    artifact_pull,
 
-    task_spawn: TaskSpawn,
-    task_abort: Task.Id,
-    task_status: Task.Id,
+    task_spawn,
+    task_kill,
+    task_status,
 
-    task_logs_snapshot: Task.Id,
-
-    task_logs_stream: Task.Id,
+    task_logs,
 };

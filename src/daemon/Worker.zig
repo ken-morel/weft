@@ -4,12 +4,14 @@ const std = @import("std");
 const DaemonInstall = @import("../DaemonInstall.zig");
 const Term = @import("../Term.zig");
 const Worker = @import("Worker.zig");
-const packer = @import("../packer.zig");
+const Packer = @import("../Packer.zig");
 const Daemon = @import("Daemon.zig");
 const systemd = @import("../systemd.zig");
 const zoto = @import("../zoto.zig");
 const Task = @import("../Task.zig");
 const paths = @import("paths.zig");
+const proto = @import("../proto.zig");
+const Pressor = @import("../Pressor.zig");
 
 const max_worker_mem = 256 << 10;
 
@@ -65,6 +67,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
 
 fn handle_artifact_push(self: *@This(), id: Task.Id, conn: *Connection) !void {
     const alloc = self.allocator.allocator();
+    const io = self.daemon.io;
 
     try self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
         id.workspace,
@@ -83,60 +86,75 @@ fn handle_artifact_push(self: *@This(), id: Task.Id, conn: *Connection) !void {
         id.pipeline,
     );
 
-    const has_artifact = has_artifact: {
+    has_artifact: {
         std.Io.Dir.cwd().access(
-            self.daemon.io,
+            io,
             artifact_dir_path,
             .{},
         ) catch |err|
             if (err == error.FileNotFound)
-                break :has_artifact false
+                break :has_artifact
             else
                 return err;
-        break :has_artifact true;
-    };
-    var reply: [32]u8 = undefined;
-    zoto.serializeValue(
-        .fixed(reply),
-    );
-    try conn.send("true");
-
-    if (has_artifact) {
         try self.daemon.term.info("artifact already present, skipping upload", .{});
-        return;
+        return error.HasArtifact;
     }
 
-    const temp_dir = try self.daemon.install.open_temp(self.daemon.io, "artifact");
-    defer temp_dir.close(self.daemon.io);
+    const temp_dir = try self.daemon.install.open_temp(io, "artifact");
+    defer temp_dir.close(io);
 
-    {
-        var unpacker: *packer.Unpacker = try .init(alloc, temp_dir);
-        defer unpacker.destroy(alloc, self.daemon.io);
+    receive_artifacts: {
+        var packer: Packer = try .unpacker(temp_dir);
+        defer packer.deinit(io);
+
+        const pressor_buffer = try alloc.alloc(Pressor.buffer_size);
+        defer alloc.free(pressor_buffer);
+        var pressor: Pressor = .init(pressor_buffer);
+
+        const flated = try alloc.alloc(u8, Pressor.max_uncompressed_size);
+        defer alloc.free(flated);
+
+        const recv_buffer = try alloc.alloc(u8, Connection.max_packet_size);
+        defer alloc.free(recv_buffer);
 
         while (true) {
-            const pack = try conn.recv_ref(null);
-            switch (pack) {
-                .folder => |folder| try unpacker.folder(self.daemon.io, folder),
-                .file => |file| try unpacker.file(self.daemon.io, file),
-                .raw => |data| try unpacker.chunk(self.daemon.io, data),
-                .end => break,
-                else => return error.SyntaxError,
+            const raw = try conn.recv(recv_buffer);
+            const data = raw[1..];
+            switch (raw[0]) {
+                proto.artifact.push.folder => {
+                    try packer.put(io, .{ .folder = data });
+                },
+                proto.artifact.push.file => {
+                    try packer.put(io, .{ .file = data });
+                },
+                proto.artifact.push.raw => {
+                    try packer.put(io, .{ .data = data });
+                },
+                proto.artifact.push.compressed => {
+                    var output: std.Io.Writer = .fixed(flated);
+                    try pressor.decompress(&.fixed(data), &output);
+                    try packer.put(io, .{ .data = output.buffered() });
+                },
+                proto.artifact.push.end => break,
+
+                else => return error.InvalidPack,
             }
         }
+        break :receive_artifacts;
     }
 
     if (std.fs.path.dirname(artifact_dir_path)) |parent|
-        std.Io.Dir.cwd().createDirPath(self.daemon.io, parent) catch {};
+        std.Io.Dir.cwd().createDirPath(io, parent) catch {};
 
     try std.Io.Dir.cwd().rename(
         try temp_dir.realPathFileAlloc(
-            self.daemon.io,
+            io,
             ".",
             alloc,
         ),
         std.Io.Dir.cwd(),
         artifact_dir_path,
-        self.daemon.io,
+        io,
     );
     try conn.send_bytes(.ok);
     try self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path});
