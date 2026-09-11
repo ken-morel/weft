@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const endian: std.builtin.Endian = .little;
+
 pub fn hashType(comptime T: type) u64 {
     comptime {
         var h: u64 = 14695981039346656037;
@@ -67,60 +69,65 @@ pub fn hashType(comptime T: type) u64 {
     }
 }
 
-pub fn serialize(dest: *[]u8, value: anytype) !void {
+pub fn serialize(writer: *std.Io.Writer, value: anytype) !void {
     const T = @TypeOf(value);
 
-    try writeBytes(dest, "ZOTO");
-    try writeInt(dest, u64, comptime hashType(T));
-    try serializeValue(dest, value);
+    writer.writeAll("ZOTO");
+    writer.writeInt(u64, comptime hashType(T), endian);
+    try serializeValue(writer, value);
 }
 
-pub fn serializeValue(ptr: *[]u8, value: anytype) error{BufferTooSmall}!void {
+pub fn serializeValue(writer: *std.Io.Writer, value: anytype) error{BufferTooSmall}!void {
     const T = @TypeOf(value);
     const info = @typeInfo(T);
 
     switch (info) {
-        inline .int => try writeInt(ptr, T, value),
-        inline .float => |f| try writeInt(
-            ptr,
+        inline .int => writer.writeInt(T, value),
+        inline .float => |f| writer.writeInt(
             std.meta.Int(.unsigned, f.bits),
             @bitCast(value),
+            endian,
         ),
 
-        inline .bool => try writeByte(ptr, if (value) 1 else 0),
+        inline .bool => writer.writeByte(
+            if (value)
+                std.math.maxInt(u8)
+            else
+                std.math.minInt(u8),
+        ),
         inline .optional => if (value) |payload| {
-            try writeByte(ptr, 1);
-            try serializeValue(ptr, payload);
-        } else try writeByte(ptr, 0),
+            writer.writeByte(std.math.maxInt(u8));
+            try serializeValue(writer, payload);
+        } else writer.writeByte(std.math.minInt(u8)),
         inline .@"struct" => |s| {
             inline for (s.fields) |f|
                 try serializeValue(
-                    ptr,
+                    writer,
                     @field(value, f.name),
                 );
         },
-        inline .@"enum" => try serializeValue(ptr, @intFromEnum(value)),
+        inline .@"enum" => try serializeValue(writer, @intFromEnum(value)),
         inline .@"union" => {
-            try writeByte(ptr, @intFromEnum(std.meta.activeTag(value)));
+            try serializeValue(writer, @intFromEnum(std.meta.activeTag(value)));
             switch (value) {
                 inline else => |payload| try serializeValue(
-                    ptr,
+                    writer,
                     payload,
                 ),
             }
         },
         inline .pointer => |p| switch (p.size) {
             inline .slice => {
-                try writeInt(ptr, u64, value.len);
-                for (value) |item| // just put inline everywhere
-                    try serializeValue(ptr, item);
+                writer.writeInt(u64, value.len);
+                for (value) |item|
+                    try serializeValue(writer, item);
             },
-            inline .one => try serializeValue(ptr, value.*),
+            inline .one => try serializeValue(writer, value.*),
             inline else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
         },
         inline .array => for (value) |item|
-            try serializeValue(ptr, item),
-        inline .error_set => try writeInt(ptr, u16, @intFromError(value)),
+            try serializeValue(writer, item),
+        inline .error_set => try serializeValue(writer, @intFromError(value)),
         inline .void => {},
         else => @compileError("Unsupported type for zoto serialization: " ++ @typeName(T)),
     }
@@ -269,20 +276,6 @@ fn writeByte(buf: *[]u8, byte: u8) !void {
         return error.BufferTooSmall;
     buf.*[0] = byte;
     buf.* = buf.*[1..];
-}
-
-fn writeBytes(cursor: *[]u8, bytes: []const u8) !void {
-    if (cursor.len < bytes.len) return error.BufferTooSmall;
-    @memcpy(cursor.*[0..bytes.len], bytes);
-    cursor.* = cursor.*[bytes.len..];
-}
-
-fn writeInt(buffer: *[]u8, comptime IntT: type, value: IntT) !void {
-    const size = @sizeOf(IntT);
-    if (buffer.len < size)
-        return error.BufferTooSmall;
-    std.mem.writeInt(IntT, buffer.*[0..size], value, .little);
-    buffer.* = buffer.*[size..];
 }
 
 fn readByte(src: *[]const u8) !u8 {

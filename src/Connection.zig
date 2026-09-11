@@ -4,7 +4,7 @@ const Nonce = @import("Nonce.zig");
 const Deployment = @import("Deployment.zig");
 const Crypt = @import("Crypt.zig");
 
-pub const packet_size = std.math.maxInt(u16);
+pub const max_packet_size = std.math.maxInt(u16);
 
 reader: *std.Io.Reader,
 writer: *std.Io.Writer,
@@ -26,13 +26,8 @@ pub fn init(io: std.Io, secret: *[32]u8, reader: *std.Io.Reader, writer: *std.Io
     };
 }
 
-pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
-    alloc.free(self.read_buf);
-    alloc.free(self.write_buf);
-}
-
 pub fn send(self: *@This(), buffer: []u8) !void {
-    if (buffer.len > packet_size)
+    if (buffer.len > max_packet_size)
         return error.MessageTooLarge;
 
     var tag: [16]u8 = undefined;
@@ -45,6 +40,7 @@ pub fn send(self: *@This(), buffer: []u8) !void {
     try self.writer.writeAll(&tag);
     try self.writer.flush();
 }
+
 pub fn recv(self: *@This(), buffer: []u8) ![]u8 {
     var tag: [16]u8 = undefined;
     var len: [2]u8 = undefined;
@@ -60,5 +56,5 @@ pub fn recv(self: *@This(), buffer: []u8) ![]u8 {
     try self.reader.readSliceAll(&tag);
     try self.read_crypt.decrypt(&tag, buffer[0..size]);
 
-    return size;
+    return buffer[0..size];
 }

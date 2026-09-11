@@ -60,8 +60,8 @@ pub fn send_artifact(
 
     const conn = &client.conn;
 
-    try conn.send(.{ .request = .artifact_push });
-    try conn.send(.{ .artifact_id = artifact_id });
+    try conn.send_bytes(.{ .request = .artifact_push });
+    try conn.send_bytes(.{ .artifact_id = artifact_id });
     switch (try conn.recv_ref(null)) {
         .bool => |has_artifact| if (has_artifact) return,
         else => return error.SyntaxError,
@@ -90,7 +90,7 @@ pub fn send_artifact(
     defer packer.destroy(alloc, io);
 
     try client.upload_pack(io, packer);
-    try conn.send(.{ .end = {} });
+    try conn.send_bytes(.{ .end = {} });
 
     switch (try conn.recv_ref(null)) {
         .ok => try term.success("artifact '{s}' uploaded to {s}", .{ artifact_id.pipeline, remote.name }),

@@ -7,76 +7,81 @@ const Worker = @import("Worker.zig");
 const packer = @import("../packer.zig");
 const Daemon = @import("Daemon.zig");
 const systemd = @import("../systemd.zig");
+const zoto = @import("../zoto.zig");
+const Task = @import("../Task.zig");
+const paths = @import("paths.zig");
 
 const max_worker_mem = 256 << 10;
 
-memory: []u8,
+const stream_buffer_size = 4 << 10;
+
 allocator: std.heap.FixedBufferAllocator,
 running: bool = false,
 daemon: *Daemon,
 
-pub fn init(alloc: std.mem.Allocator, daemon: *Daemon) !@This() {
-    const memory = try alloc.alloc(u8, max_worker_mem);
+pub fn init(memory: []u8, daemon: *Daemon) !@This() {
     return .{
-        .memory = memory,
-        .allocator = .init(memory),
+        .mem = .init(memory),
         .daemon = daemon,
     };
 }
 
-pub fn handle(self: *@This(), req: *Server.Request) !void {
+pub fn run(self: *@This(), permits: *std.Io.Semaphore, stream: std.stream) void {
+    self._run(stream) catch |err|
+        self.daemon.term.err("worker error: {any}", .{err}) catch {};
+
+    self.running = false;
+    permits.post(self.daemon.io);
+    _ = std.os.linux.madvise(self.memory.ptr, self.memory.len, std.os.linux.MADV.DONTNEED);
+}
+
+fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     const alloc = self.allocator.allocator();
-    defer {
-        self.allocator.reset();
-        _ = std.os.linux.madvise(self.memory.ptr, self.memory.len, std.os.linux.MADV.DONTNEED);
-    }
-    defer req.destroy(alloc, self.daemon.io);
+    const io = self.daemon.io;
 
-    const msg = req.conn.recv_ref(
-        null,
-    ) catch |err|
-        return if (err == error.EndOfStream)
-            return error.EmptyRequest
-        else
-            err;
+    var reader = stream.reader(io, try alloc.alloc(u8, stream_buffer_size));
+    var writer = stream.writer(io, try alloc.alloc(u8, stream_buffer_size));
 
-    try self.daemon.term.debug("recv: {any}", .{msg});
+    const conn: Connection = .init(io, &self.daemon.config.secret, &reader, &writer);
 
-    switch (msg) {
-        .request => |r| switch (r) {
-            .artifact_push => try self.handle_artifact_push(req),
-            .task_spawn => try self.handle_task_spawn(req),
-            else => try self.daemon.term.warn("unhandled request type: {any}", .{r}),
-        },
-        else => return error.InvalidRequest,
+    const request = request: {
+        const req_buffer = try alloc.alloc(u8, Connection.max_packet_size);
+        var data = try conn.recv(req_buffer);
+        alloc.resize(req_buffer, data.len);
+        break :request zoto.deserializeValue(null, &data, Server.Request) catch |err|
+            return if (err == error.EndOfStream)
+                return error.EmptyRequest
+            else
+                err;
+    };
+    try self.daemon.term.info("Request: {any}", request);
+
+    switch (request) {
+        .artifact_push => |req| try self.handle_artifact_push(req, &conn),
+        .task_spawn => |req| try self.handle_task_spawn(req, &conn),
+        else => return error.NotImplemented,
     }
 }
-fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
-    const conn = &req.conn;
 
+fn handle_artifact_push(self: *@This(), id: Task.Id, conn: *Connection) !void {
     const alloc = self.allocator.allocator();
 
-    const artifact_id = switch (try conn.recv_dupe(alloc)) {
-        .artifact_id => |art_id| art_id,
-        else => return error.SyntaxEror,
-    };
-
     try self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
-        artifact_id.service.workspace,
-        artifact_id.service.workspace,
-        artifact_id.env,
-        &artifact_id.deployment.to_string(),
-        artifact_id.pipeline,
+        id.workspace,
+        id.workspace,
+        id.env,
+        &id.deployment.to_string(),
+        id.pipeline,
     });
 
-    const artifact_dir_path = try std.fs.path.join(alloc, &.{
-        "/var/lib/weft/artifacts",
-        artifact_id.service.workspace,
-        artifact_id.service.workspace,
-        artifact_id.env,
-        &artifact_id.deployment.to_string(),
-        artifact_id.pipeline,
-    });
+    const artifact_dir_path = try paths.artifact(
+        alloc,
+        id.workspace,
+        id.service,
+        id.env,
+        id.deployment,
+        id.pipeline,
+    );
 
     const has_artifact = has_artifact: {
         std.Io.Dir.cwd().access(
@@ -90,7 +95,11 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
                 return err;
         break :has_artifact true;
     };
-    try conn.send(.{ .bool = has_artifact });
+    var reply: [32]u8 = undefined;
+    zoto.serializeValue(
+        .fixed(reply),
+    );
+    try conn.send("true");
 
     if (has_artifact) {
         try self.daemon.term.info("artifact already present, skipping upload", .{});
@@ -129,7 +138,7 @@ fn handle_artifact_push(self: *@This(), req: *Server.Request) !void {
         artifact_dir_path,
         self.daemon.io,
     );
-    try conn.send(.ok);
+    try conn.send_bytes(.ok);
     try self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path});
 }
 
@@ -302,7 +311,7 @@ pub fn handle_task_spawn(self: *@This(), req: *Server.Request) !void {
     _ = try child.wait(self.daemon.io);
 
     try self.daemon.term.success("task {s} started", .{task.pipline.name});
-    try req.conn.send(.ok);
+    try req.conn.send_bytes(.ok);
 
     return;
 }

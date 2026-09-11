@@ -59,9 +59,9 @@ pub fn spawn_step(
     const client = try Client.connect(alloc, io, remote);
     defer client.destroy(alloc, io);
 
-    try client.conn.send(.{ .request = .task_spawn });
+    try client.conn.send_bytes(.{ .request = .task_spawn });
 
-    try client.conn.send(.{
+    try client.conn.send_bytes(.{
         .task_spec = .{
             .deployment = deployment.uuid,
             .env = deployment.env,
@@ -78,7 +78,7 @@ pub fn spawn_step(
 
     const script = try project.dir.openFile(io, script_path, .{});
 
-    var buffer = try alloc.alloc(u8, Client.Connection.packet_size - 10);
+    var buffer = try alloc.alloc(u8, Client.Connection.max_packet_size - 10);
 
     while (true) {
         const size = script.readStreaming(io, &.{buffer}) catch |err|
@@ -86,9 +86,9 @@ pub fn spawn_step(
                 break
             else
                 return err;
-        try client.conn.send(.{ .raw = buffer[0..size] });
+        try client.conn.send_bytes(.{ .raw = buffer[0..size] });
     }
-    try client.conn.send(.end);
+    try client.conn.send_bytes(.end);
 
     switch (try client.conn.recv_ref(null)) {
         .ok => {},

@@ -34,7 +34,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
 }
 
 pub fn run(self: *@This()) !void {
-    try self.term.info("listening on TCP :{d} and Unix {s}", .{ self.config.port, Server.unix_socket_path });
+    try self.term.info("listening on TCP :{d}", .{self.config.port});
     try self.term.debug("max workers: {d}", .{self.config.max_workers});
 
     var group: std.Io.Group = .init;
@@ -56,7 +56,7 @@ pub fn run(self: *@This()) !void {
         } else unreachable;
         worker.running = true;
 
-        const req = req: while (true)
+        const stream: std.Io.net.Stream = req: while (true)
             break :req self.server.accept(worker.allocator.allocator(), self.io) catch |err| {
                 if (err == error.Canceled)
                     return;
@@ -64,18 +64,11 @@ pub fn run(self: *@This()) !void {
                 continue :req;
             };
         try self.term.info("new connection", .{});
+
         group.async(
             self.io,
-            struct {
-                fn do(do_worker: *Worker, do_permits: *std.Io.Semaphore, do_req: *Server.Request) void {
-                    defer do_permits.post(do_worker.daemon.io);
-                    defer do_worker.running = false;
-                    do_worker.handle(do_req) catch |err| {
-                        do_worker.daemon.term.err("worker error: {any}", .{err}) catch return;
-                    };
-                }
-            }.do,
-            .{ worker, &permits, req },
+            Worker.run,
+            .{ worker, &permits, stream },
         );
     }
 }
