@@ -51,6 +51,8 @@ pub fn decompress(self: @This(), data: []const u8) ![]u8 {
 
     var idx = 0;
     while (true) { //TODO: remove the outer while true
+        if (idx > 0)
+            @panic("Well this is actually required");
         const len = try decompressor.reader.readSliceShort(self.buffer[idx..]);
         if (len == 0)
             break
