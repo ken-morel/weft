@@ -34,11 +34,11 @@ pub fn cache_artifact(
     }
     const source_artifact = artifact: {
         for (deployment.artifacts) |*artifact|
-            if (std.mem.eql(u8, artifact.step.pipeline, artifact_id.pipeline))
+            if (std.mem.eql(u8, artifact.name, artifact_id.pipeline))
                 break :artifact artifact;
         unreachable;
     };
-    const remote = (try inst.get_remote(arena.allocator(), io, source_artifact.step.remote)) orelse return error.InvalidRemote;
+    const remote = (try inst.get_remote(arena.allocator(), io, source_artifact.remote)) orelse return error.InvalidRemote;
     // get the artifact from the remote...
     try term.info("requesting artifact '{s}' from remote {s}", .{ artifact_id.pipeline, remote.name });
 }

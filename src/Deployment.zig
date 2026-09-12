@@ -22,7 +22,7 @@ pub const Artifact = struct {
 pub fn next_target(self: @This()) ?*const Step {
     target: for (self.targets) |*target| {
         for (self.artifacts) |artifact|
-            if (artifact.step.eq(target.*))
+            if (std.mem.eql(u8, artifact.name, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
                 continue :target;
         return target;
     }

@@ -50,7 +50,7 @@ pub fn run(self: *@This()) !void {
     try self.term.debug("spawned {d} workers", .{workers.len});
 
     for (workers) |*worker| {
-        worker.* = try .init(try self.alloc.alignedAlloc(u8, .page, Worker.worker_heap_mem), self);
+        worker.* = try .init(try self.alloc.alignedAlloc(u8, comptime std.mem.Alignment.fromByteUnits(std.heap.page_size_min), Worker.worker_heap_mem), self);
     }
 
     while (true) {
