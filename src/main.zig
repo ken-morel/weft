@@ -1,14 +1,16 @@
+const std = @import("std");
+
+const cmd_do = @import("client/do.zig");
+const ClientInstall = @import("ClientInstall.zig");
+const Daemon = @import("daemon/Daemon.zig");
+const DaemonInstall = @import("DaemonInstall.zig");
+const Project = @import("Project.zig");
+const Step = @import("Step.zig");
+const Term = @import("Term.zig");
+
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
 };
-
-const std = @import("std");
-const DaemonInstall = @import("DaemonInstall.zig");
-const ClientInstall = @import("ClientInstall.zig");
-const Daemon = @import("daemon/Daemon.zig");
-const Term = @import("Term.zig");
-const Project = @import("Project.zig");
-const Step = @import("Step.zig");
 
 const usage_text =
     \\Usage: weft [options] <command> [args]
@@ -25,7 +27,6 @@ const usage_text =
     \\  --no-color              Disable colored output
     \\
 ;
-
 fn show_usage(term: *Term) void {
     term.print(usage_text, .{}) catch {};
 }
@@ -116,17 +117,16 @@ pub fn main(init: std.process.Init) !void {
                 }
                 const name = args[first + 2];
 
-                var buf_back: [1 << 7]u8 = undefined;
-                var buf: []u8 = &buf_back;
+                var addr_buf: [128]u8 = undefined;
+                var port_buf: [32]u8 = undefined;
+                var token_buf: [128]u8 = undefined;
 
                 try term.println("remote address: ", .{});
-                const raw_addr = try term.read_line(buf);
+                const raw_addr = try term.read_line(&addr_buf);
                 const addr = std.mem.trim(u8, raw_addr, "\r\n ");
-                buf = buf[raw_addr.len..];
 
                 try term.println("remote port (9338): ", .{});
-                const raw_port = try term.read_line(buf);
-                buf = buf[raw_port.len..];
+                const raw_port = try term.read_line(&port_buf);
                 const port_str = std.mem.trim(u8, raw_port, "\r\n ");
                 const port = if (port_str.len == 0)
                     9338
@@ -137,7 +137,7 @@ pub fn main(init: std.process.Init) !void {
                     };
 
                 try term.println("remote token: ", .{});
-                const raw_token = try term.read_line(buf);
+                const raw_token = try term.read_line(&token_buf);
                 const token_hex = std.mem.trim(u8, raw_token, "\r\n ");
 
                 if (token_hex.len != 64) {
@@ -145,7 +145,8 @@ pub fn main(init: std.process.Init) !void {
                     return error.Usage;
                 }
 
-                const token = try std.fmt.hexToBytes(buf[0..32], token_hex);
+                var stack_token: [32]u8 = undefined;
+                _ = try std.fmt.hexToBytes(&stack_token, token_hex);
 
                 const address = std.Io.net.IpAddress.parse(addr, port) catch |err| {
                     try term.err("invalid ip address: {any}", .{err});
@@ -155,7 +156,7 @@ pub fn main(init: std.process.Init) !void {
                 const remote: ClientInstall.Remote = .{
                     .name = name,
                     .address = address,
-                    .token = token,
+                    .token = stack_token,
                 };
 
                 const install = try ClientInstall.init(
@@ -178,4 +179,6 @@ pub fn main(init: std.process.Init) !void {
     show_usage(&term);
 }
 
-const cmd_do = @import("client/do.zig");
+test {
+    std.testing.refAllDecls(@This());
+}

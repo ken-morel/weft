@@ -165,7 +165,8 @@ fn write_timestamp(self: *@This(), w: *std.Io.Writer) !void {
 }
 
 pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) !void {
-    if (@intFromEnum(level) > @intFromEnum(self.log_level)) return;
+    if (@intFromEnum(level) > @intFromEnum(self.log_level))
+        return;
     const w = self.writer();
     try self.write_timestamp(w);
     if (self.color) {

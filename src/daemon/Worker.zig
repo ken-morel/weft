@@ -1,19 +1,21 @@
-const Connection = @import("../Connection.zig");
-const Server = @import("../Server.zig");
 const std = @import("std");
+
+const Connection = @import("../Connection.zig");
 const DaemonInstall = @import("../DaemonInstall.zig");
-const Term = @import("../Term.zig");
-const Worker = @import("Worker.zig");
 const Packer = @import("../Packer.zig");
-const Daemon = @import("Daemon.zig");
-const systemd = @import("../systemd.zig");
-const zoto = @import("../zoto.zig");
-const Task = @import("../Task.zig");
-const paths = @import("paths.zig");
-const proto = @import("../proto.zig");
 const Pressor = @import("../Pressor.zig");
+const proto = @import("../proto.zig");
+const Server = @import("../Server.zig");
+const systemd = @import("../systemd.zig");
+const Term = @import("../Term.zig");
+const zoto = @import("../zoto.zig");
+const Daemon = @import("Daemon.zig");
+const paths = @import("paths.zig");
+const Worker = @import("Worker.zig");
 
 const stream_buffer_size = 4 << 10;
+
+pub const worker_heap_mem = 128 << 10;
 
 allocator: std.heap.FixedBufferAllocator,
 running: bool = false,
@@ -31,9 +33,10 @@ pub fn run(self: *@This(), permits: *std.Io.Semaphore, stream: std.Io.net.Stream
         self.daemon.term.err("worker error: {any}", .{err}) catch {};
 
     stream.close(self.daemon.io);
+    self.allocator.reset();
+    _ = std.os.linux.madvise(self.allocator.buffer.ptr, self.allocator.buffer.len, std.os.linux.MADV.DONTNEED);
     self.running = false;
     permits.post(self.daemon.io);
-    _ = std.os.linux.madvise(self.allocator.buffer, self.allocator.buffer.len, std.os.linux.MADV.DONTNEED);
 }
 
 fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
@@ -43,26 +46,25 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     var reader = stream.reader(io, try alloc.alloc(u8, stream_buffer_size));
     var writer = stream.writer(io, try alloc.alloc(u8, stream_buffer_size));
 
-    const conn: Connection = .init(io, &self.daemon.config.secret, &reader, &writer);
+    var conn: Connection = try .init(io, &self.daemon.config.secret, &reader.interface, &writer.interface);
 
     const request = request: {
-        const req_buffer: [16]u8 = undefined;
-        var data = conn.recv(std.heap.FixedBufferAllocator.init(&req_buffer)) catch |err|
+        var req_buffer: [16]u8 = undefined;
+        break :request conn.recv_object_buf(&req_buffer, proto.Request) catch |err|
             return if (err == error.BufferTooSmall)
                 error.InvalidRequest
             else
                 err;
-        break :request zoto.deserializeValue(null, &data, proto.Request) catch |err|
-            return if (err == error.EndOfStream)
-                return error.EmptyRequest
-            else
-                err;
     };
-    try self.daemon.term.info("Request: {any}", request);
 
+    try self.daemon.term.info("Request: {any}", .{request});
+
+    var response_buf: [16]u8 = undefined;
     switch (request) {
-        .artifact_push => try self.handle_artifact_push(&conn),
-        .task_spawn => try self.handle_task_spawn(&conn),
+        .artifact_push => self.handle_artifact_push(&conn) catch |err|
+            try conn.send_object(&response_buf, @as(anyerror!proto.artifact.push.Res, err)),
+        .task_spawn => self.handle_task_spawn(&conn) catch |err|
+            try conn.send_object(&response_buf, @as(anyerror!proto.task.spawn.Res, err)),
         else => return error.NotImplemented,
     }
 }
@@ -70,11 +72,11 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
 fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
     const alloc = self.allocator.allocator();
     const io = self.daemon.io;
+    var buf: [32]u8 = undefined;
+    const req = try conn.recv_object(alloc, proto.artifact.push.Req);
+    const id = &req.id;
 
-    const msg = try conn.recv(alloc);
-    var _msg_ptr = msg;
-
-    const id = try zoto.deserializeValue(null, &_msg_ptr, proto.artifact.push.Req);
+    const deployment = id.deployment.to_string();
 
     try self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
         id.workspace,
@@ -89,7 +91,7 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
         id.workspace,
         id.service,
         id.env,
-        id.deployment,
+        &deployment,
         id.pipeline,
     );
 
@@ -104,8 +106,10 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
             else
                 return err;
         try self.daemon.term.info("artifact already present, skipping upload", .{});
-        return error.HasArtifact;
+        try conn.send_object(&buf, true);
+        return;
     }
+    try conn.send_object(&buf, false);
 
     const temp_dir = try self.daemon.install.open_temp(io, "artifact");
     defer temp_dir.close(io);
@@ -113,13 +117,6 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
     receive_artifacts: {
         var packer: Packer = try .unpacker(temp_dir);
         defer packer.deinit(io);
-
-        const pressor_buffer = try alloc.alloc(Pressor.buffer_size);
-        defer alloc.free(pressor_buffer);
-        var pressor: Pressor = .init(pressor_buffer);
-
-        const flated = try alloc.alloc(u8, Pressor.max_uncompressed_size);
-        defer alloc.free(flated);
 
         while (true) {
             const raw = try conn.recv(alloc);
@@ -136,9 +133,11 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
                     try packer.put(io, .{ .data = data });
                 },
                 proto.artifact.push.compressed => {
-                    var output: std.Io.Writer = .fixed(flated);
-                    try pressor.decompress(&.fixed(data), &output);
-                    try packer.put(io, .{ .data = output.buffered() });
+                    const pressor = try self.daemon.pressor.acquire();
+                    defer pressor.release();
+                    var reader: std.Io.Reader = .fixed(data);
+                    const output = try pressor.decompress(&reader);
+                    try packer.put(io, .{ .data = output });
                 },
                 proto.artifact.push.end => break,
 
@@ -161,8 +160,9 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
         artifact_dir_path,
         io,
     );
-    try conn.send_bytes(.ok);
-    try self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path});
+    var buff: [32]u8 = undefined;
+    try conn.send_object(&buff, @as(anyerror!proto.artifact.push.Res, proto.artifact.push.Res{}));
+    self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path}) catch {};
 }
 
 // tasks
@@ -180,10 +180,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
     const io = self.daemon.io;
     const term = self.daemon.term;
 
-    const msg = try conn.recv(alloc);
-    var _msg_ptr = msg;
-
-    const req = try zoto.deserializeValue(null, &_msg_ptr, proto.task.spawn.Req);
+    const req = try conn.recv_object(alloc, proto.task.spawn.Req);
 
     const deployment = req.task.deployment.to_string();
 
@@ -195,7 +192,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         req.task.pipeline,
     });
 
-    const unit_name = paths.unit_name(
+    const unit_name = try paths.unit_name(
         alloc,
         req.task.workspace,
         req.task.env,
@@ -215,7 +212,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
     var input_dirs = try alloc.alloc(
         []const u8,
-        req.task.pipeline.inputs.len,
+        req.pipeline.inputs.len,
     );
     for (req.pipeline.inputs, 0..) |input, i| {
         const path = try paths.artifact(
@@ -245,7 +242,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         req.task.service,
         req.task.env,
         &deployment,
-        req.task.pipeline.name,
+        req.task.pipeline,
     );
 
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
@@ -262,6 +259,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
     while (true) {
         const data = try conn.recv(alloc);
+        defer alloc.free(data);
         switch (data[0]) {
             proto.task.spawn.data => {
                 try script_file.writeStreamingAll(io, data[1..]);
@@ -275,16 +273,16 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
-    var write_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.task.pipeline.outputs.len + 1);
-    for (req.task.pipeline.outputs) |output| {
+    var write_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 1);
+    for (req.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
             output_dir_path,
             output.name,
         });
         try std.Io.Dir.cwd().createDirPath(self.daemon.io, path);
-        write_dirs.append(path);
+        try write_dirs.append(alloc, path);
     }
-    write_dirs.append(cwd_dir_path);
+    try write_dirs.append(alloc, cwd_dir_path);
 
     try term.info("starting systemd unit {s}", .{unit_name});
 
@@ -304,7 +302,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                 .private_tmp = true,
                 .protect_system = .strict,
                 .read = input_dirs,
-                .write = write_dirs,
+                .write = write_dirs.items,
                 .root_image = null,
                 .tmpfs = &.{},
             },
@@ -335,8 +333,9 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
     );
     _ = try child.wait(self.daemon.io);
 
-    try term.success("task {s} started", .{req.task.pipeline.name});
-    try req.conn.send_bytes(.ok);
+    try term.success("task {s} started", .{req.task.pipeline});
+    var buf: [32]u8 = undefined;
+    try conn.send_object(&buf, @as(anyerror!proto.task.spawn.Res, proto.task.spawn.Res{}));
 
     return;
 }

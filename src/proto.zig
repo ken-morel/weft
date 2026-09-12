@@ -3,14 +3,14 @@ const UUIDv7 = @import("UUIDv7.zig");
 
 pub const artifact = struct {
     pub const push = struct {
-        const folder: u8 = 0xaa;
-        const file: u8 = 0xbb;
-        const raw: u8 = 0xcc;
-        const compressed: u8 = 0xdd;
-        const end: u8 = 0xee;
+        pub const folder: u8 = 0xaa;
+        pub const file: u8 = 0xbb;
+        pub const raw: u8 = 0xcc;
+        pub const compressed: u8 = 0xdd;
+        pub const end: u8 = 0xee;
 
         pub const Req = struct {
-            task: task.Id,
+            id: task.Id,
         };
         pub const Res = struct {};
     };
@@ -19,6 +19,7 @@ pub const artifact = struct {
             task: task.Id,
         };
     };
+    pub const Id = task.Id;
 };
 pub const task = struct {
     pub const Id = struct {
@@ -36,6 +37,7 @@ pub const task = struct {
             task: task.Id,
             pipeline: Weft.Pipeline,
         };
+        pub const Res = struct {};
     };
     pub const kill = struct {
         pub const Req = struct {

@@ -1,11 +1,11 @@
-const UUIDv7 = @import("UUIDv7.zig");
 const std = @import("std");
+
+pub const Remote = @import("Remote.zig");
+const UUIDv7 = @import("UUIDv7.zig");
 
 pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)));
 pub const read_only_user_mode = read_only_user_permissions.toMode();
 pub const remotes_zon_file_name = "remotes.zon";
-
-pub const Remote = @import("Remote.zig");
 
 config_dir: std.Io.Dir,
 data_dir: std.Io.Dir,
@@ -78,10 +78,8 @@ pub fn get_remote(self: @This(), alloc: std.mem.Allocator, io: std.Io, name: []c
     defer arena.deinit();
 
     for (try self.get_remotes(arena.allocator(), io)) |remote|
-        _ = if (std.mem.eql(u8, remote.name, name))
-            return try remote.dupe(alloc)
-        else
-            arena.reset(.retain_capacity);
+        if (std.mem.eql(u8, remote.name, name))
+            return try remote.dupe(alloc);
 
     return null;
 }

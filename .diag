@@ -1,0 +1,387 @@
+install
++- install weft
+   +- compile exe weft Debug native 22 errors
+src/daemon/Worker.zig:213:27: error: no member named 'inputs' in '[]const u8'
+        req.task.pipeline.inputs.len,
+                          ^~~~~~
+referenced by:
+    _run: src/daemon/Worker.zig:63:50
+    run: src/daemon/Worker.zig:31:14
+    start: /usr/lib/zig/std/Io.zig:1245:42
+    async__anon_63744: /usr/lib/zig/std/Io.zig:1248:84
+    run: src/daemon/Daemon.zig:72:20
+    main: src/main.zig:83:34
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    _start: /usr/lib/zig/std/start.zig:469:40
+    1 reference(s) hidden; use '-freference-trace=11' to see all references
+src/main.zig:158:30: error: expected type '[32]u8', found '[]u8'
+                    .token = token,
+                             ^~~~~
+referenced by:
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    _start: /usr/lib/zig/std/start.zig:469:40
+    comptime: /usr/lib/zig/std/start.zig:69:67
+    start: /usr/lib/zig/std/std.zig:107:27
+    comptime: /usr/lib/zig/std/std.zig:233:9
+src/zoto.zig:84:5: error: error union is ignored
+    switch (info) {
+    ^~~~~~
+src/zoto.zig:84:5: note: consider using 'try', 'catch', or 'if'
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:85:30: error: member function expected 3 argument(s), found 2
+        inline .int => writer.writeInt(T, value),
+                       ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36627: src/zoto.zig:129:31
+    serializeValue__anon_36578: src/zoto.zig:104:35
+    serializeValue__anon_36166: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=14' to see all references
+src/zoto.zig:85:30: error: member function expected 3 argument(s), found 2
+        inline .int => writer.writeInt(T, value),
+                       ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36468: src/zoto.zig:113:60
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=13' to see all references
+src/zoto.zig:85:30: error: member function expected 3 argument(s), found 2
+        inline .int => writer.writeInt(T, value),
+                       ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36468: src/zoto.zig:111:31
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=13' to see all references
+src/zoto.zig:99:29: error: error union is ignored
+            writer.writeByte(std.math.maxInt(u8));
+            ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+src/zoto.zig:99:29: note: consider using 'try', 'catch', or 'if'
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:99:29: error: error union is ignored
+            writer.writeByte(std.math.maxInt(u8));
+            ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+src/zoto.zig:99:29: note: consider using 'try', 'catch', or 'if'
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:99:29: error: error union is ignored
+            writer.writeByte(std.math.maxInt(u8));
+            ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+src/zoto.zig:99:29: note: consider using 'try', 'catch', or 'if'
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:99:29: error: error union is ignored
+            writer.writeByte(std.math.maxInt(u8));
+            ~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~
+src/zoto.zig:99:29: note: consider using 'try', 'catch', or 'if'
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:121:23: error: member function expected 3 argument(s), found 2
+                writer.writeInt(u64, value.len);
+                ~~~~~~^~~~~~~~~
+/usr/lib/zig/std/Io/Writer.zig:851:12: note: function declared here
+pub inline fn writeInt(w: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) Error!void {
+~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    serializeValue__anon_36176: src/zoto.zig:104:35
+    serializeValue__anon_35499: src/zoto.zig:104:35
+    send_object__anon_35484: src/Connection.zig:46:28
+    spawn_step: src/client/runner.zig:64:32
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    2 reference(s) hidden; use '-freference-trace=12' to see all references
+src/zoto.zig:252:17: error: Unsupported type for zoto deserialization: anyerror!proto.artifact.push.Res
+        else => @compileError("Unsupported type for zoto deserialization: " ++ @typeName(T)),
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    recv_object__anon_37151: src/Connection.zig:69:37
+    recv_object_buf__anon_37146: src/Connection.zig:73:32
+    send_artifact: src/client/uploader.zig:119:50
+    send_artifact_concurrent: src/client/uploader.zig:137:18
+    start: /usr/lib/zig/std/Io.zig:1266:42
+    concurrent__anon_35318: /usr/lib/zig/std/Io.zig:1269:96
+    send_required_artifacts: src/client/uploader.zig:169:29
+    spawn_step: src/client/runner.zig:59:41
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    6 reference(s) hidden; use '-freference-trace=16' to see all references
+src/zoto.zig:252:17: error: Unsupported type for zoto deserialization: anyerror!proto.task.spawn.Res
+        else => @compileError("Unsupported type for zoto deserialization: " ++ @typeName(T)),
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+referenced by:
+    recv_object__anon_35599: src/Connection.zig:69:37
+    recv_object_buf__anon_35583: src/Connection.zig:73:32
+    spawn_step: src/client/runner.zig:95:50
+    run_deployment: src/client/runner.zig:22:27
+    run: src/client/do.zig:35:30
+    main: src/main.zig:110:30
+    callMain [inlined]: /usr/lib/zig/std/start.zig:737:30
+    callMainWithArgs [inlined]: /usr/lib/zig/std/start.zig:638:20
+    posixCallMainAndExit: /usr/lib/zig/std/start.zig:590:38
+    _start: /usr/lib/zig/std/start.zig:469:40
+    1 reference(s) hidden; use '-freference-trace=11' to see all references
+error: 22 compilation errors
+failed command: /usr/bin/zig build-exe -freference-trace=10 -ODebug -Mroot=/home/engon/weft/src/main.zig --cache-dir .zig-cache --global-cache-dir /home/engon/.cache/zig --name weft --zig-lib-dir /usr/lib/zig/ --listen=-
+
+Build Summary: 0/3 steps succeeded (1 failed)
+install transitive failure
++- install weft transitive failure
+   +- compile exe weft Debug native 22 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/7ab9e91cdd7a67eb7539a5efaf0e5892/build /usr/bin/zig /usr/lib/zig /home/engon/weft .zig-cache /home/engon/.cache/zig --seed 0x71b63f8b -Z8bc34fcf934e1913 -freference-trace=10

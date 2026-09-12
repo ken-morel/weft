@@ -77,28 +77,28 @@ pub fn serialize(writer: *std.Io.Writer, value: anytype) !void {
     try serializeValue(writer, value);
 }
 
-pub fn serializeValue(writer: *std.Io.Writer, value: anytype) error{BufferTooSmall}!void {
+pub fn serializeValue(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Error!void {
     const T = @TypeOf(value);
     const info = @typeInfo(T);
 
     switch (info) {
-        inline .int => writer.writeInt(T, value),
-        inline .float => |f| writer.writeInt(
+        inline .int => try writer.writeInt(T, value, endian),
+        inline .float => |f| try writer.writeInt(
             std.meta.Int(.unsigned, f.bits),
             @bitCast(value),
             endian,
         ),
 
-        inline .bool => writer.writeByte(
+        inline .bool => try writer.writeByte(
             if (value)
                 std.math.maxInt(u8)
             else
                 std.math.minInt(u8),
         ),
         inline .optional => if (value) |payload| {
-            writer.writeByte(std.math.maxInt(u8));
+            try writer.writeByte(std.math.maxInt(u8));
             try serializeValue(writer, payload);
-        } else writer.writeByte(std.math.minInt(u8)),
+        } else try writer.writeByte(std.math.minInt(u8)),
         inline .@"struct" => |s| {
             inline for (s.fields) |f|
                 try serializeValue(
@@ -106,9 +106,9 @@ pub fn serializeValue(writer: *std.Io.Writer, value: anytype) error{BufferTooSma
                     @field(value, f.name),
                 );
         },
-        inline .@"enum" => try serializeValue(writer, @intFromEnum(value)),
+        inline .@"enum" => try writer.writeByte(@intCast(@intFromEnum(value))),
         inline .@"union" => {
-            try serializeValue(writer, @intFromEnum(std.meta.activeTag(value)));
+            try writer.writeByte(@intCast(@intFromEnum(std.meta.activeTag(value))));
             switch (value) {
                 inline else => |payload| try serializeValue(
                     writer,
@@ -118,7 +118,7 @@ pub fn serializeValue(writer: *std.Io.Writer, value: anytype) error{BufferTooSma
         },
         inline .pointer => |p| switch (p.size) {
             inline .slice => {
-                writer.writeInt(u64, value.len);
+                try writer.writeInt(u64, value.len, endian);
                 for (value) |item|
                     try serializeValue(writer, item);
             },
@@ -128,6 +128,13 @@ pub fn serializeValue(writer: *std.Io.Writer, value: anytype) error{BufferTooSma
         inline .array => for (value) |item|
             try serializeValue(writer, item),
         inline .error_set => try serializeValue(writer, @intFromError(value)),
+        inline .error_union => if (value) |payload| {
+            try writer.writeByte(1);
+            try serializeValue(writer, payload);
+        } else |err| {
+            try writer.writeByte(0);
+            try serializeValue(writer, err);
+        },
         inline .void => {},
         else => @compileError("Unsupported type for zoto serialization: " ++ @typeName(T)),
     }
@@ -148,6 +155,7 @@ pub fn deserialize(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type
 pub const DeserializeError = std.mem.Allocator.Error || error{
     BufferTooSmall,
     InvalidUnionTag,
+    InvalidByte,
     AllocationRequired,
     InvalidHeader,
     TypeMismatch,
@@ -165,14 +173,24 @@ pub fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T:
             return @bitCast(raw_bits);
         },
 
-        inline .bool => return (try readByte(src)) != 0,
+        inline .bool => {
+            const val = try readByte(src);
+            return if (val == std.math.maxInt(u8))
+                true
+            else if (val == std.math.minInt(u8))
+                false
+            else
+                error.InvalidByte;
+        },
 
         inline .optional => |o| {
             const has_value = try readByte(src);
-            if (has_value == 1)
-                return try deserializeValue(alloc, src, o.child)
+            return if (has_value == std.math.maxInt(u8))
+                try deserializeValue(alloc, src, o.child)
+            else if (has_value == std.math.minInt(u8))
+                null
             else
-                return null;
+                error.InvalidByte;
         },
 
         inline .@"struct" => |s| {
@@ -182,7 +200,7 @@ pub fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T:
             return result;
         },
 
-        inline .@"enum" => |e| return @enumFromInt(try deserializeValue(alloc, src, e.tag_type)),
+        inline .@"enum" => return @enumFromInt(try readByte(src)),
 
         inline .@"union" => |u| {
             const tag_id = try readByte(src);
@@ -247,6 +265,13 @@ pub fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T:
         },
 
         inline .error_set => return @errorFromInt(try readInt(src, u16)),
+
+        inline .error_union => |eu| {
+            const is_payload = try readByte(src);
+            if (is_payload != 0)
+                return try deserializeValue(alloc, src, eu.payload);
+            return @as(T, @errorFromInt(try readInt(src, u16)));
+        },
 
         inline .void => return {},
         else => @compileError("Unsupported type for zoto deserialization: " ++ @typeName(T)),

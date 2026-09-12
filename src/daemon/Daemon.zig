@@ -1,8 +1,10 @@
-const Connection = @import("../Connection.zig");
-const Server = @import("../Server.zig");
 const std = @import("std");
+
+const Connection = @import("../Connection.zig");
 const DaemonInstall = @import("../DaemonInstall.zig");
+const Server = @import("../Server.zig");
 const Term = @import("../Term.zig");
+const SharedPressor = @import("SharedPressor.zig");
 const Worker = @import("Worker.zig");
 
 io: std.Io,
@@ -11,9 +13,11 @@ install: DaemonInstall,
 server: Server,
 config: DaemonInstall.Config,
 term: *Term,
+pressor: SharedPressor,
 
 pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
+    self.pressor.deinit(self.alloc);
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
     const config = try install.get_config(io, alloc, term);
@@ -30,6 +34,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
         .config = config,
         .server = server,
         .term = term,
+        .pressor = try .init(alloc, io),
     };
 }
 
@@ -44,8 +49,9 @@ pub fn run(self: *@This()) !void {
     var permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
     try self.term.debug("spawned {d} workers", .{workers.len});
 
-    for (workers) |*worker|
-        worker.* = try .init(self.alloc, self);
+    for (workers) |*worker| {
+        worker.* = try .init(try self.alloc.alignedAlloc(u8, .page, Worker.worker_heap_mem), self);
+    }
 
     while (true) {
         try permits.wait(self.io);
@@ -57,7 +63,7 @@ pub fn run(self: *@This()) !void {
         worker.running = true;
 
         const stream: std.Io.net.Stream = req: while (true)
-            break :req self.server.accept(worker.allocator.allocator(), self.io) catch |err| {
+            break :req self.server.accept(self.io) catch |err| {
                 if (err == error.Canceled)
                     return;
                 try self.term.err("accept error: {any}", .{err});

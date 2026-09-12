@@ -1,11 +1,12 @@
 const std = @import("std");
 
-const Deployment = @import("../Deployment.zig");
-const ClientInstall = @import("../ClientInstall.zig");
-const Project = @import("../Project.zig");
-const Term = @import("../Term.zig");
 const Client = @import("../Client.zig");
-const ids = @import("../ids.zig");
+const ClientInstall = @import("../ClientInstall.zig");
+const Connection = @import("../Connection.zig");
+const Deployment = @import("../Deployment.zig");
+const Project = @import("../Project.zig");
+const proto = @import("../proto.zig");
+const Term = @import("../Term.zig");
 const uploader = @import("uploader.zig");
 
 pub fn run_deployment(
@@ -42,6 +43,8 @@ pub fn spawn_step(
     deployment: *Deployment,
     step: Deployment.Step,
 ) !void {
+    var buffer = try alloc.alloc(u8, Connection.max_packet_size);
+    defer alloc.free(buffer);
     try term.info("spawning deployment step: {s} on {s}", .{ step.pipeline, step.remote });
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
@@ -56,20 +59,20 @@ pub fn spawn_step(
 
     try uploader.send_required_artifacts(alloc, io, term, inst, project, deployment.*, pipeline.*, remote);
 
-    const client = try Client.connect(alloc, io, remote);
+    const client = try Client.connect(alloc, io, remote.address, &remote.token);
     defer client.destroy(alloc, io);
 
-    try client.conn.send_bytes(.{ .request = .task_spawn });
-
-    try client.conn.send_bytes(.{
-        .task_spec = .{
+    try client.conn.send_object(buffer, proto.task.spawn.Req{
+        .task = .{
             .deployment = deployment.uuid,
             .env = deployment.env,
-            .pipline = pipeline.*,
+            .pipeline = pipeline.name,
             .service = deployment.service.name,
             .workspace = deployment.service.workspace,
         },
+        .pipeline = pipeline.*,
     });
+
     const script_path = try std.fs.path.join(alloc, &.{
         "bin",
         pipeline.script,
@@ -77,30 +80,28 @@ pub fn spawn_step(
     defer alloc.free(script_path);
 
     const script = try project.dir.openFile(io, script_path, .{});
-
-    var buffer = try alloc.alloc(u8, Client.Connection.max_packet_size - 10);
+    defer script.close(io);
 
     while (true) {
-        const size = script.readStreaming(io, &.{buffer}) catch |err|
+        const size = script.readStreaming(io, &.{buffer[1..]}) catch |err|
             if (err == error.EndOfStream)
                 break
             else
                 return err;
-        try client.conn.send_bytes(.{ .raw = buffer[0..size] });
+        buffer[0] = proto.task.spawn.data;
+        try client.conn.send(buffer[0 .. size + 1]);
     }
-    try client.conn.send_bytes(.end);
+    buffer[0] = proto.task.spawn.end;
+    try client.conn.send(buffer[0..1]);
 
-    switch (try client.conn.recv_ref(null)) {
-        .ok => {},
-        .err => |err| {
-            try term.err("Remote error: {any}", .{err});
-            return err;
-        },
-        else => return error.SyntaxError,
+    const reply = try client.conn.recv_object_buf(buffer, anyerror!proto.task.spawn.Res);
+    if (reply) |_| {
+        deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);
+        const item = &deployment.running[deployment.running.len - 1];
+        item.* = step;
+        try term.success("Spawned task succesfully", .{});
+    } else |err| {
+        try term.err("Remote error: {any}", .{err});
+        return err;
     }
-
-    deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);
-    const item = &deployment.running[deployment.running.len - 1];
-    item.* = step;
-    try term.success("Spawned task succesfully", .{});
 }

@@ -15,7 +15,7 @@ pub fn NumPattern(comptime T: type) type {
                 stop: T,
             },
         };
-        pub fn is_start(ch: T) bool {
+        pub fn is_start(ch: u8) bool {
             return ch == '>' or ch == '<' or ch == '=' or ch == '!' or ch == '-' or std.ascii.isDigit(ch);
         }
         fn takeNum(str: []const u8, idx: *usize) !T {

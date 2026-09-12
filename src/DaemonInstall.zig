@@ -1,17 +1,17 @@
 const std = @import("std");
-const ClientInstall = @import("ClientInstall.zig");
-const Term = @import("Term.zig");
 
+const ClientInstall = @import("ClientInstall.zig");
 const read_only_user_permissions = ClientInstall.read_only_user_permissions;
 const read_only_user_mode = ClientInstall.read_only_user_mode;
-const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
-const ids = @import("ids.zig");
+const proto = @import("proto.zig");
+const Term = @import("Term.zig");
 const UUIDv7 = @import("UUIDv7.zig");
 
+const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
 pub const Config = struct {
     secret: [32]u8 = undefined,
     port: u16 = 9338,
-    max_workers: u32 = 15,
+    max_workers: u32 = 8,
 };
 
 temp_dir: std.Io.Dir,
@@ -180,14 +180,14 @@ pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*T
 pub fn get_artifact_path(
     self: @This(),
     alloc: std.mem.Allocator,
-    art: ids.ArtifactId,
+    art: proto.artifact.Id,
 ) ![]const u8 {
     _ = self;
-    const uuid = try art.deployment.to_string();
+    const uuid = art.deployment.to_string();
     return try std.fs.path.join(alloc, &.{
         "/var/lib/weft/artifacts/",
-        art.service.workspace,
-        art.service.name,
+        art.workspace,
+        art.service,
         art.env,
         &uuid,
         art.pipeline,
@@ -197,7 +197,7 @@ pub fn open_artifact_dir(
     self: @This(),
     alloc: std.mem.Allocator,
     io: std.Io,
-    art: ids.ArtifactId,
+    art: proto.artifact.Id,
 ) !std.Io.Dir {
     const path = try self.get_artifact_path(alloc, art);
     defer alloc.free(path);

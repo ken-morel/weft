@@ -1,7 +1,7 @@
 const std = @import("std");
 
-pub const Step = @import("Step.zig");
 const Project = @import("Project.zig");
+pub const Step = @import("Step.zig");
 const UUIDv7 = @import("UUIDv7.zig");
 const Weft = @import("Weft.zig");
 
@@ -14,7 +14,8 @@ running: []Step = &.{},
 targets: []Step = &.{},
 
 pub const Artifact = struct {
-    step: Step,
+    remote: []const u8,
+    name: []const u8,
     size: u64,
 };
 
@@ -30,7 +31,7 @@ pub fn next_target(self: @This()) ?*const Step {
 
 pub fn next_step(self: @This()) !?Step {
     const target = self.next_target() orelse return null;
-    return switch (try self.resolve_pipeline(target.pipeline)) {
+    return switch (try self.resolve_pipeline(target.pipeline, 0)) {
         .waits, .running => null,
         .needs => |n| .{
             .remote = target.remote,
@@ -49,7 +50,11 @@ pub const StepStatus = union(enum) {
     runnable,
 };
 
-pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8) !StepStatus {
+const resolve_pipeline_max_depth: u16 = 100;
+
+pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !StepStatus {
+    if (depth >= resolve_pipeline_max_depth)
+        return error.CyclicPipeline;
     if (self.service.get_pipeline(pipeline_name)) |pipeline| {
         for (pipeline.outputs) |output|
             if (self.get_artifact(output.name)) |_|
@@ -68,7 +73,7 @@ pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8) !StepStatus {
                             break :blk;
                     continue :other_pipeline;
                 }
-                switch (try self.resolve_pipeline(other_pipeline.name)) {
+                switch (try self.resolve_pipeline(other_pipeline.name, depth + 1)) {
                     .done => continue,
                     .running => waiting = other_pipeline.name,
                     .waits => |task| waiting = task,
@@ -108,9 +113,9 @@ pub fn create(io: std.Io, service: Weft, env: []const u8, targets: []Step) !@Thi
     };
 }
 
-pub fn get_artifact(self: @This(), pipeline: []const u8) ?*const Artifact {
+pub fn get_artifact(self: @This(), output: []const u8) ?*const Artifact {
     for (self.artifacts) |*art|
-        if (std.mem.eql(u8, art.step.pipeline, pipeline))
+        if (std.mem.eql(u8, art.name, output))
             return art;
 
     return null;
@@ -120,6 +125,7 @@ pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) 
     var buffer: [1 << 10]u8 = undefined;
 
     const filename = try std.fmt.allocPrint(alloc, "{x}.zon", .{self.uuid});
+    defer alloc.free(filename);
 
     const deployments_dir = try proj.open_deployment_dir(io, self.uuid);
     defer deployments_dir.close(io);

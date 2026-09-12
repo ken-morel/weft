@@ -12,7 +12,7 @@ writer: *std.Io.Writer,
 write_crypt: Crypt,
 read_crypt: Crypt,
 
-pub fn init(io: std.Io, secret: *[32]u8, reader: *std.Io.Reader, writer: *std.Io.Writer) !@This() {
+pub fn init(io: std.Io, secret: *const [32]u8, reader: *std.Io.Reader, writer: *std.Io.Writer) !@This() {
     const out_nonce = try Nonce.random(io);
     try out_nonce.write(writer);
     try writer.flush();
@@ -41,6 +41,12 @@ pub fn send(self: *@This(), buffer: []u8) !void {
     try self.writer.flush();
 }
 
+pub fn send_object(self: *@This(), buffer: []u8, data: anytype) !void {
+    var writer: std.Io.Writer = .fixed(buffer);
+    try zoto.serializeValue(&writer, data);
+    try self.send(writer.buffered());
+}
+
 pub fn recv(self: *@This(), alloc: std.mem.Allocator) ![]u8 {
     var tag: [16]u8 = undefined;
     var len: [2]u8 = undefined;
@@ -56,4 +62,13 @@ pub fn recv(self: *@This(), alloc: std.mem.Allocator) ![]u8 {
     try self.read_crypt.decrypt(&tag, data[0..size]);
 
     return data;
+}
+
+pub fn recv_object(self: *@This(), alloc: std.mem.Allocator, comptime T: type) !T {
+    var data: []const u8 = try self.recv(alloc);
+    return try zoto.deserializeValue(null, &data, T);
+}
+pub fn recv_object_buf(self: *@This(), buf: []u8, comptime T: type) !T {
+    var alloc: std.heap.FixedBufferAllocator = .init(buf);
+    return try self.recv_object(alloc.allocator(), T);
 }

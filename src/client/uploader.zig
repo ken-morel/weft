@@ -1,24 +1,25 @@
 const std = @import("std");
 
-const Deployment = @import("../Deployment.zig");
-const ClientInstall = @import("../ClientInstall.zig");
-const Project = @import("../Project.zig");
-const Term = @import("../Term.zig");
 const Client = @import("../Client.zig");
-const ids = @import("../ids.zig");
+const ClientInstall = @import("../ClientInstall.zig");
+const Connection = @import("../Connection.zig");
+const Deployment = @import("../Deployment.zig");
+const Packer = @import("../Packer.zig");
+const Pressor = @import("../Pressor.zig");
+const Project = @import("../Project.zig");
+const proto = @import("../proto.zig");
+const Remote = @import("../Remote.zig");
+const Term = @import("../Term.zig");
 const UUIDv7 = @import("../UUIDv7.zig");
 const Pipeline = @import("../Weft.zig").Pipeline;
-const Remote = @import("../Remote.zig");
-const Connection = @import("../Connection.zig");
 const zoto = @import("../zoto.zig");
-const Packer = @import("../packer.zig").Packer;
 
 pub fn cache_artifact(
     alloc: std.mem.Allocator,
     io: std.Io,
     term: *Term,
     inst: *const ClientInstall,
-    artifact_id: ids.ArtifactId,
+    artifact_id: proto.task.Id,
     project: *const Project,
     deployment: *const Deployment,
 ) !void {
@@ -47,25 +48,27 @@ pub fn send_artifact(
     io: std.Io,
     term: *Term,
     inst: *const ClientInstall,
-    artifact_id: ids.ArtifactId,
+    artifact_id: proto.task.Id,
     project: *const Project,
     deployment: *const Deployment,
     remote: *const Remote,
 ) !void {
+    const buffer = try alloc.alloc(u8, Connection.max_packet_size);
+    defer alloc.free(buffer);
     const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.uuid, artifact_id.pipeline);
     defer alloc.free(artifact_dir_path);
 
-    var client = try Client.connect(alloc, io, remote.*);
+    var client = try Client.connect(alloc, io, remote.address, &remote.token);
     defer client.destroy(alloc, io);
 
     const conn = &client.conn;
 
-    try conn.send_bytes(.{ .request = .artifact_push });
-    try conn.send_bytes(.{ .artifact_id = artifact_id });
-    switch (try conn.recv_ref(null)) {
-        .bool => |has_artifact| if (has_artifact) return,
-        else => return error.SyntaxError,
-    }
+    try conn.send_object(buffer, proto.Request.artifact_push);
+    try conn.send_object(buffer, proto.artifact.push.Req{ .id = artifact_id });
+
+    const has_artifact = try conn.recv_object_buf(buffer, bool);
+    if (has_artifact)
+        return;
 
     try cache_artifact(
         alloc,
@@ -77,7 +80,7 @@ pub fn send_artifact(
         deployment,
     );
 
-    var packer: *Packer = try .create(
+    var packer: Packer = try .packer(
         alloc,
         try std.Io.Dir.cwd().openDir(
             io,
@@ -87,15 +90,38 @@ pub fn send_artifact(
             },
         ),
     );
-    defer packer.destroy(alloc, io);
+    defer packer.deinit(io);
+    const pressor_buffer = try alloc.alloc(u8, Pressor.buffer_size);
+    defer alloc.free(pressor_buffer);
+    var pressor: Pressor = .init(pressor_buffer);
 
-    try client.upload_pack(io, packer);
-    try conn.send_bytes(.{ .end = {} });
+    const output = try alloc.alloc(u8, buffer.len);
+    defer alloc.free(output);
+    while (try packer.get(io, buffer)) |pack| switch (pack) {
+        .file => |path| {
+            buffer[0] = proto.artifact.push.file;
+            std.mem.copyForwards(u8, buffer[1..], path);
+            try client.conn.send(buffer[0 .. 1 + path.len]);
+        },
+        .folder => |path| {
+            buffer[0] = proto.artifact.push.folder;
+            std.mem.copyForwards(u8, buffer[1..], path);
+            try client.conn.send(buffer[0 .. 1 + path.len]);
+        },
+        .data => |data| {
+            var reader: std.Io.Reader = .fixed(data);
+            var writer: std.Io.Writer = .fixed(output);
+            try writer.writeByte(proto.artifact.push.compressed);
+            try pressor.compress(&reader, &writer);
+            try client.conn.send(writer.buffered());
+        },
+    };
+    buffer[0] = proto.artifact.push.end;
+    try client.conn.send(buffer[0..1]);
 
-    switch (try conn.recv_ref(null)) {
-        .ok => try term.success("artifact '{s}' uploaded to {s}", .{ artifact_id.pipeline, remote.name }),
-        .err => |err| return err,
-        else => return error.SyntaxError,
+    const reply = try client.conn.recv_object_buf(buffer, anyerror!proto.artifact.push.Res);
+    if (reply) |_| {} else |err| {
+        return err;
     }
 }
 
@@ -104,7 +130,7 @@ pub fn send_artifact_concurrent(
     io: std.Io,
     term: *Term,
     inst: *const ClientInstall,
-    artifact_id: ids.ArtifactId,
+    artifact_id: proto.task.Id,
     project: *const Project,
     deployment: *const Deployment,
     remote: *const Remote,
@@ -121,8 +147,12 @@ pub fn send_artifact_concurrent(
         deployment,
         remote,
     ) catch |err| {
-        term.err("error sending artifact '{s}': {any}", .{ artifact_id.pipeline, err }) catch {};
-        failed.* = @intFromError(err);
+        if (err == error.HasArtifact) {
+            term.err("Remote has artifact, skipping", .{}) catch {};
+        } else {
+            term.err("error sending artifact '{s}': {any}", .{ artifact_id.pipeline, err }) catch {};
+            failed.* = @intFromError(err);
+        }
     };
 }
 pub fn send_required_artifacts(
@@ -142,14 +172,12 @@ pub fn send_required_artifacts(
         try group.concurrent(
             io,
             send_artifact_concurrent,
-            .{ alloc, io, term, &inst, ids.ArtifactId{
+            .{ alloc, io, term, &inst, proto.task.Id{
                 .deployment = deployment.uuid,
                 .pipeline = input.name,
                 .env = deployment.env,
-                .service = .{
-                    .name = deployment.service.name,
-                    .workspace = deployment.service.workspace,
-                },
+                .service = deployment.service.name,
+                .workspace = deployment.service.workspace,
             }, &project, &deployment, &remote, &failed },
         );
     }

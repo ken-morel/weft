@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const UUIDv7 = @import("../UUIDv7.zig");
 
 const weft_dir = "/var/lib/weft/";
@@ -12,10 +13,10 @@ pub inline fn artifact(
     e: []const u8,
     d: []const u8,
     p: []const u8,
-) []u8 {
+) ![]u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ w, s, e, d, p },
+        &.{ weft_artifacts_dir, w, s, e, d, p },
     );
 }
 pub inline fn artifacts(
@@ -24,10 +25,10 @@ pub inline fn artifacts(
     s: []const u8,
     e: []const u8,
     d: []const u8,
-) []u8 {
+) ![]u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ w, s, e, d },
+        &.{ weft_artifacts_dir, w, s, e, d },
     );
 }
 
@@ -38,7 +39,7 @@ pub inline fn unit_name(
     e: []const u8,
     d: []const u8,
     p: []const u8,
-) []u8 {
+) ![]u8 {
     return try std.mem.join(
         alloc,
         "--",

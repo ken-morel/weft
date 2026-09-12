@@ -11,10 +11,6 @@ walker: ?std.Io.Dir.Walker = null,
 handle: ?std.Io.File = null,
 
 pub fn packer(alloc: std.mem.Allocator, dir: std.Io.Dir) !@This() {
-    const self = try alloc.create(@This());
-    self.root = dir;
-    self.walker = try dir.walk(alloc);
-    self.handle = null;
     return .{
         .root = dir,
         .walker = try dir.walk(alloc),
@@ -26,15 +22,15 @@ pub fn unpacker(dir: std.Io.Dir) !@This() {
     };
 }
 
-pub fn deinit(self: @This(), io: std.Io) void {
+pub fn deinit(self: *@This(), io: std.Io) void {
     self.root.close(io);
-    if (self.walker) |walker|
+    if (self.walker) |*walker|
         walker.deinit();
     if (self.handle) |handle|
         handle.close(io);
 }
 
-pub fn get(self: @This(), io: std.Io, buffer: []u8) !?Pack {
+pub fn get(self: *@This(), io: std.Io, buffer: []u8) !?Pack {
     if (self.walker == null)
         return error.NotAnUnpacker;
     next: while (true) {
@@ -48,12 +44,12 @@ pub fn get(self: @This(), io: std.Io, buffer: []u8) !?Pack {
                 else
                     return err;
             if (read > 0)
-                return .{ .data = read };
+                return .{ .data = buffer[0..read] };
             file_handle.close(io);
             self.handle = null;
             continue :next;
-        } else {
-            const entry = try self.walker.next(io) orelse return null;
+        } else if (self.walker) |*walker| {
+            const entry = try walker.next(io) orelse return null;
 
             switch (entry.kind) {
                 .directory => return .{ .folder = entry.path },
@@ -63,10 +59,10 @@ pub fn get(self: @This(), io: std.Io, buffer: []u8) !?Pack {
                 },
                 else => continue :next,
             }
-        }
+        } else return error.NotAnUnpacker;
     }
 }
-pub fn put(self: @This(), io: std.Io, pack: Pack) !void {
+pub fn put(self: *@This(), io: std.Io, pack: Pack) !void {
     switch (pack) {
         .folder => |path| {
             try self.root.createDirPath(io, path);
