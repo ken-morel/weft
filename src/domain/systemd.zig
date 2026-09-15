@@ -1,5 +1,36 @@
 const std = @import("std");
 
+pub const StandardOutput = union(enum) {
+    inherit,
+    null,
+    tty,
+    journal,
+    kmsg,
+    journal_plus_console,
+    kmsg_plus_console,
+    console,
+    socket,
+    file: []const u8,
+    append: []const u8,
+    truncate: []const u8,
+    fd: []const u8,
+
+    fn format_property(self: @This(), alloc: std.mem.Allocator, pre: []const u8) ![]const u8 {
+        const tag = @tagName(self);
+        const name: []const u8, const val: ?[]const u8 = switch (self) {
+            .inherit, .null, .tty, .journal, .kmsg, .console, .socket => .{ tag[0..], &.{} },
+            .journal_plus_console => .{ "journal+console"[0..], &.{} },
+            .kmsg_plus_console => .{ "kmsg+console"[0..], &.{} },
+            .file, .append, .truncate, .fd => |val| .{ tag, val },
+        };
+
+        return if (val) |v|
+            std.mem.join(alloc, &.{}, &.{ "-p", pre, "=", name, ":", v })
+        else
+            std.mem.join(alloc, &.{}, &.{ "-p", pre, "=", name });
+    }
+};
+
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -23,6 +54,8 @@ pub fn run(
             env: []const []const u8 = &.{},
             wait: bool = false,
             state_directories: []const []const u8 = &.{},
+            stdout: ?StandardOutput = null,
+            stderr: ?StandardOutput = null,
         } = .{},
         fs: struct {
             protect_home: enum { no, yes, tmpfs, read_only } = .no,
@@ -119,6 +152,11 @@ pub fn run(
             try cmd.append(alloc, "-E");
             try cmd.append(alloc, env);
         }
+        if (opts.run.stdout) |stdout|
+            try cmd.append(alloc, try stdout.format_property(alloc, "StandardOutput"));
+
+        if (opts.run.stderr) |stderr|
+            try cmd.append(alloc, try stderr.format_property(alloc, "StandardError"));
 
         break :run;
     }

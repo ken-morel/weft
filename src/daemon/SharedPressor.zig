@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Pressor = @import("../Pressor.zig");
+const Pressor = @import("../wire/Pressor.zig");
 
 io: std.Io,
 output: []u8,

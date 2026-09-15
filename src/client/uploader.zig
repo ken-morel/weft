@@ -1,18 +1,18 @@
 const std = @import("std");
 
-const Client = @import("../Client.zig");
-const ClientInstall = @import("../ClientInstall.zig");
-const Connection = @import("../Connection.zig");
-const Deployment = @import("../Deployment.zig");
-const Packer = @import("../Packer.zig");
-const Pressor = @import("../Pressor.zig");
-const Project = @import("../Project.zig");
-const proto = @import("../proto.zig");
-const Remote = @import("../Remote.zig");
-const Term = @import("../Term.zig");
-const UUIDv7 = @import("../UUIDv7.zig");
-const Pipeline = @import("../Weft.zig").Pipeline;
-const zoto = @import("../zoto.zig");
+const Client = @import("Client.zig");
+const ClientInstall = @import("ClientInstall.zig");
+const Connection = @import("../wire/Connection.zig");
+const Deployment = @import("Deployment.zig");
+const Packer = @import("../wire/Packer.zig");
+const Pressor = @import("../wire/Pressor.zig");
+const Project = @import("Project.zig");
+const proto = @import("../wire/proto.zig");
+const Remote = @import("Remote.zig");
+const Term = @import("../domain/Term.zig");
+const UUIDv7 = @import("../util/UUIDv7.zig");
+const Pipeline = @import("../domain/Weft.zig").Pipeline;
+const zoto = @import("../util/zoto.zig");
 
 pub fn cache_artifact(
     alloc: std.mem.Allocator,

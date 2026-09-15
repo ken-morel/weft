@@ -1,5 +1,11 @@
-const Weft = @import("Weft.zig");
-const UUIDv7 = @import("UUIDv7.zig");
+const std = @import("std");
+
+const UUIDv7 = @import("../util/UUIDv7.zig");
+const Weft = @import("../domain/Weft.zig");
+
+pub fn Res(comptime T: type) type {
+    return anyerror!T;
+}
 
 pub const artifact = struct {
     pub const push = struct {
@@ -39,20 +45,28 @@ pub const task = struct {
         };
         pub const Res = struct {};
     };
-    pub const kill = struct {
-        pub const Req = struct {
-            task: task.Id,
+};
+pub const system = struct {
+    pub const stats = struct {
+        pub const Stats = struct {
+            const MemInfo = struct {
+                total: u64,
+                free: u64,
+                available: ?u64,
+                compressed: ?u64,
+            };
+            const Mem = union(enum) {
+                swapfile: MemInfo,
+                zram: MemInfo,
+                ram: MemInfo,
+            };
+            time: std.Io.Timestamp,
+            mem: []Mem,
         };
-    };
-    pub const status = struct {
-        pub const Req = struct {
-            task: task.Id,
-        };
-    };
-    pub const logs = struct {
-        pub const Req = struct {
-            task: task.Id,
-            stream: bool,
+
+        pub const Req = struct {};
+        pub const Res = struct {
+            stats: Stats,
         };
     };
 };
@@ -66,4 +80,6 @@ pub const Request = enum(u8) {
     task_status,
 
     task_logs,
+
+    system_stats,
 };

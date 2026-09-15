@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const UUIdv7 = @import("UUIDv7.zig");
-const Weft = @import("Weft.zig");
+const UUIdv7 = @import("../util/UUIDv7.zig");
+const Weft = @import("../domain/Weft.zig");
 
 dir: std.Io.Dir,
 

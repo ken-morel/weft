@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const UUIDv7 = @import("../UUIDv7.zig");
+const UUIDv7 = @import("../util/UUIDv7.zig");
 
 pub const var_lib = "/var/lib/";
 

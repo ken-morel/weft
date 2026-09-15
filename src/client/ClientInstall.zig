@@ -1,8 +1,8 @@
 const std = @import("std");
 
 pub const Remote = @import("Remote.zig");
-const Term = @import("Term.zig");
-const UUIDv7 = @import("UUIDv7.zig");
+const Term = @import("../domain/Term.zig");
+const UUIDv7 = @import("../util/UUIDv7.zig");
 
 pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)));
 pub const read_only_user_mode = read_only_user_permissions.toMode();

@@ -1,16 +1,16 @@
 const std = @import("std");
 
-const Connection = @import("../Connection.zig");
-const DaemonInstall = @import("../DaemonInstall.zig");
-const Packer = @import("../Packer.zig");
-const Pressor = @import("../Pressor.zig");
-const proto = @import("../proto.zig");
-const Server = @import("../Server.zig");
-const systemd = @import("../systemd.zig");
-const Term = @import("../Term.zig");
-const zoto = @import("../zoto.zig");
+const paths = @import("../domain/paths.zig");
+const systemd = @import("../domain/systemd.zig");
+const Term = @import("../domain/Term.zig");
+const zoto = @import("../util/zoto.zig");
+const Connection = @import("../wire/Connection.zig");
+const Packer = @import("../wire/Packer.zig");
+const Pressor = @import("../wire/Pressor.zig");
+const proto = @import("../wire/proto.zig");
 const Daemon = @import("Daemon.zig");
-const paths = @import("paths.zig");
+const DaemonInstall = @import("DaemonInstall.zig");
+const Server = @import("Server.zig");
 const Worker = @import("Worker.zig");
 
 const stream_buffer_size = 4 << 10;
@@ -64,15 +64,19 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
 
     var response_buf: [16]u8 = undefined;
     switch (request) {
-        .artifact_push => self.handle_artifact_push(&conn) catch |err|
-            try conn.send_object(&response_buf, anyerror!proto.artifact.push.Res, err),
-        .task_spawn => self.handle_task_spawn(&conn) catch |err|
-            try conn.send_object(&response_buf, anyerror!proto.task.spawn.Res, err),
-        else => return error.NotImplemented,
+        .artifact_push => {
+            const res = self.handle_artifact_push(&conn);
+            try conn.send_object(&response_buf, @TypeOf(res), res);
+        },
+        .task_spawn => {
+            const res = self.handle_task_spawn(&conn);
+            try conn.send_object(&response_buf, @TypeOf(res), res);
+        },
+        else => {},
     }
 }
 
-fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
+fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artifact.push.Res) {
     const alloc = self.allocator.allocator();
     const io = self.daemon.io;
     var buf: [32]u8 = undefined;

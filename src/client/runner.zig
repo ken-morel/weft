@@ -1,13 +1,13 @@
 const std = @import("std");
 
-const Client = @import("../Client.zig");
-const ClientInstall = @import("../ClientInstall.zig");
-const Connection = @import("../Connection.zig");
-const Deployment = @import("../Deployment.zig");
-const Project = @import("../Project.zig");
-const proto = @import("../proto.zig");
-const Remote = @import("../Remote.zig");
-const Term = @import("../Term.zig");
+const Client = @import("Client.zig");
+const ClientInstall = @import("ClientInstall.zig");
+const Connection = @import("../wire/Connection.zig");
+const Deployment = @import("Deployment.zig");
+const Project = @import("Project.zig");
+const proto = @import("../wire/proto.zig");
+const Remote = @import("Remote.zig");
+const Term = @import("../domain/Term.zig");
 const uploader = @import("uploader.zig");
 
 pub fn run_deployment(

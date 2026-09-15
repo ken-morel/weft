@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const Crypt = @import("Crypt.zig");
-const Deployment = @import("Deployment.zig");
+const Deployment = @import("../client/Deployment.zig");
 const Nonce = @import("Nonce.zig");
-const zoto = @import("zoto.zig");
+const zoto = @import("../util/zoto.zig");
 
 pub const max_packet_size = std.math.maxInt(u16);
 

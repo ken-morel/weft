@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const Connection = @import("../Connection.zig");
-const DaemonInstall = @import("../DaemonInstall.zig");
-const Server = @import("../Server.zig");
-const Term = @import("../Term.zig");
+const Connection = @import("../wire/Connection.zig");
+const DaemonInstall = @import("DaemonInstall.zig");
+const Server = @import("Server.zig");
+const Term = @import("../domain/Term.zig");
 const SharedPressor = @import("SharedPressor.zig");
 const Worker = @import("Worker.zig");
 
@@ -49,9 +49,8 @@ pub fn run(self: *@This()) !void {
     var permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
     try self.term.debug("spawned {d} workers", .{workers.len});
 
-    for (workers) |*worker| {
+    for (workers) |*worker|
         worker.* = try .init(try self.alloc.alignedAlloc(u8, comptime std.mem.Alignment.fromByteUnits(std.heap.page_size_min), Worker.worker_heap_mem), self);
-    }
 
     while (true) {
         try permits.wait(self.io);

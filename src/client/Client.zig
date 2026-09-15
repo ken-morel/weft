@@ -1,8 +1,8 @@
 const std = @import("std");
 
-pub const Connection = @import("Connection.zig");
+pub const Connection = @import("../wire/Connection.zig");
 const Remote = @import("Remote.zig");
-const Server = @import("Server.zig");
+const Server = @import("../daemon/Server.zig");
 
 conn: Connection,
 rw: struct { std.Io.net.Stream.Reader, std.Io.net.Stream.Writer },

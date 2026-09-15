@@ -1,12 +1,12 @@
 const std = @import("std");
 
 const cmd_do = @import("client/do.zig");
-const ClientInstall = @import("ClientInstall.zig");
+const ClientInstall = @import("client/ClientInstall.zig");
 const Daemon = @import("daemon/Daemon.zig");
-const DaemonInstall = @import("DaemonInstall.zig");
-const Project = @import("Project.zig");
-const Step = @import("Step.zig");
-const Term = @import("Term.zig");
+const DaemonInstall = @import("daemon/DaemonInstall.zig");
+const Project = @import("client/Project.zig");
+const Step = @import("client/Step.zig");
+const Term = @import("domain/Term.zig");
 
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
@@ -111,7 +111,8 @@ pub fn main(init: std.process.Init) !void {
 
             return cmd_do.run(alloc, init.io, &term, project, installation, targets_slice);
         }
-    } else show_usage(&term);
+    }
+    show_usage(&term);
 }
 
 test {

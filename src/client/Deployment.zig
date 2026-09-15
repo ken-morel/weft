@@ -2,8 +2,8 @@ const std = @import("std");
 
 const Project = @import("Project.zig");
 pub const Step = @import("Step.zig");
-const UUIDv7 = @import("UUIDv7.zig");
-const Weft = @import("Weft.zig");
+const UUIDv7 = @import("../util/UUIDv7.zig");
+const Weft = @import("../domain/Weft.zig");
 
 uuid: UUIDv7,
 

@@ -1,5 +1,5 @@
-const UUIDv7 = @import("UUIDv7.zig");
-const Weft = @import("Weft.zig");
+const UUIDv7 = @import("../util/UUIDv7.zig");
+const Weft = @import("../domain/Weft.zig");
 
 secret: [32]u8,
 listener: std.Io.net.Server,
@@ -32,5 +32,5 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 const std = @import("std");
-const Connection = @import("Connection.zig");
+const Connection = @import("../wire/Connection.zig");
 const Server = @This();
