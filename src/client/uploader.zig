@@ -18,10 +18,10 @@ pub fn cache_artifact(
     alloc: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    inst: *const ClientInstall,
     artifact_id: proto.task.Id,
     project: *const Project,
     deployment: *const Deployment,
+    remotes: []const Remote,
 ) !void {
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
@@ -38,19 +38,23 @@ pub fn cache_artifact(
                 break :artifact artifact;
         unreachable;
     };
-    const remote = (try inst.get_remote(arena.allocator(), io, source_artifact.remote)) orelse return error.InvalidRemote;
+    const remote: *const Remote = remote: for (remotes) |*remote| {
+        if (std.mem.eql(u8, remote.get_name(), source_artifact.remote))
+            break :remote remote;
+    } else return error.InvalidRemote;
+
     // get the artifact from the remote...
-    try term.info("requesting artifact '{s}' from remote {s}", .{ artifact_id.pipeline, remote.name });
+    try term.info("requesting artifact '{s}' from remote {s}", .{ artifact_id.pipeline, remote.get_name() });
 }
 
 pub fn send_artifact(
     alloc: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    inst: *const ClientInstall,
     artifact_id: proto.task.Id,
     project: *const Project,
     deployment: *const Deployment,
+    remotes: []const Remote,
     remote: *const Remote,
 ) !void {
     const buffer = try alloc.alloc(u8, Connection.max_packet_size);
@@ -58,7 +62,7 @@ pub fn send_artifact(
     const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.uuid, artifact_id.pipeline);
     defer alloc.free(artifact_dir_path);
 
-    var client = try Client.connect(alloc, io, remote.address, &remote.token);
+    var client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
     defer client.destroy(alloc, io);
 
     const conn = &client.conn;
@@ -74,10 +78,10 @@ pub fn send_artifact(
         alloc,
         io,
         term,
-        inst,
         artifact_id,
         project,
         deployment,
+        remotes,
     );
 
     var packer: Packer = try .packer(
@@ -129,22 +133,22 @@ pub fn send_artifact_concurrent(
     alloc: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    inst: *const ClientInstall,
     artifact_id: proto.task.Id,
     project: *const Project,
     deployment: *const Deployment,
+    remotes: []const Remote,
     remote: *const Remote,
     failed: *?u16,
 ) error{Canceled}!void {
-    term.info("sending artifact {s} to remote {s}", .{ artifact_id.pipeline, remote.name }) catch {};
+    term.info("sending artifact {s} to remote {s}", .{ artifact_id.pipeline, remote.get_name() }) catch {};
     send_artifact(
         alloc,
         io,
         term,
-        inst,
         artifact_id,
         project,
         deployment,
+        remotes,
         remote,
     ) catch |err| {
         if (err == error.HasArtifact) {
@@ -159,11 +163,11 @@ pub fn send_required_artifacts(
     alloc: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    inst: ClientInstall,
     project: Project,
     deployment: Deployment,
     pipeline: Pipeline,
-    remote: Remote,
+    remotes: []const Remote,
+    remote: *const Remote,
 ) !void {
     var group: std.Io.Group = .init;
 
@@ -172,13 +176,13 @@ pub fn send_required_artifacts(
         try group.concurrent(
             io,
             send_artifact_concurrent,
-            .{ alloc, io, term, &inst, proto.task.Id{
+            .{ alloc, io, term, proto.task.Id{
                 .deployment = deployment.uuid,
                 .pipeline = input.name,
                 .env = deployment.env,
                 .service = deployment.service.name,
                 .workspace = deployment.service.workspace,
-            }, &project, &deployment, &remote, &failed },
+            }, &project, &deployment, remotes, remote, &failed },
         );
     }
     try group.await(io);

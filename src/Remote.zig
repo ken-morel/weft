@@ -1,18 +1,17 @@
 const std = @import("std");
 
-name: []const u8,
-address: std.Io.net.IpAddress,
-token: [32]u8,
+name: ?[]const u8 = null,
+address: struct { []const u8, u16 } = .{ "127.0.0.1", 9338 },
+token: []const u8,
 
-pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
-    const name = try alloc.dupe(u8, self.name);
-
-    return .{
-        .name = name,
-        .address = self.address,
-        .token = self.token,
-    };
+pub fn get_token(self: @This()) ![32]u8 {
+    var out: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&out, self.token);
+    return out;
 }
-pub fn free(self: @This(), alloc: std.mem.Allocator) void {
-    alloc.free(self.name);
+pub fn get_address(self: @This()) !std.Io.net.IpAddress {
+    return try .parse(self.address.@"0", self.address.@"1");
+}
+pub fn get_name(self: @This()) []const u8 {
+    return self.name orelse "local";
 }

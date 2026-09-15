@@ -24,7 +24,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
 
     const server = try Server.init(
         io,
-        &config.secret,
+        &try config.get_secret(),
         config.port,
     );
     return .{

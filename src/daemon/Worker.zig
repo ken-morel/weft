@@ -46,7 +46,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     var reader = stream.reader(io, try alloc.alloc(u8, stream_buffer_size));
     var writer = stream.writer(io, try alloc.alloc(u8, stream_buffer_size));
 
-    var conn: Connection = try .init(io, &self.daemon.config.secret, &reader.interface, &writer.interface);
+    var conn: Connection = try .init(io, &try self.daemon.config.get_secret(), &reader.interface, &writer.interface);
 
     const request = request: {
         var req_buffer: [16]u8 = undefined;

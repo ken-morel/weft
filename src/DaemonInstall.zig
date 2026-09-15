@@ -8,10 +8,17 @@ const Term = @import("Term.zig");
 const UUIDv7 = @import("UUIDv7.zig");
 
 const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
+
 pub const Config = struct {
-    secret: [32]u8 = undefined,
+    secret: []const u8,
     port: u16 = 9338,
     max_workers: u32 = 8,
+
+    pub fn get_secret(self: @This()) ![32]u8 {
+        var secret: [32]u8 = undefined;
+        _ = try std.fmt.hexToBytes(&secret, self.secret);
+        return secret;
+    }
 };
 
 temp_dir: std.Io.Dir,
@@ -80,8 +87,12 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
     }
     try term.debug("installed binary to /usr/local/bin/weft", .{});
     write_config: {
-        var config = Config{};
-        try io.randomSecure(&config.secret);
+        var secret: [32]u8 = undefined;
+        try io.randomSecure(&secret);
+        const secret_hex = std.fmt.bytesToHex(&secret, .lower);
+        const config = Config{
+            .secret = &secret_hex,
+        };
 
         var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
             .permissions = read_only_user_permissions,
@@ -96,8 +107,7 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
 
         try config_file.replace(io);
 
-        try term.print("secret: ", .{});
-        try term.print("{s}", .{std.fmt.bytesToHex(config.secret, .upper)});
+        try term.println("secret: {s}", .{config.secret});
         try term.flush();
 
         break :write_config;

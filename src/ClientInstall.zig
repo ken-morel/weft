@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const Remote = @import("Remote.zig");
+const Term = @import("Term.zig");
 const UUIDv7 = @import("UUIDv7.zig");
 
 pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)));
@@ -57,7 +58,7 @@ pub fn open_data_dir(alloc: std.mem.Allocator, io: std.Io, env: *const std.proce
     return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
 }
 
-pub fn get_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io) ![]Remote {
+pub fn get_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io, term: *Term) ![]Remote {
     const content = self.config_dir.readFileAllocOptions(
         io,
         remotes_zon_file_name,
@@ -71,37 +72,11 @@ pub fn get_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io) ![]Remot
         else
             err;
     defer alloc.free(content);
-    return std.zon.parse.fromSliceAlloc([]Remote, alloc, content, null, .{});
-}
-pub fn get_remote(self: @This(), alloc: std.mem.Allocator, io: std.Io, name: []const u8) !?Remote {
-    var arena: std.heap.ArenaAllocator = .init(alloc);
-    defer arena.deinit();
+    var diag: std.zon.parse.Diagnostics = .{};
 
-    for (try self.get_remotes(arena.allocator(), io)) |remote|
-        if (std.mem.eql(u8, remote.name, name))
-            return try remote.dupe(alloc);
-
-    return null;
-}
-
-pub fn set_remotes(self: @This(), io: std.Io, remotes: []const Remote) !void {
-    var atomic = try self.config_dir.createFileAtomic(io, remotes_zon_file_name, .{ .permissions = read_only_user_permissions, .replace = true });
-    defer atomic.deinit(io);
-    var buffer: [4 << 10]u8 = undefined;
-    var writer = atomic.file.writer(io, &buffer);
-    try std.zon.stringify.serialize(remotes, .{}, &writer.interface);
-    try writer.flush();
-    try atomic.replace(io);
-}
-
-pub fn add_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io, items: []const Remote) !void {
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-    const aac = arena.allocator();
-
-    const old_remotes = try self.get_remotes(aac, io);
-    const remotes = try aac.realloc(old_remotes, old_remotes.len + items.len);
-
-    std.mem.copyForwards(Remote, remotes[old_remotes.len..], items);
-    try self.set_remotes(io, remotes);
+    return std.zon.parse.fromSliceAlloc([]Remote, alloc, content, &diag, .{}) catch |err| {
+        try diag.format(term.writer());
+        term.flush() catch {};
+        return err;
+    };
 }

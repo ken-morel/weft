@@ -6,6 +6,7 @@ const Connection = @import("../Connection.zig");
 const Deployment = @import("../Deployment.zig");
 const Project = @import("../Project.zig");
 const proto = @import("../proto.zig");
+const Remote = @import("../Remote.zig");
 const Term = @import("../Term.zig");
 const uploader = @import("uploader.zig");
 
@@ -17,6 +18,7 @@ pub fn run_deployment(
     inst: ClientInstall,
     deployment: *Deployment,
 ) !void {
+    const remotes = try inst.get_remotes(alloc, io, term);
     while (!deployment.completed()) {
         while (try deployment.next_step()) |next_step|
             try spawn_step(
@@ -24,8 +26,8 @@ pub fn run_deployment(
                 io,
                 term,
                 project,
-                inst,
                 deployment,
+                remotes,
                 next_step,
             );
 
@@ -39,8 +41,8 @@ pub fn spawn_step(
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: ClientInstall,
     deployment: *Deployment,
+    remotes: []const Remote,
     step: Deployment.Step,
 ) !void {
     var buffer = try alloc.alloc(u8, Connection.max_packet_size);
@@ -48,18 +50,18 @@ pub fn spawn_step(
     try term.info("spawning deployment step: {s} on {s}", .{ step.pipeline, step.remote });
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
-    const remote = (try inst.get_remote(arena.allocator(), io, step.remote)) orelse {
-        try term.err("invalid remote: {s}", .{step.remote});
-        return error.InvalidRemote;
-    };
+    const remote: *const Remote = remote: for (remotes) |*remote| {
+        if (std.mem.eql(u8, remote.get_name(), step.remote))
+            break :remote remote;
+    } else return error.InvalidRemote;
     const pipeline = deployment.service.get_pipeline(step.pipeline) orelse {
         try term.err("invalid pipeline: {s}", .{step.pipeline});
         return error.InvalidPipeline;
     };
 
-    try uploader.send_required_artifacts(alloc, io, term, inst, project, deployment.*, pipeline.*, remote);
+    try uploader.send_required_artifacts(alloc, io, term, project, deployment.*, pipeline.*, remotes, remote);
 
-    const client = try Client.connect(alloc, io, remote.address, &remote.token);
+    const client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
     defer client.destroy(alloc, io);
 
     try client.conn.send_object(buffer, proto.task.spawn.Req{
