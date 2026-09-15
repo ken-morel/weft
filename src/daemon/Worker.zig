@@ -29,8 +29,11 @@ pub fn init(memory: []u8, daemon: *Daemon) !@This() {
 }
 
 pub fn run(self: *@This(), permits: *std.Io.Semaphore, stream: std.Io.net.Stream) void {
-    self._run(stream) catch |err|
+    self._run(stream) catch |err| {
         self.daemon.term.err("worker error: {any}", .{err}) catch {};
+        if (@errorReturnTrace()) |trace|
+            std.debug.dumpErrorReturnTrace(trace);
+    };
 
     stream.close(self.daemon.io);
     self.allocator.reset();
@@ -49,7 +52,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     var conn: Connection = try .init(io, &try self.daemon.config.get_secret(), &reader.interface, &writer.interface);
 
     const request = request: {
-        var req_buffer: [16]u8 = undefined;
+        var req_buffer: [1 << 10]u8 = undefined;
         break :request conn.recv_object_buf(&req_buffer, proto.Request) catch |err|
             return if (err == error.BufferTooSmall)
                 error.InvalidRequest
@@ -62,9 +65,9 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     var response_buf: [16]u8 = undefined;
     switch (request) {
         .artifact_push => self.handle_artifact_push(&conn) catch |err|
-            try conn.send_object(&response_buf, @as(anyerror!proto.artifact.push.Res, err)),
+            try conn.send_object(&response_buf, anyerror!proto.artifact.push.Res, err),
         .task_spawn => self.handle_task_spawn(&conn) catch |err|
-            try conn.send_object(&response_buf, @as(anyerror!proto.task.spawn.Res, err)),
+            try conn.send_object(&response_buf, anyerror!proto.task.spawn.Res, err),
         else => return error.NotImplemented,
     }
 }
@@ -106,15 +109,14 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
             else
                 return err;
         try self.daemon.term.info("artifact already present, skipping upload", .{});
-        try conn.send_object(&buf, true);
+        try conn.send_object(&buf, bool, true);
         return;
     }
-    try conn.send_object(&buf, false);
+    try conn.send_object(&buf, bool, false);
 
     const temp_dir = try self.daemon.install.open_temp(io, "artifact");
-    defer temp_dir.close(io);
 
-    receive_artifacts: {
+    const temp_dir_path = receive_artifacts: {
         var packer: Packer = try .unpacker(temp_dir);
         defer packer.deinit(io);
 
@@ -144,24 +146,20 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) !void {
                 else => return error.InvalidPack,
             }
         }
-        break :receive_artifacts;
-    }
+        break :receive_artifacts try temp_dir.realPathFileAlloc(io, ".", alloc);
+    };
 
     if (std.fs.path.dirname(artifact_dir_path)) |parent|
         std.Io.Dir.cwd().createDirPath(io, parent) catch {};
 
     try std.Io.Dir.cwd().rename(
-        try temp_dir.realPathFileAlloc(
-            io,
-            ".",
-            alloc,
-        ),
+        temp_dir_path,
         std.Io.Dir.cwd(),
         artifact_dir_path,
         io,
     );
     var buff: [32]u8 = undefined;
-    try conn.send_object(&buff, @as(anyerror!proto.artifact.push.Res, proto.artifact.push.Res{}));
+    try conn.send_object(&buff, anyerror!proto.artifact.push.Res, proto.artifact.push.Res{});
     self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path}) catch {};
 }
 
@@ -335,7 +333,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
     try term.success("task {s} started", .{req.task.pipeline});
     var buf: [32]u8 = undefined;
-    try conn.send_object(&buf, @as(anyerror!proto.task.spawn.Res, proto.task.spawn.Res{}));
+    try conn.send_object(&buf, anyerror!proto.task.spawn.Res, proto.task.spawn.Res{});
 
     return;
 }

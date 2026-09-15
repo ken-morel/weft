@@ -64,7 +64,8 @@ pub fn spawn_step(
     const client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
     defer client.destroy(alloc, io);
 
-    try client.conn.send_object(buffer, proto.task.spawn.Req{
+    try client.conn.send_object(buffer, proto.Request, .task_spawn);
+    try client.conn.send_object(buffer, proto.task.spawn.Req, .{
         .task = .{
             .deployment = deployment.uuid,
             .env = deployment.env,

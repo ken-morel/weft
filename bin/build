@@ -1,5 +1,6 @@
 #!/usr/bin/sh
 
+realpath .
 cp -r $IN/src/* .
 
 zig build

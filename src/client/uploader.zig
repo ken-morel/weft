@@ -67,8 +67,8 @@ pub fn send_artifact(
 
     const conn = &client.conn;
 
-    try conn.send_object(buffer, proto.Request.artifact_push);
-    try conn.send_object(buffer, proto.artifact.push.Req{ .id = artifact_id });
+    try conn.send_object(buffer, proto.Request, .artifact_push);
+    try conn.send_object(buffer, proto.artifact.push.Req, .{ .id = artifact_id });
 
     const has_artifact = try conn.recv_object_buf(buffer, bool);
     if (has_artifact)

@@ -1,8 +1,8 @@
-pub const Connection = @import("Connection.zig");
-const Server = @import("Server.zig");
 const std = @import("std");
 
+pub const Connection = @import("Connection.zig");
 const Remote = @import("Remote.zig");
+const Server = @import("Server.zig");
 
 conn: Connection,
 rw: struct { std.Io.net.Stream.Reader, std.Io.net.Stream.Writer },
@@ -36,6 +36,7 @@ pub fn connect(alloc: std.mem.Allocator, io: std.Io, addr: std.Io.net.IpAddress,
     errdefer alloc.destroy(self);
 
     try self.init(alloc, io, stream, secret);
+    errdefer self.destroy(alloc, io);
     return self;
 }
 

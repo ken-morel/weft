@@ -2,83 +2,104 @@ const std = @import("std");
 
 const endian: std.builtin.Endian = .little;
 
-pub fn hashType(comptime T: type) u64 {
-    comptime {
-        var h: u64 = 14695981039346656037;
-        const prime = 1099511628211;
+/// Serialization and deserialization options
+pub const Options = struct {
+    /// The serialized data contains a heder
+    header: bool = false,
+    /// Specify an integer type to use it as integer size for the hash,
+    /// or null if you don't want a type hash
+    hash: ?type = u64,
+};
 
-        const info = @typeInfo(T);
+/// Get a hash of type T, the hash is a u64 truncated to type I
+pub fn hashType(comptime T: type, comptime I: type) I {
+    var h: u64 = @intCast(14695981039346656037);
+    const prime = 1099511628211;
 
-        for (@tagName(info)) |char| h = (h ^ char) *% prime;
+    const info = @typeInfo(T);
 
-        switch (info) {
-            .void => {},
-            .bool => h = (h ^ @as(u64, 1)) *% prime,
+    for (@tagName(info)) |char|
+        h = (h ^ char) *% prime;
 
-            .int => |i| {
-                h = (h ^ i.bits) *% prime;
-                h = (h ^ @intFromEnum(i.signedness)) *% prime;
-            },
+    switch (info) {
+        .void => {},
+        .bool => h = (h ^ @as(u64, 1)) *% prime,
+        .int => |i| {
+            h = (h ^ i.bits) *% prime;
+            h = (h ^ @intFromEnum(i.signedness)) *% prime;
+        },
+        .float => |f| h = (f.bits ^ h) *% prime,
+        .@"struct" => |s| {
+            for (s.fields) |f| {
+                for (f.name) |char|
+                    h = (h ^ char) *% prime;
+                h = (h ^ hashType(f.type, u64)) *% prime;
+            }
+        },
 
-            .float => |f| {
-                h = (f.bits ^ h) *% prime;
-            },
+        .@"union" => |u| {
+            if (u.tag_type) |tt|
+                h = (h ^ hashType(tt, u64)) *% prime;
+            for (u.fields) |f| {
+                for (f.name) |char|
+                    h = (h ^ char) *% prime;
+                h = (h ^ hashType(f.type, u64)) *% prime;
+            }
+        },
 
-            .@"struct" => |s| {
-                for (s.fields) |f| {
-                    for (f.name) |char| h = (h ^ char) *% prime;
-                    h = (h ^ hashType(f.type)) *% prime;
-                }
-            },
+        .@"enum" => |e| {
+            h = (h ^ hashType(e.tag_type, u64)) *% prime;
+            for (e.fields) |f| {
+                for (f.name) |char|
+                    h = (h ^ char) *% prime;
+                h = (h ^ @as(u64, f.value)) *% prime;
+            }
+        },
 
-            .@"union" => |u| {
-                if (u.tag_type) |tt| h = (h ^ hashType(tt)) *% prime;
-                for (u.fields) |f| {
-                    for (f.name) |char| h = (h ^ char) *% prime;
-                    h = (h ^ hashType(f.type)) *% prime;
-                }
-            },
+        .pointer => |p| {
+            h = (h ^ @intFromEnum(p.size)) *% prime;
+            h = (h ^ @as(u64, if (p.is_const) 1 else 0)) *% prime;
+            for (@typeName(p.child)) |char|
+                h = (h ^ char) *% prime;
+        },
 
-            .@"enum" => |e| {
-                h = (h ^ hashType(e.tag_type)) *% prime;
-                for (e.fields) |f| {
-                    for (f.name) |char| h = (h ^ char) *% prime;
-                    h = (h ^ @as(u64, f.value)) *% prime;
-                }
-            },
+        .array => |a| {
+            h = (h ^ a.len) *% prime;
+            h = (h ^ hashType(a.child, u64)) *% prime;
+        },
 
-            .pointer => |p| {
-                h = (h ^ @intFromEnum(p.size)) *% prime;
-                h = (h ^ @as(u64, if (p.is_const) 1 else 0)) *% prime;
-                for (@typeName(p.child)) |char| h = (h ^ char) *% prime;
-            },
+        .optional => |o| {
+            h = (h ^ 0xBEEF) *% prime;
+            h = (h ^ hashType(o.child, u64)) *% prime;
+        },
 
-            .array => |a| {
-                h = (h ^ a.len) *% prime;
-                h = (h ^ hashType(a.child)) *% prime;
-            },
+        .error_set => |es| if (es) |fields| {
+            h = (h ^ 0xBAEF) *% prime;
+            for (fields) |f| {
+                for (f.name) |char|
+                    h = (h ^ char) *% prime;
+            }
+        },
 
-            .optional => |o| {
-                h = (h ^ 0xBEEF) *% prime;
-                h = (h ^ hashType(o.child)) *% prime;
-            },
+        .error_union => |eu| {
+            h = (h ^ hashType(eu.error_set, u64)) *% prime;
+            h = (h ^ hashType(eu.payload, u64)) *% prime;
+        },
 
-            else => @compileError("Zoto does not support hashing type: " ++ @typeName(T)),
-        }
-        return h;
+        else => @compileError("Zoto does not support hashing type: " ++ @typeName(T)),
     }
+    return @truncate(h);
 }
 
-pub fn serialize(writer: *std.Io.Writer, value: anytype) !void {
-    const T = @TypeOf(value);
-
-    writer.writeAll("ZOTO");
-    writer.writeInt(u64, comptime hashType(T), endian);
-    try serializeValue(writer, value);
+pub fn serialize(writer: *std.Io.Writer, comptime T: type, value: T, comptime opts: Options) std.Io.Writer.Error!void {
+    if (opts.header)
+        try writer.writeAll("ZOTO");
+    if (opts.hash) |I|
+        try writer.writeInt(I, comptime hashType(T, I), endian);
+    try serializeValue(writer, T, value);
 }
 
-pub fn serializeValue(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Error!void {
-    const T = @TypeOf(value);
+fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Writer.Error!void {
     const info = @typeInfo(T);
 
     switch (info) {
@@ -95,14 +116,15 @@ pub fn serializeValue(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Erro
             else
                 std.math.minInt(u8),
         ),
-        inline .optional => if (value) |payload| {
+        inline .optional => |o| if (value) |payload| {
             try writer.writeByte(std.math.maxInt(u8));
-            try serializeValue(writer, payload);
+            try serializeValue(writer, o.child, payload);
         } else try writer.writeByte(std.math.minInt(u8)),
         inline .@"struct" => |s| {
             inline for (s.fields) |f|
                 try serializeValue(
                     writer,
+                    f.type,
                     @field(value, f.name),
                 );
         },
@@ -112,6 +134,7 @@ pub fn serializeValue(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Erro
             switch (value) {
                 inline else => |payload| try serializeValue(
                     writer,
+                    @TypeOf(payload),
                     payload,
                 ),
             }
@@ -120,34 +143,38 @@ pub fn serializeValue(writer: *std.Io.Writer, value: anytype) std.Io.Writer.Erro
             inline .slice => {
                 try writer.writeInt(u64, value.len, endian);
                 for (value) |item|
-                    try serializeValue(writer, item);
+                    try serializeValue(writer, p.child, item);
             },
-            inline .one => try serializeValue(writer, value.*),
+            inline .one => try serializeValue(writer, p.child, value.*),
             inline else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
         },
-        inline .array => for (value) |item|
-            try serializeValue(writer, item),
-        inline .error_set => try serializeValue(writer, @intFromError(value)),
-        inline .error_union => if (value) |payload| {
+        inline .array => |a| for (value) |item|
+            try serializeValue(writer, a.child, item),
+        inline .error_set => try serializeValue(writer, u16, @intFromError(value)),
+        inline .error_union => |eu| if (value) |payload| {
             try writer.writeByte(1);
-            try serializeValue(writer, payload);
+            try serializeValue(writer, eu.payload, payload);
         } else |err| {
             try writer.writeByte(0);
-            try serializeValue(writer, err);
+            try serializeValue(writer, eu.error_set, err);
         },
         inline .void => {},
         else => @compileError("Unsupported type for zoto serialization: " ++ @typeName(T)),
     }
 }
 
-pub fn deserialize(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type) !T {
-    const header = try readSlice(src, 4);
-    if (!std.mem.eql(u8, header, "ZOTO"))
-        return error.InvalidHeader;
+pub fn deserialize(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type, opts: Options) DeserializeError!T {
+    if (opts.header) {
+        const header = try readSlice(src, 4);
+        if (!std.mem.eql(u8, header, "ZOTO"))
+            return error.InvalidHeader;
+    }
 
-    const actual_hash = try readInt(src, u64);
-    if (actual_hash != comptime hashType(T))
-        return error.TypeMismatch;
+    if (opts.hash) |I| {
+        const actual_hash = try readInt(src, I);
+        if (actual_hash != comptime hashType(T, I))
+            return error.TypeMismatch;
+    }
 
     return try deserializeValue(alloc, src, T);
 }
@@ -161,12 +188,9 @@ pub const DeserializeError = std.mem.Allocator.Error || error{
     TypeMismatch,
 };
 
-pub fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
-    const info = @typeInfo(T);
-
-    switch (info) {
+fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
+    switch (@typeInfo(T)) {
         inline .int => return try readInt(src, T),
-
         inline .float => |f| {
             const IntT = comptime std.meta.Int(.unsigned, f.bits);
             const raw_bits = try readInt(src, IntT);
@@ -264,13 +288,17 @@ pub fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T:
             return arr;
         },
 
-        inline .error_set => return @errorFromInt(try readInt(src, u16)),
+        inline .error_set => {
+            const err: T = @errorCast(@errorFromInt(try readInt(src, u16)));
+            return err;
+        },
 
         inline .error_union => |eu| {
             const is_payload = try readByte(src);
             if (is_payload != 0)
                 return try deserializeValue(alloc, src, eu.payload);
-            return @as(T, @errorFromInt(try readInt(src, u16)));
+            const err: eu.error_set = @errorCast(@errorFromInt(try readInt(src, u16)));
+            return @as(T, err);
         },
 
         inline .void => return {},

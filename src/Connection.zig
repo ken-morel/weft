@@ -1,10 +1,16 @@
 const std = @import("std");
-const zoto = @import("zoto.zig");
-const Nonce = @import("Nonce.zig");
-const Deployment = @import("Deployment.zig");
+
 const Crypt = @import("Crypt.zig");
+const Deployment = @import("Deployment.zig");
+const Nonce = @import("Nonce.zig");
+const zoto = @import("zoto.zig");
 
 pub const max_packet_size = std.math.maxInt(u16);
+
+const ZotoOptions: zoto.Options = .{
+    .hash = u64,
+    .header = false,
+};
 
 reader: *std.Io.Reader,
 writer: *std.Io.Writer,
@@ -41,9 +47,9 @@ pub fn send(self: *@This(), buffer: []u8) !void {
     try self.writer.flush();
 }
 
-pub fn send_object(self: *@This(), buffer: []u8, data: anytype) !void {
+pub fn send_object(self: *@This(), buffer: []u8, comptime T: type, data: T) !void {
     var writer: std.Io.Writer = .fixed(buffer);
-    try zoto.serializeValue(&writer, data);
+    try zoto.serialize(&writer, T, data, ZotoOptions);
     try self.send(writer.buffered());
 }
 
@@ -66,9 +72,13 @@ pub fn recv(self: *@This(), alloc: std.mem.Allocator) ![]u8 {
 
 pub fn recv_object(self: *@This(), alloc: std.mem.Allocator, comptime T: type) !T {
     var data: []const u8 = try self.recv(alloc);
-    return try zoto.deserializeValue(null, &data, T);
+    return try zoto.deserialize(alloc, &data, T, ZotoOptions);
 }
 pub fn recv_object_buf(self: *@This(), buf: []u8, comptime T: type) !T {
     var alloc: std.heap.FixedBufferAllocator = .init(buf);
-    return try self.recv_object(alloc.allocator(), T);
+    return self.recv_object(alloc.allocator(), T) catch |err|
+        return if (err == error.OutOfMemory)
+            error.BufferTooSmall
+        else
+            err;
 }
