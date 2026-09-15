@@ -2,9 +2,18 @@ const std = @import("std");
 
 const UUIDv7 = @import("../UUIDv7.zig");
 
-const weft_dir = "/var/lib/weft/";
-const weft_artifacts_dir = weft_dir ++ "artifacts/";
-const weft_run_dir = weft_dir ++ "run/";
+pub const var_lib = "/var/lib/";
+
+pub inline fn state_dir(path: []const u8) []const u8 {
+    return if (std.mem.startsWith(u8, path, var_lib))
+        path[var_lib.len..]
+    else
+        @panic("State directory must be a child of /var/lib");
+}
+
+pub const weft_dir = var_lib ++ "weft/";
+pub const weft_artifacts_dir = weft_dir ++ "artifacts/";
+pub const weft_run_dir = weft_dir ++ "run/";
 
 pub inline fn artifact(
     alloc: std.mem.Allocator,

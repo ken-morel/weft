@@ -22,6 +22,7 @@ pub fn run(
             cwd: ?[]const u8 = null,
             env: []const []const u8 = &.{},
             wait: bool = false,
+            state_directories: []const []const u8 = &.{},
         } = .{},
         fs: struct {
             protect_home: enum { no, yes, tmpfs, read_only } = .no,
@@ -107,6 +108,9 @@ pub fn run(
             try cmd.append(alloc, "--collect");
         if (opts.run.remain_after_exit)
             try cmd.append(alloc, "--remain-after-exit");
+
+        for (opts.run.state_directories) |state_dir|
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pStateDirectory={s}", .{state_dir}));
 
         if (opts.run.cwd) |cwd|
             try cmd.append(alloc, try std.fmt.allocPrint(alloc, "--working-directory={s}", .{cwd}));

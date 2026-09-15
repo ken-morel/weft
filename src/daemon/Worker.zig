@@ -271,16 +271,17 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
-    var write_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 1);
+    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 1);
+    try state_dirs.append(alloc, paths.state_dir(cwd_dir_path));
+
     for (req.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
             output_dir_path,
             output.name,
         });
         try std.Io.Dir.cwd().createDirPath(self.daemon.io, path);
-        try write_dirs.append(alloc, path);
+        try state_dirs.append(alloc, paths.state_dir(path));
     }
-    try write_dirs.append(alloc, cwd_dir_path);
 
     try term.info("starting systemd unit {s}", .{unit_name});
 
@@ -300,7 +301,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                 .private_tmp = true,
                 .protect_system = .strict,
                 .read = input_dirs,
-                .write = write_dirs.items,
+                .write = &.{},
                 .root_image = null,
                 .tmpfs = &.{},
             },
@@ -321,6 +322,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                 .collect = true,
                 .cwd = cwd_dir_path,
                 .dynamic_user = false,
+                .state_directories = state_dirs.items,
                 .env = &.{
                     try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}),
                     try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
