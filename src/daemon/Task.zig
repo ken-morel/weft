@@ -51,6 +51,17 @@ pub fn log_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
     );
 }
 
+pub fn keep_path(self: @This(), alloc: std.mem.Allocator, name: []const u8) ![]const u8 {
+    return paths.task_cache(
+        alloc,
+        self.id.workspace,
+        self.id.service,
+        self.id.env,
+        self.id.pipeline,
+        name,
+    );
+}
+
 pub const TaskSiblingsIterator = struct {
     task: *const Task,
     walker: ?std.Io.Dir.SelectiveWalker,

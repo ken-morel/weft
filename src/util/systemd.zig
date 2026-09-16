@@ -56,6 +56,11 @@ pub fn run(
             state_directories: []const []const u8 = &.{},
             stdout: ?StandardOutput = null,
             stderr: ?StandardOutput = null,
+            hooks: struct {
+                prestart: ?[]const u8,
+                poststart: ?[]const u8,
+                poststop: ?[]const u8,
+            } = .{},
         } = .{},
         fs: struct {
             protect_home: enum { no, yes, tmpfs, read_only } = .no,
@@ -66,6 +71,8 @@ pub fn run(
             private_tmp: bool = false,
             tmpfs: []const []const u8 = &.{},
             root_image: ?[]const u8 = null,
+            bind_paths: []const []const u8 = &.{},
+            bind_paths_read: []const []const u8 = &.{},
         } = .{},
         permissions: struct {
             no_new_privileges: bool = false,
@@ -158,6 +165,13 @@ pub fn run(
         if (opts.run.stderr) |stderr|
             try cmd.append(alloc, try stderr.format_property(alloc, "StandardError"));
 
+        if (opts.run.hooks.prestart) |hook|
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pExecStartPre={s}", .{hook}));
+        if (opts.run.hooks.poststart) |hook|
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pExecStartPost={s}", .{hook}));
+        if (opts.run.hooks.poststop) |hook|
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pExecStopPost={s}", .{hook}));
+
         break :run;
     }
     fs: {
@@ -192,6 +206,11 @@ pub fn run(
 
         if (opts.fs.root_image) |img|
             try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pRootImage={s}", .{img}));
+
+        for (opts.fs.bind_paths) |spec|
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pBindPaths={s}", .{spec}));
+        for (opts.fs.bind_paths_read) |spec|
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pBindReadOnlyPaths={s}", .{spec}));
 
         break :fs;
     }

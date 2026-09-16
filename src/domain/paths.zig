@@ -15,6 +15,7 @@ pub const weft_dir = var_lib ++ "weft/";
 pub const weft_artifacts_dir = weft_dir ++ "artifacts/";
 pub const weft_run_dir = weft_dir ++ "run/";
 pub const weft_logs_dir = weft_dir ++ "logs/";
+pub const weft_cache_dir = weft_dir ++ "cache/";
 
 pub inline fn artifact(
     alloc: std.mem.Allocator,
@@ -67,5 +68,19 @@ pub inline fn task_log(
     return try std.fs.path.join(
         alloc,
         &.{ weft_logs_dir, w, s, e, d, p },
+    );
+}
+
+pub inline fn task_cache(
+    alloc: std.mem.Allocator,
+    w: []const u8,
+    s: []const u8,
+    e: []const u8,
+    p: []const u8,
+    k: []const u8,
+) ![]const u8 {
+    return try std.fs.path.join(
+        alloc,
+        &.{ weft_cache_dir, "pipelines", w, s, e, p, k },
     );
 }

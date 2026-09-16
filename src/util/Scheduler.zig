@@ -53,8 +53,10 @@ pub fn run(self: *@This(), io: std.Io) !void {
 
     run: switch (@as(RunLoop, RunLoop.wait)) {
         .backlog => {
-            while (self.todo.pop()) |todo|
-                try backlog.append(self.alloc, todo);
+            if (self.todo.items.len > 0) {
+                try backlog.appendSlice(self.alloc, self.todo.items);
+                self.todo.clearAndFree();
+            }
             for (backlog.items, 0..) |*item, idx|
                 if (item.start.nanoseconds < self.clock.now().addDuration(spawn_threshold))
                     continue :run .{ .spawn = idx };

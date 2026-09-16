@@ -1,13 +1,13 @@
 const std = @import("std");
 
 const paths = @import("../domain/paths.zig");
-const systemd = @import("../domain/systemd.zig");
+const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
+const systemd = @import("../util/systemd.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
-const proto = @import("../wire/proto.zig");
 const Daemon = @import("Daemon.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const Server = @import("Server.zig");
@@ -273,7 +273,25 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         &deployment,
     );
 
-    try term.info("starting systemd unit {s}", .{unit_name});
+    const bind_paths: std.ArrayList([]const u8) = .empty;
+    for (req.pipeline.keep) |keep| {
+        const cache_path = try task.keep_path(alloc, keep.@"0");
+        defer alloc.free(cache_path);
+        const mount_path = try std.fs.path.join(alloc, &.{ cwd_dir_path, keep.@"1" });
+        defer alloc.free(mount_path);
+
+        try std.Io.Dir.cwd().createDirPath(io, cache_path);
+        try std.Io.Dir.cwd().createDirPath(io, mount_path);
+
+        try bind_paths.append(
+            alloc,
+            std.fmt.allocPrint(alloc, "{s}:{s}", .{ cache_path, mount_path }),
+        );
+    }
+
+    try term.inf("starting systemd unit {s}", .{unit_name});
+
+    const log_path = try task.log_path(alloc);
 
     var child = try systemd.run(
         alloc,
@@ -294,6 +312,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                 .write = &.{},
                 .root_image = null,
                 .tmpfs = &.{},
+                .bind_paths = bind_paths.items,
             },
             .permissions = .{
                 .capability_bounding_set = &.{},
@@ -317,6 +336,12 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                     try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}),
                     try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
                 },
+                .hooks = .{
+                    .prestart = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c \"touch {s}/started\"", .{run_dir_path}),
+                    .poststop = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c \"touch {s}/stopped\"", .{run_dir_path}),
+                },
+                .stderr = .{ .append = log_path },
+                .stdout = .{ .append = log_path },
             },
             .resources = .{},
         },

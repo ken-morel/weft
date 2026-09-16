@@ -15,9 +15,10 @@ pub const EnvBinding = union(enum) {
     }
 };
 
+/// Keep {name, path}
 pub const Keep = struct {
-    name: []const u8,
-    path: []const u8,
+    []const u8,
+    []const u8,
 };
 pub const Pipeline = struct {
     const Input = struct {

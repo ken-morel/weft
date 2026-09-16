@@ -1,11 +1,11 @@
 const std = @import("std");
 
-const cmd_do = @import("client/do.zig");
 const ClientInstall = @import("client/ClientInstall.zig");
-const Daemon = @import("daemon/Daemon.zig");
-const DaemonInstall = @import("daemon/DaemonInstall.zig");
+const cmd_do = @import("client/do.zig");
 const Project = @import("client/Project.zig");
 const Step = @import("client/Step.zig");
+const Daemon = @import("daemon/Daemon.zig");
+const DaemonInstall = @import("daemon/DaemonInstall.zig");
 const Term = @import("domain/Term.zig");
 
 pub const std_options: std.Options = .{
