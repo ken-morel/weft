@@ -11,6 +11,7 @@ const proto = @import("../wire/proto.zig");
 const Daemon = @import("Daemon.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const Server = @import("Server.zig");
+const Task = @import("Task.zig");
 const Worker = @import("Worker.zig");
 
 const stream_buffer_size = 4 << 10;
@@ -194,23 +195,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         req.task.pipeline,
     });
 
-    const unit_name = try paths.unit_name(
-        alloc,
-        req.task.workspace,
-        req.task.env,
-        req.task.service,
-        &deployment,
-        req.task.pipeline,
-    );
-    try term.debug("unit name: {s}", .{unit_name});
-
-    const input_dir = try paths.artifacts(
-        alloc,
-        req.task.workspace,
-        req.task.service,
-        req.task.env,
-        &deployment,
-    );
+    const task: Task = .{ .id = .req.task };
 
     var input_dirs = try alloc.alloc(
         []const u8,
@@ -238,14 +223,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         input_dirs[i] = path;
     }
 
-    const run_dir_path = try paths.run(
-        alloc,
-        req.task.workspace,
-        req.task.service,
-        req.task.env,
-        &deployment,
-        req.task.pipeline,
-    );
+    const run_dir_path = try task.run_dir_path(alloc);
 
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
     try term.debug("run dir: {s}", .{run_dir_path});
@@ -286,6 +264,14 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         try std.Io.Dir.cwd().createDirPath(self.daemon.io, path);
         try state_dirs.append(alloc, paths.state_dir(path));
     }
+    const unit_name = try task.unit_name(alloc);
+    const input_dir = try paths.artifacts(
+        alloc,
+        req.task.workspace,
+        req.task.service,
+        req.task.env,
+        &deployment,
+    );
 
     try term.info("starting systemd unit {s}", .{unit_name});
 

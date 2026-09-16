@@ -1,9 +1,9 @@
 const std = @import("std");
 
+const Term = @import("../domain/Term.zig");
 const Connection = @import("../wire/Connection.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const Server = @import("Server.zig");
-const Term = @import("../domain/Term.zig");
 const SharedPressor = @import("SharedPressor.zig");
 const Worker = @import("Worker.zig");
 

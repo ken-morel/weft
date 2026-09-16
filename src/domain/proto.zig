@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const UUIDv7 = @import("../util/UUIDv7.zig");
 const Weft = @import("../domain/Weft.zig");
+const UUIDv7 = @import("../util/UUIDv7.zig");
 
 pub fn Res(comptime T: type) type {
     return anyerror!T;
@@ -34,6 +34,23 @@ pub const task = struct {
         env: []const u8,
         deployment: UUIDv7,
         pipeline: []const u8,
+        pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
+            const workspace = try alloc.dupe(self.workspace);
+            errdefer alloc.free(workspace);
+            const service = try alloc.dupe(self.service);
+            errdefer alloc.free(service);
+            const env = try alloc.dupe(self.env);
+            errdefer alloc.free(env);
+            const pipeline = try alloc.dupe(self.pipeline);
+            errdefer alloc.free(pipeline);
+            return .{
+                .workspace = workspace,
+                .service = service,
+                .env = env,
+                .deployment = self.deployment,
+                .pipeline = pipeline,
+            };
+        }
     };
 
     pub const spawn = struct {
@@ -49,19 +66,25 @@ pub const task = struct {
 pub const system = struct {
     pub const stats = struct {
         pub const Stats = struct {
-            const MemInfo = struct {
-                total: u64,
-                free: u64,
-                available: ?u64,
-                compressed: ?u64,
-            };
-            const Mem = union(enum) {
-                swapfile: MemInfo,
-                zram: MemInfo,
-                ram: MemInfo,
-            };
             time: std.Io.Timestamp,
-            mem: []Mem,
+            ram: struct {
+                total: u64,
+                used: u64,
+            },
+            zram: struct {
+                total: u64,
+                used: u64,
+                compressed: u64,
+            },
+            swap: struct {
+                total: u64,
+                used: u64,
+                io: struct { u64, u64 },
+            },
+            cpu: struct {
+                freq: u32,
+                usage_percent: u8,
+            },
         };
 
         pub const Req = struct {};
