@@ -9,10 +9,6 @@ pub const EnvBinding = union(enum) {
     string: []const u8,
     env_var: []const u8,
     interpolate: []const EnvBinding,
-    pub fn parse(val: []const u8) !@This() {
-        _ = val;
-        unreachable;
-    }
 };
 
 /// Keep {name, path}

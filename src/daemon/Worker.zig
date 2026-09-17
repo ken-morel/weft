@@ -337,8 +337,8 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                     try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
                 },
                 .hooks = .{
-                    .prestart = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c \"touch {s}/started\"", .{run_dir_path}),
-                    .poststop = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c \"touch {s}/stopped\"", .{run_dir_path}),
+                    .poststart = std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
+                    .poststop = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/stopped; /usr/bin/timeout 2s /usr/bin/sh -c \"echo task-completed:{s} > /tmp/weft.pipe\"'", .{ run_dir_path, unit_name }),
                 },
                 .stderr = .{ .append = log_path },
                 .stdout = .{ .append = log_path },
