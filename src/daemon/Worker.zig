@@ -291,7 +291,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
     try term.inf("starting systemd unit {s}", .{unit_name});
 
-    const log_path = try task.log_path(alloc);
+    const log_path = try std.fs.path.join(alloc, &.{ run_dir_path, "log.txt" });
 
     var child = try systemd.run(
         alloc,
@@ -338,7 +338,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                 },
                 .hooks = .{
                     .poststart = std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
-                    .poststop = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/stopped; /usr/bin/timeout 2s /usr/bin/sh -c \"echo task-completed:{s} > /tmp/weft.pipe\"'", .{ run_dir_path, unit_name }),
+                    .poststop = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/status; /usr/bin/timeout 2s /usr/bin/sh -c \"echo 'task-completed:{s};' > /tmp/weft.pipe\"'", .{ run_dir_path, unit_name }),
                 },
                 .stderr = .{ .append = log_path },
                 .stdout = .{ .append = log_path },

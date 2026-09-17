@@ -3,10 +3,34 @@ const std = @import("std");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const systemd = @import("../util/systemd.zig");
+const UUIDv7 = @import("../util/UUIDv7.zig");
 
 const Task = @This();
 
 id: proto.task.Id,
+
+pub fn from_unit_name(name: []const u8) ?@This() {
+    var iter = std.mem.splitSequence(u8, name, "--");
+    const runner = iter.next() orelse return null;
+    if (!std.mem.eql(u8, runner, "weft-runner"))
+        return null;
+
+    const workspace = iter.next() orelse return null;
+    const env = iter.next() orelse return null;
+    const service = iter.next() orelse return null;
+    const pipeline = iter.next() orelse return null;
+    const deployment_id = iter.next() orelse return null;
+
+    const deployment: UUIDv7 = .parse(deployment_id) catch return null;
+
+    return .{ .id = .{
+        .workspace = workspace,
+        .service = service,
+        .env = env,
+        .deployment = deployment,
+        .pipeline = pipeline,
+    } };
+}
 
 pub fn kill(self: @This(), alloc: std.mem.Allocator, io: std.Io) !void {
     const unit = try self.unit_name(alloc);
@@ -40,8 +64,8 @@ pub fn run_dir_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
     );
 }
 
-pub fn log_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
-    return paths.task_log(
+pub fn archive(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
+    return paths.task_archive(
         alloc,
         self.id.workspace,
         self.id.service,
@@ -59,6 +83,16 @@ pub fn keep_path(self: @This(), alloc: std.mem.Allocator, name: []const u8) ![]c
         self.id.env,
         self.id.pipeline,
         name,
+    );
+}
+pub fn input_artifacts_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
+    return try paths.artifacts(
+        alloc,
+
+        self.id.workspace,
+        self.id.service,
+        self.id.env,
+        &self.id.deployment.to_string(),
     );
 }
 
@@ -102,4 +136,7 @@ pub fn dupe(self: @This(), alloc: std.mem.Allocator) !void {
     return .{
         .id = try self.id.dupe(alloc),
     };
+}
+pub fn free_duped(self: @This(), alloc: std.mem.Allocator) !void {
+    self.id.free_duped(alloc);
 }

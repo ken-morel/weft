@@ -1,10 +1,12 @@
 const std = @import("std");
 
+const paths = @import("../domain/paths.zig");
 const Term = @import("../domain/Term.zig");
 const Connection = @import("../wire/Connection.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const Server = @import("Server.zig");
 const SharedPressor = @import("SharedPressor.zig");
+const Task = @import("Task.zig");
 const Worker = @import("Worker.zig");
 
 io: std.Io,
@@ -38,9 +40,8 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
     };
 }
 
-pub fn run(self: *@This()) !void {
+pub fn run_client_server(self: *@This()) void {
     try self.term.info("listening on TCP :{d}", .{self.config.port});
-    try self.term.debug("max workers: {d}", .{self.config.max_workers});
 
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
@@ -76,4 +77,109 @@ pub fn run(self: *@This()) !void {
             .{ worker, &permits, stream },
         );
     }
+}
+
+pub fn run_system_server(self: *@This()) void {
+    try self.term.info("listening on socket {}", .{paths.weft_socket});
+
+    var group: std.Io.Group = .init;
+    defer group.cancel(self.io);
+
+    defer std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch {};
+
+    const addr: std.Io.net.UnixAddress = .init(paths.weft_socket);
+    std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch |err|
+        if (err != error.FileNotFound)
+            @panic(std.fmt.allocPrint(self.alloc, "{any}", err));
+    var srv = try addr.listen(self.io, .{});
+
+    var buff: [1 << 10]u8 = undefined;
+    var rbuff: [1 << 10]u8 = undefined;
+
+    var conn: std.Io.net.Stream = undefined;
+    var reader: std.Io.net.Stream.Reader = undefined;
+
+    run: switch (union(enum) {
+        accept,
+        read_cmd,
+        done,
+        invalid_request,
+        handle_task_completed,
+    }.accept) {
+        // accept
+        .accept => {
+            conn = try srv.accept(self.io);
+            reader = conn.reader(std.io, &rbuff);
+            continue :run .read_cmd;
+        },
+        .read_cmd => {
+            const cmd = try reader.interface.takeDelimiter(':') orelse continue :run .invalid_request;
+            if (std.mem.eql(u8, cmd, "task-completed")) {
+                continue :run .handle_task_completed;
+            }
+        },
+        // replies
+        .invalid_request => {},
+        .done => {
+            conn.close(self.io);
+            continue :run .accept;
+        },
+        // handlers
+        .handle_task_completed => {
+            const unit = try reader.interface.takeDelimiter(';') orelse continue :run .invalid_request;
+
+            const task: Task = .from_unit_name(unit) orelse continue :run .invalid_request;
+            group.async(self.io, finalize_task, .{ self, try task.dupe(self.alloc) });
+            continue :run .done;
+        },
+    }
+}
+
+pub fn run(self: *@This()) !void {
+    try self.term.debug("max workers: {d}", .{self.config.max_workers});
+    std.Io.async(self.io, run_client_server, .{self});
+    std.Io.async(self.io, run_system_server, .{self});
+}
+
+pub fn finalize_task(self: *@This(), task: Task) void {
+    _finalize_task(self, task) catch |err| {
+        self.term.err("finalize task error: {any}", .{err});
+        if (@errorReturnTrace()) |trace|
+            std.debug.dumpStackTrace(trace);
+    };
+    task.free_duped(self.alloc);
+}
+pub fn _finalize_task(self: *@This(), task: Task) !void {
+    const cwd = std.Io.Dir.cwd();
+    const run_dir_path = try task.run_dir_path(self.alloc);
+    defer self.alloc.free(run_dir_path);
+    const run_dir = try cwd.openDir(self.io, run_dir_path, .{});
+    defer run_dir.close(self.io);
+    const output_dirs_path = try std.fs.path.join(self.alloc, &.{ run_dir_path, "out" });
+    defer self.alloc.free(output_dirs_path);
+
+    const artifacts_dir_path = try task.input_artifacts_path(self.alloc);
+    defer self.alloc.free(artifacts_dir_path);
+    const artifacts_dir = try cwd.openDir(self.io, artifacts_dir_path, .{});
+    defer artifacts_dir.close(self.io);
+
+    const outputs_dir = try cwd.openDir(self.io, output_dirs_path, .{ .iterate = true });
+
+    var walker = try std.Io.Dir.walkSelectively(
+        outputs_dir,
+        self.alloc,
+    );
+    defer walker.deinit();
+    while (try walker.next(self.io)) |entry|
+        //TODO: maybe chown the artifacts to root
+        try cwd.rename(entry.path, artifacts_dir, entry.basename, self.io);
+
+    const archive_path = try task.archive(self.alloc);
+    defer self.alloc.free(archive_path);
+    const archive = try cwd.openDir(self.io, archive_path, .{});
+
+    try run_dir.rename("log.txt", archive, "log.txt", self.io);
+    try run_dir.rename("status", archive, "status", self.io);
+
+    try cwd.deleteTree(self.io, run_dir_path);
 }

@@ -14,8 +14,10 @@ pub inline fn state_dir(path: []const u8) []const u8 {
 pub const weft_dir = var_lib ++ "weft/";
 pub const weft_artifacts_dir = weft_dir ++ "artifacts/";
 pub const weft_run_dir = weft_dir ++ "run/";
-pub const weft_logs_dir = weft_dir ++ "logs/";
+pub const weft_archive = weft_dir ++ "archive/";
 pub const weft_cache_dir = weft_dir ++ "cache/";
+
+pub const weft_socket = "/tmp/weft.sock";
 
 pub inline fn artifact(
     alloc: std.mem.Allocator,
@@ -57,7 +59,7 @@ pub inline fn run(
     );
 }
 
-pub inline fn task_log(
+pub inline fn task_archive(
     alloc: std.mem.Allocator,
     w: []const u8,
     s: []const u8,
@@ -67,7 +69,7 @@ pub inline fn task_log(
 ) ![]const u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ weft_logs_dir, w, s, e, d, p },
+        &.{ weft_archive, w, s, e, d, p },
     );
 }
 

@@ -51,6 +51,12 @@ pub const task = struct {
                 .pipeline = pipeline,
             };
         }
+        pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
+            alloc.free(self.workspace);
+            alloc.free(self.service);
+            alloc.free(self.env);
+            alloc.free(self.pipeline);
+        }
     };
 
     pub const spawn = struct {
