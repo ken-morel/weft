@@ -1,13 +1,13 @@
 const std = @import("std");
 
+const proto = @import("../domain/proto.zig");
+const Term = @import("../domain/Term.zig");
+const Connection = @import("../wire/Connection.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
-const Connection = @import("../wire/Connection.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const proto = @import("../domain/proto.zig");
 const Remote = @import("Remote.zig");
-const Term = @import("../domain/Term.zig");
 const uploader = @import("uploader.zig");
 
 pub fn run_deployment(
@@ -82,7 +82,11 @@ pub fn spawn_step(
     });
     defer alloc.free(script_path);
 
-    const script = try project.dir.openFile(io, script_path, .{});
+    const script = project.dir.openFile(io, script_path, .{}) catch |err| {
+        if (err == error.FileNotFound)
+            term.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name });
+        return err;
+    };
     defer script.close(io);
 
     while (true) {
@@ -96,7 +100,6 @@ pub fn spawn_step(
     }
     buffer[0] = proto.task.spawn.end;
     try client.conn.send(buffer[0..1]);
-
     const reply = try client.conn.recv_object_buf(buffer, anyerror!proto.task.spawn.Res);
     if (reply) |_| {
         deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);

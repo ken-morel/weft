@@ -4,6 +4,8 @@ const Pack = union(enum) {
     file: []const u8,
     folder: []const u8,
     data: []const u8,
+
+    pub const max_size = @import("Pressor.zig").max_uncompressed_size;
 };
 
 root: std.Io.Dir,
@@ -33,21 +35,19 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 pub fn get(self: *@This(), io: std.Io, buffer: []u8) !?Pack {
     if (self.walker == null)
         return error.NotAnUnpacker;
+    const readable = buffer[0..@min(buffer.len, Pack.max_size)];
     next: while (true) {
         if (self.handle) |file_handle| {
             const read = file_handle.readStreaming(
                 io,
-                &.{buffer},
+                &.{readable},
             ) catch |err|
-                if (err == error.EndOfStream)
-                    0
-                else
-                    return err;
-            if (read > 0)
-                return .{ .data = buffer[0..read] };
-            file_handle.close(io);
-            self.handle = null;
-            continue :next;
+                if (err == error.EndOfStream) {
+                    file_handle.close(io);
+                    self.handle = null;
+                    continue :next;
+                } else return err;
+            return .{ .data = readable[0..read] };
         } else if (self.walker) |*walker| {
             const entry = try walker.next(io) orelse return null;
 

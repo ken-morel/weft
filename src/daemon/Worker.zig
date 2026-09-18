@@ -71,7 +71,6 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
                 self.daemon.term.err("daemon::worker::artifact_push {any}", .{err});
-                try conn.send_object(&response_buf, proto.Res(@TypeOf(res)), res);
                 break :err err;
             };
             try conn.send_object(&response_buf, @TypeOf(res), res);
@@ -82,7 +81,6 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
                 self.daemon.term.err("daemon::worker::task_spawn {any}", .{err});
-                try conn.send_object(&response_buf, proto.Res(@TypeOf(res)), res);
                 break :err err;
             };
             try conn.send_object(&response_buf, @TypeOf(res), res);
@@ -102,7 +100,7 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
 
     self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
         id.workspace,
-        id.workspace,
+        id.service,
         id.env,
         &id.deployment.to_string(),
         id.pipeline,
@@ -264,10 +262,14 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     script_file.close(io);
     term.debug("wrote script: {s}", .{script_path});
 
+    const home_dir_path = try paths.home(alloc, req.task.workspace);
+    try std.Io.Dir.cwd().createDirPath(self.daemon.io, home_dir_path);
+
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
     var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 1);
     try state_dirs.append(alloc, paths.state_dir(cwd_dir_path));
+    try state_dirs.append(alloc, paths.state_dir(home_dir_path));
 
     for (req.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
@@ -289,13 +291,12 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     var bind_paths: std.ArrayList([]const u8) = .empty;
     for (req.pipeline.keep) |keep| {
         const cache_path = try task.keep_path(alloc, keep.@"0");
-        defer alloc.free(cache_path);
         const mount_path = try std.fs.path.join(alloc, &.{ cwd_dir_path, keep.@"1" });
         defer alloc.free(mount_path);
 
         try std.Io.Dir.cwd().createDirPath(io, cache_path);
         try std.Io.Dir.cwd().createDirPath(io, mount_path);
-
+        try state_dirs.append(alloc, paths.state_dir(cache_path));
         try bind_paths.append(
             alloc,
             try std.fmt.allocPrint(alloc, "{s}:{s}", .{ cache_path, mount_path }),
@@ -305,6 +306,15 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     term.info("starting systemd unit {s}", .{unit_name});
 
     const log_path = try std.fs.path.join(alloc, &.{ run_dir_path, "log.txt" });
+
+    var env: std.ArrayList([]const u8) = .empty;
+
+    try env.append(alloc, try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}));
+    try env.append(alloc, try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}));
+    try env.append(alloc, try std.mem.join(alloc, "=", &.{ "HOME", home_dir_path }));
+
+    for (req.pipeline.env) |pair|
+        try env.append(alloc, try std.mem.join(alloc, "=", &.{ pair.@"0", pair.@"1" }));
 
     var child = try systemd.run(
         alloc,
@@ -333,9 +343,9 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
                 .private_devices = true,
                 .protect_kernel_modules = true,
                 .protect_kernel_tunables = true,
-                .private_network = true,
+                // .private_network = true,
+                // .restrict_address_families = &.{ "AF_UNIX", "AF_INET", "AF_INET6" },
                 .no_new_privileges = true,
-                .restrict_address_families = &.{ "AF_UNIX", "AF_INET", "AF_INET6" },
             },
             .run = .{
                 .user = "weft-runner",
@@ -345,13 +355,10 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
                 .cwd = cwd_dir_path,
                 .dynamic_user = false,
                 .state_directories = state_dirs.items,
-                .env = &.{
-                    try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}),
-                    try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
-                },
+                .env = env.items,
                 .hooks = .{
                     .poststart = try std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
-                    .poststop = try std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/status; /usr/bin/timeout 2s /usr/bin/sh -c \"echo 'task-completed:{s};' > /tmp/weft.pipe\"'", .{ run_dir_path, unit_name }),
+                    .poststop = try std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/status; /usr/bin/timeout 2s /usr/bin/sh -c \"echo 'task-completed:{s};' > {s}\"'", .{ run_dir_path, unit_name, paths.weft_socket }),
                 },
                 .stderr = .{ .append = log_path },
                 .stdout = .{ .append = log_path },
