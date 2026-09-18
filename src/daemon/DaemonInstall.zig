@@ -60,7 +60,7 @@ pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
     const uuid = (try UUIDv7.now(io)).to_string();
 
     self.temp_dir.createDirPath(io, sub) catch {};
-    var sub_dir = try self.temp_dir.openDir(io, sub, .{});
+    var sub_dir = try self.temp_dir.createDirPathOpen(io, sub, .{});
     defer sub_dir.close(io);
 
     try sub_dir.createDirPath(io, &uuid);
@@ -211,7 +211,7 @@ pub fn open_artifact_dir(
     const path = try self.get_artifact_path(alloc, art);
     defer alloc.free(path);
     try std.Io.Dir.cwd().createDirPath(io, path);
-    return try std.Io.Dir.cwd().openDir(io, path, .{
+    return try std.Io.Dir.cwd().createDirPathOpen(io, path, .{ .open_options = .{
         .iterate = true,
-    });
+    } });
 }

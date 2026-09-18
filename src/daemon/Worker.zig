@@ -358,7 +358,11 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
                 .env = env.items,
                 .hooks = .{
                     .poststart = try std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
-                    .poststop = try std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/status; /usr/bin/timeout 2s /usr/bin/sh -c \"echo 'task-completed:{s};' > {s}\"'", .{ run_dir_path, unit_name, paths.weft_socket }),
+                    .poststop = try std.fmt.allocPrint(
+                        alloc,
+                        "+/usr/bin/sh -c '/usr/bin/printf %s \"task-completed:{s};\" | /usr/sbin/nc -U {s} -w 1; echo $EXIT_STATUS > {s}/status'",
+                        .{ unit_name, paths.weft_socket, run_dir_path },
+                    ),
                 },
                 .stderr = .{ .append = log_path },
                 .stdout = .{ .append = log_path },

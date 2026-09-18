@@ -179,10 +179,11 @@ pub fn _finalize_task(self: *@This(), task: Task) !void {
     const output_dirs_path = try std.fs.path.join(self.alloc, &.{ run_dir_path, "out" });
     defer self.alloc.free(output_dirs_path);
 
-    const artifacts_dir_path = try task.input_artifacts_path(self.alloc);
+    const artifacts_dir_path = try task.artifacts_path(self.alloc);
     defer self.alloc.free(artifacts_dir_path);
     const artifacts_dir = try cwd.openDir(self.io, artifacts_dir_path, .{});
     defer artifacts_dir.close(self.io);
+    try cwd.createDirPath(self.io, artifacts_dir_path);
 
     const outputs_dir = try cwd.openDir(self.io, output_dirs_path, .{ .iterate = true });
 
@@ -193,11 +194,11 @@ pub fn _finalize_task(self: *@This(), task: Task) !void {
     defer walker.deinit();
     while (try walker.next(self.io)) |entry|
         //TODO: maybe chown the artifacts to root
-        try cwd.rename(entry.path, artifacts_dir, entry.basename, self.io);
+        try outputs_dir.rename(entry.basename, artifacts_dir, entry.basename, self.io);
 
     const archive_path = try task.archive(self.alloc);
     defer self.alloc.free(archive_path);
-    const archive = try cwd.openDir(self.io, archive_path, .{});
+    const archive = try cwd.createDirPathOpen(self.io, archive_path, .{});
 
     try run_dir.rename("log.txt", archive, "log.txt", self.io);
     try run_dir.rename("status", archive, "status", self.io);

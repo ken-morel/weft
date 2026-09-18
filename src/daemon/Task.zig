@@ -85,7 +85,7 @@ pub fn keep_path(self: @This(), alloc: std.mem.Allocator, name: []const u8) ![]c
         name,
     );
 }
-pub fn input_artifacts_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
+pub fn artifacts_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
     return try paths.artifacts(
         alloc,
 
