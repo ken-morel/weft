@@ -71,8 +71,8 @@ pub fn parse(input: []const u8) !UUIDv7 {
             continue;
         }
 
-        const high_nibble = try parseHex(input[in_idx]);
-        const low_nibble = try parseHex(input[in_idx + 1]);
+        const high_nibble: u8 = try parseHex(input[in_idx]);
+        const low_nibble: u8 = try parseHex(input[in_idx + 1]);
 
         self.bytes[out_idx] = (high_nibble << 4) | low_nibble;
         out_idx += 1;

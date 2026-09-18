@@ -92,14 +92,14 @@ pub inline fn flush(self: *@This()) !void {
     try self.writer().flush();
 }
 
-pub inline fn print(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-    try self.writer().print(fmt, args);
-    try self.flush();
+pub inline fn print(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.writer().print(fmt, args) catch return;
+    self.flush() catch return;
 }
 
-pub inline fn println(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-    try self.writer().print(fmt ++ "\n", args);
-    try self.flush();
+pub inline fn println(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.writer().print(fmt ++ "\n", args) catch return;
+    self.flush() catch return;
 }
 
 pub inline fn write(self: *@This(), txt: []const u8) !void {
@@ -164,18 +164,18 @@ fn write_timestamp(self: *@This(), w: *std.Io.Writer) !void {
     }
 }
 
-pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) !void {
+pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(level) > @intFromEnum(self.log_level))
         return;
     const w = self.writer();
-    try self.write_timestamp(w);
-    if (self.color) {
-        try w.writeAll(comptime tag(level, true));
-    } else {
-        try w.writeAll(comptime tag(level, false));
-    }
-    try w.print(fmt ++ "\n", args);
-    try w.flush();
+    self.write_timestamp(w) catch {};
+    if (self.color)
+        w.writeAll(comptime tag(level, true)) catch {}
+    else
+        w.writeAll(comptime tag(level, false)) catch {};
+
+    w.print(fmt ++ "\n", args) catch {};
+    w.flush() catch {};
 }
 
 fn tag(comptime level: Level, comptime colored: bool) []const u8 {
@@ -197,45 +197,45 @@ fn tag(comptime level: Level, comptime colored: bool) []const u8 {
     };
 }
 
-pub fn err(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-    try self.logf(.err, fmt, args);
+pub fn err(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.logf(.err, fmt, args);
 }
 
-pub fn warn(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-    try self.logf(.warn, fmt, args);
+pub fn warn(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.logf(.warn, fmt, args);
 }
 
-pub fn info(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-    try self.logf(.info, fmt, args);
+pub fn info(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.logf(.info, fmt, args);
 }
 
-pub fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-    try self.logf(.debug, fmt, args);
+pub fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.logf(.debug, fmt, args);
 }
 
-pub fn op(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+pub fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
     const w = self.writer();
-    try self.write_timestamp(w);
+    self.write_timestamp(w) catch {};
     if (self.color) try w.writeAll(Style.bold.code() ++ ">> ") else try w.writeAll(">> ");
     if (self.color) try w.writeAll(Style.reset.code());
-    try w.print(fmt ++ "\n", args);
-    try w.flush();
+    w.print(fmt ++ "\n", args) catch {};
+    w.flush() catch {};
 }
 
-pub fn success(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
-    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
+pub fn success(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level))
+        return;
     const w = self.writer();
-    try self.write_timestamp(w);
+    self.write_timestamp(w) catch {};
     if (self.color) {
-        try w.writeAll(Style.bold.code());
-        try w.writeAll(Style.green.code());
-        try w.writeAll("ok");
-        try w.writeAll(Style.reset.code());
-        try w.writeAll(": ");
-    } else {
-        try w.writeAll("ok: ");
-    }
-    try w.print(fmt ++ "\n", args);
-    try w.flush();
+        w.writeAll(Style.bold.code()) catch {};
+        w.writeAll(Style.green.code()) catch {};
+        w.writeAll("ok") catch {};
+        w.writeAll(Style.reset.code()) catch {};
+        w.writeAll(": ") catch {};
+    } else w.writeAll("ok: ") catch {};
+
+    w.print(fmt ++ "\n", args) catch {};
+    w.flush() catch {};
 }

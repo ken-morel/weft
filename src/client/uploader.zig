@@ -1,18 +1,18 @@
 const std = @import("std");
 
-const Client = @import("Client.zig");
-const ClientInstall = @import("ClientInstall.zig");
+const proto = @import("../domain/proto.zig");
+const Term = @import("../domain/Term.zig");
+const Pipeline = @import("../domain/Weft.zig").Pipeline;
+const UUIDv7 = @import("../util/UUIDv7.zig");
+const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
-const Deployment = @import("Deployment.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
+const Client = @import("Client.zig");
+const ClientInstall = @import("ClientInstall.zig");
+const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const proto = @import("../wire/proto.zig");
 const Remote = @import("Remote.zig");
-const Term = @import("../domain/Term.zig");
-const UUIDv7 = @import("../util/UUIDv7.zig");
-const Pipeline = @import("../domain/Weft.zig").Pipeline;
-const zoto = @import("../util/zoto.zig");
 
 pub fn cache_artifact(
     alloc: std.mem.Allocator,
@@ -44,7 +44,7 @@ pub fn cache_artifact(
     } else return error.InvalidRemote;
 
     // get the artifact from the remote...
-    try term.info("requesting artifact '{s}' from remote {s}", .{ artifact_id.pipeline, remote.get_name() });
+    term.info("requesting artifact '{s}' from remote {s}", .{ artifact_id.pipeline, remote.get_name() });
 }
 
 pub fn send_artifact(
@@ -140,7 +140,7 @@ pub fn send_artifact_concurrent(
     remote: *const Remote,
     failed: *?u16,
 ) error{Canceled}!void {
-    term.info("sending artifact {s} to remote {s}", .{ artifact_id.pipeline, remote.get_name() }) catch {};
+    term.info("sending artifact {s} to remote {s}", .{ artifact_id.pipeline, remote.get_name() });
     send_artifact(
         alloc,
         io,
@@ -152,9 +152,9 @@ pub fn send_artifact_concurrent(
         remote,
     ) catch |err| {
         if (err == error.HasArtifact) {
-            term.err("Remote has artifact, skipping", .{}) catch {};
+            term.err("Remote has artifact, skipping", .{});
         } else {
-            term.err("error sending artifact '{s}': {any}", .{ artifact_id.pipeline, err }) catch {};
+            term.err("error sending artifact '{s}': {any}", .{ artifact_id.pipeline, err });
             failed.* = @intFromError(err);
         }
     };

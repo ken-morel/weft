@@ -28,7 +28,7 @@ const usage_text =
     \\
 ;
 fn show_usage(term: *Term) void {
-    term.print(usage_text, .{}) catch {};
+    term.print(usage_text, .{});
 }
 
 fn parse_options(args: []const []const u8, term: *Term) usize {
@@ -75,19 +75,19 @@ pub fn main(init: std.process.Init) !void {
 
             if (std.mem.eql(u8, sub, "install")) {
                 try DaemonInstall.install(init.io, alloc, &term);
-                try term.success("weft daemon installed", .{});
+                term.success("weft daemon installed", .{});
                 return;
             } else if (std.mem.eql(u8, sub, "run")) {
                 const installation: DaemonInstall = try .init(init.io);
                 var daemon = try Daemon.init(alloc, init.io, installation, &term);
                 defer daemon.deinit();
-                try term.info("starting daemon on :{d}", .{daemon.config.port});
+                term.info("starting daemon on :{d}", .{daemon.config.port});
                 return daemon.run();
             }
             break :cmd;
         } else if (std.mem.eql(u8, cmd, "do")) {
             if (args.len < first + 2) {
-                try term.err("usage: weft do [remote.]pipeline [[remote.]pipeline ...]", .{});
+                term.err("usage: weft do [remote.]pipeline [[remote.]pipeline ...]", .{});
                 return error.Usage;
             }
             const target_args = args[first + 1 ..];
@@ -101,7 +101,7 @@ pub fn main(init: std.process.Init) !void {
 
             for (target_args) |arg| {
                 const target = Step.parse(arg) catch |err| {
-                    try term.err("invalid target '{s}': {any}", .{ arg, err });
+                    term.err("invalid target '{s}': {any}", .{ arg, err });
                     return err;
                 };
                 try targets.append(alloc, target);

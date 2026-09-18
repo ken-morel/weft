@@ -31,7 +31,7 @@ pub fn init(memory: []u8, daemon: *Daemon) !@This() {
 
 pub fn run(self: *@This(), permits: *std.Io.Semaphore, stream: std.Io.net.Stream) void {
     self._run(stream) catch |err| {
-        self.daemon.term.err("worker error: {any}", .{err}) catch {};
+        self.daemon.term.err("worker error: {any}", .{err});
         if (@errorReturnTrace()) |trace|
             std.debug.dumpErrorReturnTrace(trace);
     };
@@ -61,7 +61,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
                 err;
     };
 
-    try self.daemon.term.info("Request: {any}", .{request});
+    self.daemon.term.info("Request: {any}", .{request});
 
     var response_buf: [16]u8 = undefined;
     switch (request) {
@@ -86,7 +86,7 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
 
     const deployment = id.deployment.to_string();
 
-    try self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
+    self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
         id.workspace,
         id.workspace,
         id.env,
@@ -113,9 +113,9 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
                 break :has_artifact
             else
                 return err;
-        try self.daemon.term.info("artifact already present, skipping upload", .{});
+        self.daemon.term.info("artifact already present, skipping upload", .{});
         try conn.send_object(&buf, bool, true);
-        return;
+        return error.HasArtifact;
     }
     try conn.send_object(&buf, bool, false);
 
@@ -163,9 +163,8 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
         artifact_dir_path,
         io,
     );
-    var buff: [32]u8 = undefined;
-    try conn.send_object(&buff, anyerror!proto.artifact.push.Res, proto.artifact.push.Res{});
-    self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path}) catch {};
+    self.daemon.term.success("artifact stored at {s}", .{artifact_dir_path});
+    return .{};
 }
 
 // tasks
@@ -187,7 +186,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
     const deployment = req.task.deployment.to_string();
 
-    try term.info("task spawn: {s}/{s}/{s}/{s}/{s}", .{
+    term.info("task spawn: {s}/{s}/{s}/{s}/{s}", .{
         req.task.workspace,
         req.task.env,
         req.task.service,
@@ -195,7 +194,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         req.task.pipeline,
     });
 
-    const task: Task = .{ .id = .req.task };
+    const task: Task = .{ .id = req.task };
 
     var input_dirs = try alloc.alloc(
         []const u8,
@@ -216,17 +215,17 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
             .{},
         ) catch |err|
             if (err == error.FileNotFound) {
-                try term.err("missing input artifact: {s}", .{path});
+                term.err("missing input artifact: {s}", .{path});
                 return error.MissingInputArtifact;
             };
-        try term.debug("input artifact: {s}", .{path});
+        term.debug("input artifact: {s}", .{path});
         input_dirs[i] = path;
     }
 
     const run_dir_path = try task.run_dir_path(alloc);
 
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
-    try term.debug("run dir: {s}", .{run_dir_path});
+    term.debug("run dir: {s}", .{run_dir_path});
 
     const cwd_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir_path);
@@ -249,7 +248,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         }
     }
     script_file.close(io);
-    try term.debug("wrote script: {s}", .{script_path});
+    term.debug("wrote script: {s}", .{script_path});
 
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
@@ -273,7 +272,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
         &deployment,
     );
 
-    const bind_paths: std.ArrayList([]const u8) = .empty;
+    var bind_paths: std.ArrayList([]const u8) = .empty;
     for (req.pipeline.keep) |keep| {
         const cache_path = try task.keep_path(alloc, keep.@"0");
         defer alloc.free(cache_path);
@@ -285,11 +284,11 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
 
         try bind_paths.append(
             alloc,
-            std.fmt.allocPrint(alloc, "{s}:{s}", .{ cache_path, mount_path }),
+            try std.fmt.allocPrint(alloc, "{s}:{s}", .{ cache_path, mount_path }),
         );
     }
 
-    try term.inf("starting systemd unit {s}", .{unit_name});
+    term.info("starting systemd unit {s}", .{unit_name});
 
     const log_path = try std.fs.path.join(alloc, &.{ run_dir_path, "log.txt" });
 
@@ -337,8 +336,8 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
                     try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}),
                 },
                 .hooks = .{
-                    .poststart = std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
-                    .poststop = std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/status; /usr/bin/timeout 2s /usr/bin/sh -c \"echo 'task-completed:{s};' > /tmp/weft.pipe\"'", .{ run_dir_path, unit_name }),
+                    .poststart = try std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
+                    .poststop = try std.fmt.allocPrint(alloc, "+/usr/bin/sh -c 'echo $EXIT_STATUS > {s}/status; /usr/bin/timeout 2s /usr/bin/sh -c \"echo 'task-completed:{s};' > /tmp/weft.pipe\"'", .{ run_dir_path, unit_name }),
                 },
                 .stderr = .{ .append = log_path },
                 .stdout = .{ .append = log_path },
@@ -348,7 +347,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
     );
     _ = try child.wait(self.daemon.io);
 
-    try term.success("task {s} started", .{req.task.pipeline});
+    term.success("task {s} started", .{req.task.pipeline});
     var buf: [32]u8 = undefined;
     try conn.send_object(&buf, anyerror!proto.task.spawn.Res, proto.task.spawn.Res{});
 

@@ -72,7 +72,7 @@ pub fn run(self: *@This(), io: std.Io) !void {
         },
         .spawn => |idx| {
             const task = backlog.orderedRemove(idx);
-            std.Io.async(self.io, task.closure.@"0", .{task.closure.@"1"});
+            _ = std.Io.async(self.io, task.closure.@"0", .{task.closure.@"1"});
             continue :run .backlog;
         },
     }

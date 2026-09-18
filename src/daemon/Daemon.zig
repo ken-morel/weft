@@ -41,14 +41,22 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
 }
 
 pub fn run_client_server(self: *@This()) void {
-    try self.term.info("listening on TCP :{d}", .{self.config.port});
+    _run_client_server(self) catch |err| {
+        if (err == error.Canceled)
+            return;
+        if (@errorReturnTrace()) |trace|
+            std.debug.dumpErrorReturnTrace(trace);
+    };
+}
+pub fn _run_client_server(self: *@This()) !void {
+    self.term.info("listening on TCP :{d}", .{self.config.port});
 
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
     const workers = try self.alloc.alloc(Worker, self.config.max_workers);
     var permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
-    try self.term.debug("spawned {d} workers", .{workers.len});
+    self.term.debug("spawned {d} workers", .{workers.len});
 
     for (workers) |*worker|
         worker.* = try .init(try self.alloc.alignedAlloc(u8, comptime std.mem.Alignment.fromByteUnits(std.heap.page_size_min), Worker.worker_heap_mem), self);
@@ -66,10 +74,10 @@ pub fn run_client_server(self: *@This()) void {
             break :req self.server.accept(self.io) catch |err| {
                 if (err == error.Canceled)
                     return;
-                try self.term.err("accept error: {any}", .{err});
+                self.term.err("accept error: {any}", .{err});
                 continue :req;
             };
-        try self.term.info("new connection", .{});
+        self.term.info("new connection", .{});
 
         group.async(
             self.io,
@@ -80,55 +88,68 @@ pub fn run_client_server(self: *@This()) void {
 }
 
 pub fn run_system_server(self: *@This()) void {
-    try self.term.info("listening on socket {}", .{paths.weft_socket});
+    _run_system_server(self) catch |err| {
+        if (err == error.Canceled)
+            return;
+        self.term.err("Error: {any}", .{err});
+        if (@errorReturnTrace()) |trace|
+            std.debug.dumpErrorReturnTrace(trace);
+    };
+}
+
+pub fn _run_system_server(self: *@This()) !void {
+    self.term.info("listening on socket {s}", .{paths.weft_socket});
 
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
     defer std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch {};
 
-    const addr: std.Io.net.UnixAddress = .init(paths.weft_socket);
+    const addr: std.Io.net.UnixAddress = try .init(paths.weft_socket);
     std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch |err|
         if (err != error.FileNotFound)
-            @panic(std.fmt.allocPrint(self.alloc, "{any}", err));
+            return err;
     var srv = try addr.listen(self.io, .{});
 
     var buff: [1 << 10]u8 = undefined;
-    var rbuff: [1 << 10]u8 = undefined;
 
     var conn: std.Io.net.Stream = undefined;
     var reader: std.Io.net.Stream.Reader = undefined;
 
-    run: switch (union(enum) {
+    const Run = union(enum) {
         accept,
         read_cmd,
         done,
-        invalid_request,
+        invalid_request: []const u8,
         handle_task_completed,
-    }.accept) {
+    };
+    run: switch (@as(Run, .accept)) {
         // accept
         .accept => {
             conn = try srv.accept(self.io);
-            reader = conn.reader(std.io, &rbuff);
+            reader = conn.reader(self.io, &buff);
             continue :run .read_cmd;
         },
         .read_cmd => {
-            const cmd = try reader.interface.takeDelimiter(':') orelse continue :run .invalid_request;
-            if (std.mem.eql(u8, cmd, "task-completed")) {
+            const cmd = try reader.interface.takeDelimiter(':') orelse continue :run .{ .invalid_request = "Missing ':' delimiter" };
+            self.term.info("daemon cmd: {s}", .{cmd});
+            if (std.mem.eql(u8, cmd, "task-completed"))
                 continue :run .handle_task_completed;
-            }
         },
         // replies
-        .invalid_request => {},
+        .invalid_request => |msg| {
+            self.term.err("  invalid request: {s}", .{msg});
+            conn.close(self.io);
+        },
         .done => {
             conn.close(self.io);
             continue :run .accept;
         },
         // handlers
         .handle_task_completed => {
-            const unit = try reader.interface.takeDelimiter(';') orelse continue :run .invalid_request;
-
-            const task: Task = .from_unit_name(unit) orelse continue :run .invalid_request;
+            const unit = try reader.interface.takeDelimiter(';') orelse continue :run .{ .invalid_request = "Missing closing ';' token" };
+            self.term.info("  unit completed: {s}", .{unit});
+            const task = Task.from_unit_name(unit) orelse continue :run .{ .invalid_request = "Invalid unit name" };
             group.async(self.io, finalize_task, .{ self, try task.dupe(self.alloc) });
             continue :run .done;
         },
@@ -136,18 +157,18 @@ pub fn run_system_server(self: *@This()) void {
 }
 
 pub fn run(self: *@This()) !void {
-    try self.term.debug("max workers: {d}", .{self.config.max_workers});
-    std.Io.async(self.io, run_client_server, .{self});
-    std.Io.async(self.io, run_system_server, .{self});
+    self.term.debug("max workers: {d}", .{self.config.max_workers});
+    _ = std.Io.async(self.io, run_client_server, .{self});
+    _ = std.Io.async(self.io, run_system_server, .{self});
 }
 
 pub fn finalize_task(self: *@This(), task: Task) void {
     _finalize_task(self, task) catch |err| {
         self.term.err("finalize task error: {any}", .{err});
         if (@errorReturnTrace()) |trace|
-            std.debug.dumpStackTrace(trace);
+            std.debug.dumpErrorReturnTrace(trace);
     };
-    task.free_duped(self.alloc);
+    task.free_duped(self.alloc) catch {};
 }
 pub fn _finalize_task(self: *@This(), task: Task) !void {
     const cwd = std.Io.Dir.cwd();

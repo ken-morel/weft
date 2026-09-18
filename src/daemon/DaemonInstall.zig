@@ -3,7 +3,7 @@ const std = @import("std");
 const ClientInstall = @import("../client/ClientInstall.zig");
 const read_only_user_permissions = ClientInstall.read_only_user_permissions;
 const read_only_user_mode = ClientInstall.read_only_user_mode;
-const proto = @import("../wire/proto.zig");
+const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const UUIDv7 = @import("../util/UUIDv7.zig");
 
@@ -72,7 +72,7 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
     try cwd.createDirPath(io, "/var/lib/weft/workspaces");
     try cwd.createDirPath(io, "/var/lib/weft/run");
     try cwd.createDirPath(io, "/var/lib/weft/artifacts");
-    try term.debug("created /var/lib/weft directory tree", .{});
+    term.debug("created /var/lib/weft directory tree", .{});
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);
         defer alloc.free(exe_path);
@@ -85,7 +85,7 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
         }
         break :install_exe;
     }
-    try term.debug("installed binary to /usr/local/bin/weft", .{});
+    term.debug("installed binary to /usr/local/bin/weft", .{});
     write_config: {
         var secret: [32]u8 = undefined;
         try io.randomSecure(&secret);
@@ -107,8 +107,7 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
 
         try config_file.replace(io);
 
-        try term.println("secret: {s}", .{config.secret});
-        try term.flush();
+        term.println("secret: {s}", .{config.secret});
 
         break :write_config;
     }
@@ -153,7 +152,7 @@ pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*T
 
     var file = cwd.openFile(io, "/etc/weft.zon", .{}) catch |err| {
         if (term) |t|
-            try t.err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
+            t.err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
         return err;
     };
     defer file.close(io);
@@ -162,7 +161,7 @@ pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*T
 
     if ((stat.permissions.toMode() & 0o777) != read_only_user_mode) {
         if (term) |t|
-            try t.err("/etc/weft.zon has insecure permissions, must be 0600", .{});
+            t.err("/etc/weft.zon has insecure permissions, must be 0600", .{});
         return error.InsecurePermissions;
     }
     var buff: [4 << 10]u8 = undefined;

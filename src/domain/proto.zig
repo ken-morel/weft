@@ -35,13 +35,13 @@ pub const task = struct {
         deployment: UUIDv7,
         pipeline: []const u8,
         pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
-            const workspace = try alloc.dupe(self.workspace);
+            const workspace = try alloc.dupe(u8, self.workspace);
             errdefer alloc.free(workspace);
-            const service = try alloc.dupe(self.service);
+            const service = try alloc.dupe(u8, self.service);
             errdefer alloc.free(service);
-            const env = try alloc.dupe(self.env);
+            const env = try alloc.dupe(u8, self.env);
             errdefer alloc.free(env);
-            const pipeline = try alloc.dupe(self.pipeline);
+            const pipeline = try alloc.dupe(u8, self.pipeline);
             errdefer alloc.free(pipeline);
             return .{
                 .workspace = workspace,

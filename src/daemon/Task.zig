@@ -21,7 +21,7 @@ pub fn from_unit_name(name: []const u8) ?@This() {
     const pipeline = iter.next() orelse return null;
     const deployment_id = iter.next() orelse return null;
 
-    const deployment: UUIDv7 = .parse(deployment_id) catch return null;
+    const deployment = UUIDv7.parse(deployment_id) catch return null;
 
     return .{ .id = .{
         .workspace = workspace,
@@ -132,7 +132,7 @@ pub fn siblings(self: *const @This(), alloc: std.mem.Allocator, io: std.Io) !Tas
     };
 }
 
-pub fn dupe(self: @This(), alloc: std.mem.Allocator) !void {
+pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
     return .{
         .id = try self.id.dupe(alloc),
     };

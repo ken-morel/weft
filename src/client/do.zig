@@ -27,7 +27,7 @@ pub fn run(
     const config = try project.get_config(arena.allocator(), io);
     var deployment = try Deployment.create(io, config, env, owned_targets);
     try deployment.save(alloc, io, project);
-    try term.info(
+    term.info(
         "created deployment {s}",
         .{&deployment.uuid.to_string()},
     );

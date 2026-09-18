@@ -5,7 +5,7 @@ const ClientInstall = @import("ClientInstall.zig");
 const Connection = @import("../wire/Connection.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const proto = @import("../wire/proto.zig");
+const proto = @import("../domain/proto.zig");
 const Remote = @import("Remote.zig");
 const Term = @import("../domain/Term.zig");
 const uploader = @import("uploader.zig");
@@ -34,7 +34,7 @@ pub fn run_deployment(
         break;
         // wait for event
     }
-    try term.success("Deployment completed", .{});
+    term.success("Deployment completed", .{});
 }
 pub fn spawn_step(
     alloc: std.mem.Allocator,
@@ -47,7 +47,7 @@ pub fn spawn_step(
 ) !void {
     var buffer = try alloc.alloc(u8, Connection.max_packet_size);
     defer alloc.free(buffer);
-    try term.info("spawning deployment step: {s} on {s}", .{ step.pipeline, step.remote });
+    term.info("spawning deployment step: {s} on {s}", .{ step.pipeline, step.remote });
     var arena: std.heap.ArenaAllocator = .init(alloc);
     defer arena.deinit();
     const remote: *const Remote = remote: for (remotes) |*remote| {
@@ -55,7 +55,7 @@ pub fn spawn_step(
             break :remote remote;
     } else return error.InvalidRemote;
     const pipeline = deployment.service.get_pipeline(step.pipeline) orelse {
-        try term.err("invalid pipeline: {s}", .{step.pipeline});
+        term.err("invalid pipeline: {s}", .{step.pipeline});
         return error.InvalidPipeline;
     };
 
@@ -102,9 +102,9 @@ pub fn spawn_step(
         deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);
         const item = &deployment.running[deployment.running.len - 1];
         item.* = step;
-        try term.success("Spawned task succesfully", .{});
+        term.success("Spawned task succesfully", .{});
     } else |err| {
-        try term.err("Remote error: {any}", .{err});
+        term.err("Remote error: {any}", .{err});
         return err;
     }
 }

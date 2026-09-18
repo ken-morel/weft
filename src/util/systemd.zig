@@ -57,9 +57,9 @@ pub fn run(
             stdout: ?StandardOutput = null,
             stderr: ?StandardOutput = null,
             hooks: struct {
-                prestart: ?[]const u8,
-                poststart: ?[]const u8,
-                poststop: ?[]const u8,
+                prestart: ?[]const u8 = null,
+                poststart: ?[]const u8 = null,
+                poststop: ?[]const u8 = null,
             } = .{},
         } = .{},
         fs: struct {
