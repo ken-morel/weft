@@ -98,8 +98,6 @@ pub fn run_system_server(self: *@This()) void {
 }
 
 pub fn _run_system_server(self: *@This()) !void {
-    self.term.info("listening on socket {s}", .{paths.weft_socket});
-
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
@@ -123,6 +121,7 @@ pub fn _run_system_server(self: *@This()) !void {
         invalid_request: []const u8,
         handle_task_completed,
     };
+    self.term.info("listening on socket {s}", .{paths.weft_socket});
     run: switch (@as(Run, .accept)) {
         // accept
         .accept => {
@@ -159,7 +158,8 @@ pub fn _run_system_server(self: *@This()) !void {
 pub fn run(self: *@This()) !void {
     self.term.debug("max workers: {d}", .{self.config.max_workers});
     _ = std.Io.async(self.io, run_client_server, .{self});
-    _ = std.Io.async(self.io, run_system_server, .{self});
+
+    self.run_system_server();
 }
 
 pub fn finalize_task(self: *@This(), task: Task) void {

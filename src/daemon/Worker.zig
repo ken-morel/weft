@@ -66,11 +66,25 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
     var response_buf: [16]u8 = undefined;
     switch (request) {
         .artifact_push => {
-            const res = self.handle_artifact_push(&conn);
+            var res: proto.Res(proto.artifact.push.Res) = undefined;
+            res = self.handle_artifact_push(&conn) catch |err| err: {
+                if (@errorReturnTrace()) |trace|
+                    std.debug.dumpErrorReturnTrace(trace);
+                self.daemon.term.err("daemon::worker::artifact_push {any}", .{err});
+                try conn.send_object(&response_buf, proto.Res(@TypeOf(res)), res);
+                break :err err;
+            };
             try conn.send_object(&response_buf, @TypeOf(res), res);
         },
         .task_spawn => {
-            const res = self.handle_task_spawn(&conn);
+            var res: proto.Res(proto.task.spawn.Res) = undefined;
+            res = self.handle_task_spawn(&conn) catch |err| err: {
+                if (@errorReturnTrace()) |trace|
+                    std.debug.dumpErrorReturnTrace(trace);
+                self.daemon.term.err("daemon::worker::task_spawn {any}", .{err});
+                try conn.send_object(&response_buf, proto.Res(@TypeOf(res)), res);
+                break :err err;
+            };
             try conn.send_object(&response_buf, @TypeOf(res), res);
         },
         else => {},
@@ -177,7 +191,7 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
 // - $OUT to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/out/{a}
 // - cwd to /var/lib/weft/run/{w}/{s}/{e}/{d}/{p}/cwd
 
-fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
+fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spawn.Res) {
     const alloc = self.allocator.allocator();
     const io = self.daemon.io;
     const term = self.daemon.term;
@@ -348,8 +362,6 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) !void {
     _ = try child.wait(self.daemon.io);
 
     term.success("task {s} started", .{req.task.pipeline});
-    var buf: [32]u8 = undefined;
-    try conn.send_object(&buf, anyerror!proto.task.spawn.Res, proto.task.spawn.Res{});
 
-    return;
+    return .{};
 }
