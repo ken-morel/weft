@@ -1,9 +1,9 @@
 const std = @import("std");
 
+const Deployment = @import("../client/Deployment.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const systemd = @import("../util/systemd.zig");
-const UUIDv7 = @import("../util/UUIDv7.zig");
 
 const Task = @This();
 
@@ -21,7 +21,7 @@ pub fn from_unit_name(name: []const u8) ?@This() {
     const pipeline = iter.next() orelse return null;
     const deployment_id = iter.next() orelse return null;
 
-    const deployment = UUIDv7.parse(deployment_id) catch return null;
+    const deployment = Deployment.Id.parse(deployment_id) catch return null;
 
     return .{ .id = .{
         .workspace = workspace,
@@ -100,25 +100,26 @@ pub const TaskSiblingsIterator = struct {
     task: *const Task,
     walker: ?std.Io.Dir.SelectiveWalker,
 
-    pub fn next(self: @This(), io: std.Io) ?Task {
-        while (true) {
-            const task_deployment = self.task.id.deployment.to_string();
-            const walker = &(self.walker orelse return null);
-            const entry = try walker.next(io) orelse return null;
-            var sibling = self.task.*;
+    pub fn next(self: *@This(), io: std.Io) !?Task {
+        if (self.walker) |*walker| {
+            while (true) {
+                const task_deployment = self.task.id.deployment.to_string();
+                const entry = try walker.next(io) orelse return null;
+                var sibling = self.task.*; // copy
 
-            if (std.mem.eql(u8, &task_deployment, entry.basename))
-                continue;
-            sibling.id.deployment = try .parse(entry.basename);
-            return sibling;
-        }
+                if (std.mem.eql(u8, &task_deployment, entry.basename))
+                    continue;
+                sibling.id.deployment = try Deployment.Id.parse(entry.basename);
+                return sibling;
+            }
+        } else return null;
     }
 };
 
 pub fn siblings(self: *const @This(), alloc: std.mem.Allocator, io: std.Io) !TaskSiblingsIterator {
     const run_dir = try self.run_dir_path(alloc);
     defer alloc.free(run_dir);
-    const pipeline_dir = std.fs.path.dirname(run_dir) orelse error.Unreachable;
+    const pipeline_dir = std.fs.path.dirname(run_dir) orelse return error.Unreachable;
     const dir = try std.Io.Dir.cwd().openDir(io, pipeline_dir, .{ .iterate = true });
     const walker: ?std.Io.Dir.SelectiveWalker = std.Io.Dir.walkSelectively(dir, alloc) catch |err|
         if (err == error.FileNotFound)

@@ -3,6 +3,7 @@ const std = @import("std");
 name: ?[]const u8 = null,
 address: struct { []const u8, u16 } = .{ "127.0.0.1", 9338 },
 token: []const u8,
+groups: []const []const u8 = &.{},
 
 pub fn get_token(self: @This()) ![32]u8 {
     var out: [32]u8 = undefined;

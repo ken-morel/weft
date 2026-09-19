@@ -3,7 +3,6 @@ const std = @import("std");
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const Pipeline = @import("../domain/Weft.zig").Pipeline;
-const UUIDv7 = @import("../util/UUIDv7.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
@@ -14,37 +13,81 @@ const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
 
-pub fn cache_artifact(
+pub fn get_artifact(
     alloc: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    artifact_id: proto.task.Id,
-    project: *const Project,
     deployment: *const Deployment,
-    remotes: []const Remote,
+    artifact: proto.artifact.Id,
+    remote: *const Remote,
+    project: *const Project,
 ) !void {
-    var arena: std.heap.ArenaAllocator = .init(alloc);
-    defer arena.deinit();
-    const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.uuid, artifact_id.pipeline);
+    const artifact_dir_path = try project.artifact_dir_path(
+        alloc,
+        io,
+        deployment.id,
+        artifact.pipeline,
+    );
     defer alloc.free(artifact_dir_path);
 
-    blk: {
-        std.Io.Dir.cwd().access(io, artifact_dir_path, .{}) catch break :blk;
+    if (local_artifact_exists(io, artifact_dir_path))
         return;
-    }
-    const source_artifact = artifact: {
-        for (deployment.artifacts) |*artifact|
-            if (std.mem.eql(u8, artifact.name, artifact_id.pipeline))
-                break :artifact artifact;
-        unreachable;
-    };
-    const remote: *const Remote = remote: for (remotes) |*remote| {
-        if (std.mem.eql(u8, remote.get_name(), source_artifact.remote))
-            break :remote remote;
-    } else return error.InvalidRemote;
 
-    // get the artifact from the remote...
-    term.info("requesting artifact '{s}' from remote {s}", .{ artifact_id.pipeline, remote.get_name() });
+    term.info("Fetching artifact '{s}' from remote {s}", .{ artifact.pipeline, remote.get_name() });
+    var client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
+    defer client.destroy(alloc, io);
+
+    const conn_buffer = try alloc.alloc(u8, Connection.max_packet_size);
+    defer alloc.free(conn_buffer);
+    try client.conn.send_object(conn_buffer, proto.Request, .artifact_pull);
+    try client.conn.send_object(
+        conn_buffer,
+        proto.artifact.pull.Req,
+        .{ .header = .{ .id = artifact } },
+    );
+
+    const dir = try std.Io.Dir.cwd().createDirPathOpen(io, artifact_dir_path, .{});
+    defer dir.close(io);
+
+    var arena: std.heap.ArenaAllocator = .init(alloc);
+    defer arena.deinit();
+    var packer: Packer = .unpacker(dir);
+    defer packer.deinit(io);
+    const pressor_buffer = try alloc.alloc(u8, Pressor.buffer_size);
+    defer alloc.free(pressor_buffer);
+    var pressor: Pressor = .init(pressor_buffer);
+    const decompress_buffer = try alloc.alloc(u8, Pressor.max_uncompressed_size);
+    defer alloc.free(decompress_buffer);
+
+    while (true) {
+        const res = try client.conn.recv_object(arena.allocator(), proto.artifact.pull.Res);
+        switch (res) {
+            .file => |path| {
+                try packer.put(io, .{ .file = path });
+            },
+            .folder => |path| {
+                try packer.put(io, .{ .folder = path });
+            },
+            .raw => |data| {
+                try packer.put(io, .{ .data = data });
+            },
+            .compressed => |comp| {
+                var input: std.Io.Reader = .fixed(comp);
+                var output: std.Io.Writer = .fixed(decompress_buffer);
+                try pressor.decompress(&input, &output);
+                try packer.put(io, .{ .data = output.buffered() });
+            },
+            .end => break,
+            .footer => break,
+        }
+        _ = arena.reset(.retain_capacity);
+    }
+    term.success("Downloaded artifact '{s}'", .{artifact.pipeline});
+}
+
+fn local_artifact_exists(io: std.Io, path: []const u8) bool {
+    std.Io.Dir.cwd().access(io, path, .{}) catch return false;
+    return true;
 }
 
 pub fn send_artifact(
@@ -57,9 +100,13 @@ pub fn send_artifact(
     remotes: []const Remote,
     remote: *const Remote,
 ) !void {
-    const buffer = try alloc.alloc(u8, Connection.max_packet_size);
-    defer alloc.free(buffer);
-    const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.uuid, artifact_id.pipeline);
+    const read_buffer = try alloc.alloc(u8, Connection.max_packet_size);
+    defer alloc.free(read_buffer);
+    const send_buffer = try alloc.alloc(u8, Connection.max_packet_size);
+    defer alloc.free(send_buffer);
+    const compressed_buffer = try alloc.alloc(u8, Pressor.max_compressed_size);
+    defer alloc.free(compressed_buffer);
+    const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.id, artifact_id.pipeline);
     defer alloc.free(artifact_dir_path);
 
     var client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
@@ -67,22 +114,29 @@ pub fn send_artifact(
 
     const conn = &client.conn;
 
-    try conn.send_object(buffer, proto.Request, .artifact_push);
-    try conn.send_object(buffer, proto.artifact.push.Req, .{ .id = artifact_id });
+    try conn.send_object(send_buffer, proto.Request, .artifact_push);
+    try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .header = .{ .id = artifact_id } });
 
-    const has_artifact = try conn.recv_object_buf(buffer, bool);
-    if (has_artifact)
-        return;
+    const has_artifact = try conn.recv_object_buf(send_buffer, proto.artifact.push.Res);
+    switch (has_artifact) {
+        .has_artifact => |present| if (present) return,
+        .footer => {},
+    }
 
-    try cache_artifact(
-        alloc,
-        io,
-        term,
-        artifact_id,
-        project,
-        deployment,
-        remotes,
-    );
+    // The remote does not have it yet: make sure we hold a local copy, pulling
+    // it from any other remote that does.
+    if (!local_artifact_exists(io, artifact_dir_path)) {
+        var fetched = false;
+        for (remotes) |*candidate| {
+            if (std.mem.eql(u8, candidate.get_name(), remote.get_name()))
+                continue;
+            get_artifact(alloc, io, term, deployment, artifact_id, candidate, project) catch continue;
+            fetched = true;
+            break;
+        }
+        if (!fetched)
+            return error.ArtifactNotFound;
+    }
 
     var packer: Packer = try .packer(
         alloc,
@@ -99,31 +153,23 @@ pub fn send_artifact(
     defer alloc.free(pressor_buffer);
     var pressor: Pressor = .init(pressor_buffer);
 
-    const output = try alloc.alloc(u8, buffer.len);
-    defer alloc.free(output);
-    while (try packer.get(io, buffer)) |pack| switch (pack) {
+    while (try packer.get(io, read_buffer)) |pack| switch (pack) {
         .file => |path| {
-            buffer[0] = proto.artifact.push.file;
-            std.mem.copyForwards(u8, buffer[1..], path);
-            try client.conn.send(buffer[0 .. 1 + path.len]);
+            try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .file = path });
         },
         .folder => |path| {
-            buffer[0] = proto.artifact.push.folder;
-            std.mem.copyForwards(u8, buffer[1..], path);
-            try client.conn.send(buffer[0 .. 1 + path.len]);
+            try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .folder = path });
         },
         .data => |data| {
             var reader: std.Io.Reader = .fixed(data);
-            var writer: std.Io.Writer = .fixed(output);
-            try writer.writeByte(proto.artifact.push.compressed);
+            var writer: std.Io.Writer = .fixed(compressed_buffer);
             try pressor.compress(&reader, &writer);
-            try client.conn.send(writer.buffered());
+            try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .data = writer.buffered() });
         },
     };
-    buffer[0] = proto.artifact.push.end;
-    try client.conn.send(buffer[0..1]);
+    try conn.send_object(send_buffer, proto.artifact.push.Req, .end);
 
-    const reply = try client.conn.recv_object_buf(buffer, anyerror!proto.artifact.push.Res);
+    const reply = try conn.recv_object_buf(send_buffer, anyerror!proto.artifact.push.Res);
     if (reply) |_| {} else |err| {
         return err;
     }
@@ -177,7 +223,7 @@ pub fn send_required_artifacts(
             io,
             send_artifact_concurrent,
             .{ alloc, io, term, proto.task.Id{
-                .deployment = deployment.uuid,
+                .deployment = deployment.id,
                 .pipeline = input.name,
                 .env = deployment.env,
                 .service = deployment.service.name,

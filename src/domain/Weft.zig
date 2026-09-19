@@ -24,8 +24,6 @@ pub const Pipeline = struct {
         name: []const u8,
     };
     const SecondInstance = union(enum) {
-        wait: ?u32,
-        safe: u32,
         kill: void,
         ignore: void,
     };
@@ -39,9 +37,13 @@ pub const Pipeline = struct {
     mem_lock: bool = false,
     disable_network: bool = true,
     oom_score_adjust: ?i32 = null,
-    timeout: ?u32 = null,
+
+    memory_max: ?u64 = null,
+    memory_high: ?u64 = null,
     cpu_quota: ?u16 = null,
-    cpu_weight: ?u16 = null,
+    tasks_max: ?u32 = null,
+    io_weight: ?u32 = null,
+    timeout: ?u32 = null,
 
     second_instance: SecondInstance = .ignore,
     keep: []Keep = &.{},

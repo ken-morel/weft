@@ -4,8 +4,10 @@ const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_do = @import("client/do.zig");
 const Project = @import("client/Project.zig");
 const Step = @import("client/Step.zig");
+const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
+const Task = @import("daemon/Task.zig");
 const Term = @import("domain/Term.zig");
 
 pub const std_options: std.Options = .{
@@ -85,6 +87,19 @@ pub fn main(init: std.process.Init) !void {
                 return daemon.run();
             }
             break :cmd;
+        } else if (std.mem.eql(u8, cmd, "_daemon")) {
+            if (first + 1 >= args.len)
+                @panic("Invalid arguments");
+            const sub = args[first + 1];
+
+            if (std.mem.eql(u8, sub, "completed")) {
+                if (first + 3 >= args.len)
+                    @panic("Invalid arguments");
+                const task = Task.from_unit_name(args[first + 2]) orelse @panic("Invalid task unit name");
+                const exit_code = try std.fmt.parseInt(u16, args[first + 3], 10);
+                try clinternal.task_completed(alloc, init.io, &term, task, exit_code);
+                return;
+            }
         } else if (std.mem.eql(u8, cmd, "do")) {
             if (args.len < first + 2) {
                 term.err("usage: weft do [remote.]pipeline [[remote.]pipeline ...]", .{});

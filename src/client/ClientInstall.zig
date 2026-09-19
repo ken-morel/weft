@@ -1,8 +1,8 @@
 const std = @import("std");
 
+const Deployment = @import("Deployment.zig");
 pub const Remote = @import("Remote.zig");
 const Term = @import("../domain/Term.zig");
-const UUIDv7 = @import("../util/UUIDv7.zig");
 
 pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)));
 pub const read_only_user_mode = read_only_user_permissions.toMode();
@@ -26,7 +26,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Enviro
     };
 }
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
-    const uuid = (try UUIDv7.now(io)).to_string();
+    const uuid = (try Deployment.Id.now(io)).to_string();
 
     self.temp_dir.createDirPath(io, sub) catch {};
     var sub_dir = try self.temp_dir.openDir(io, sub, .{});

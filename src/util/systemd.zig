@@ -280,7 +280,6 @@ pub fn run(
 
     const all = try std.mem.join(alloc, " ", argv);
     defer alloc.free(all);
-    std.debug.print("Spawnig:  {s}", .{all});
 
     return try std.process.spawn(io, .{
         .argv = argv,
@@ -290,41 +289,8 @@ pub fn run(
     });
 }
 
-pub const UnitStatus = struct {};
-
-pub fn show(alloc: std.mem.Allocator, io: std.Io, unit: []const u8) !UnitStatus {
-    _ = alloc;
-    const child = try std.process.spawn(
-        io,
-        .{
-            .argv = &.{ "systemctl", "show", unit },
-            .stdin = .ignore,
-            .stdout = .pipe,
-            .stderr = .inherit,
-        },
-    );
-    _ = try child.wait(io);
-
-    if (child.stdout) |stdout| {
-        var buffer: [4 << 10]u8 = undefined;
-        var reader = stdout.reader(io, &buffer);
-        reader.interface.discard(.unlimited);
-        return .{};
-    } else return error.NoStdout;
-}
-
-pub fn logs(io: std.Io, unit: []const u8) !std.process.Child {
-    const child = try std.process.spawn(io, .{
-        .argv = &.{ "journalctl", "-u", unit, "-f", "-o", "cat", "--no-pager" },
-        .stdin = .ignore,
-        .stderr = .inherit,
-        .stdout = .pipe,
-    });
-    return child;
-}
-
 pub fn freeze(io: std.Io, unit: []const u8) !void {
-    const child = try std.process.spawn(
+    var child = try std.process.spawn(
         io,
         .{
             .argv = &.{ "systemctl", "freeze", unit },
@@ -337,7 +303,7 @@ pub fn freeze(io: std.Io, unit: []const u8) !void {
 }
 
 pub fn kill(io: std.Io, unit: []const u8) !void {
-    const child = try std.process.spawn(
+    var child = try std.process.spawn(
         io,
         .{
             .argv = &.{ "systemctl", "kill", unit },

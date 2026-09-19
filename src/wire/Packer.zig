@@ -18,7 +18,7 @@ pub fn packer(alloc: std.mem.Allocator, dir: std.Io.Dir) !@This() {
         .walker = try dir.walk(alloc),
     };
 }
-pub fn unpacker(dir: std.Io.Dir) !@This() {
+pub fn unpacker(dir: std.Io.Dir) @This() {
     return .{
         .root = dir,
     };

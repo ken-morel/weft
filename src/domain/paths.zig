@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const UUIDv7 = @import("../util/UUIDv7.zig");
-
 pub inline fn state_dir(path: []const u8) []const u8 {
     return if (std.mem.startsWith(u8, path, var_lib))
         path[var_lib.len..]

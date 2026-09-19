@@ -1,4 +1,3 @@
-const UUIDv7 = @import("../util/UUIDv7.zig");
 const Weft = @import("../domain/Weft.zig");
 
 secret: [32]u8,

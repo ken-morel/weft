@@ -22,7 +22,7 @@ pub fn acquire(self: *@This()) !*@This() {
     try self.lock.lock(self.io);
     return self;
 }
-pub fn try_acquire(self: *@This()) ?*@This() {
+pub fn try_acquire(self: *@This()) !?*@This() {
     return if (self.lock.tryLock())
         self
     else

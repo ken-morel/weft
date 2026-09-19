@@ -1,7 +1,7 @@
 const std = @import("std");
 
+const Deployment = @import("Deployment.zig");
 const Weft = @import("../domain/Weft.zig");
-const UUIdv7 = @import("../util/UUIDv7.zig");
 
 dir: std.Io.Dir,
 
@@ -12,6 +12,7 @@ pub inline fn open(dir: std.Io.Dir) !@This() {
 }
 
 pub fn get_config(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
+    @setEvalBranchQuota(100_000);
     const content = self.dir.readFileAllocOptions(
         io,
         "weft.zon",
@@ -30,7 +31,7 @@ pub fn get_config(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
 pub inline fn open_weft_dir(self: @This(), io: std.Io) !std.Io.Dir {
     return self.dir.createDirPathOpen(io, ".weft", .{ .open_options = .{ .iterate = true } });
 }
-pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: UUIdv7) !std.Io.Dir {
+pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: Deployment.Id) !std.Io.Dir {
     const weft_dir = try self.open_weft_dir(io);
     defer weft_dir.close(io);
 
@@ -46,7 +47,7 @@ pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: UUIdv7) !std.I
     return weft_dir.openDir(io, &deployment_name, .{ .iterate = true });
 }
 
-pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deployment: UUIdv7, pipeline: []const u8) ![]const u8 {
+pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deployment: Deployment.Id, pipeline: []const u8) ![]const u8 {
     const deployment_dir = try self.open_deployment_dir(io, deployment);
     defer deployment_dir.close(io);
 

@@ -6,11 +6,10 @@ const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 const Term = @import("../domain/Term.zig");
 
-const UUIDv7 = @import("../util/UUIDv7.zig");
 const runner = @import("runner.zig");
 const Walker = @import("../util/Walker.zig");
 
-pub fn create_src_artifact(alloc: std.mem.Allocator, io: std.Io, term: *Term, inst: ClientInstall, project: Project, deployment_id: UUIDv7) !void {
+pub fn create_src_artifact(alloc: std.mem.Allocator, io: std.Io, term: *Term, inst: ClientInstall, project: Project, deployment_id: Deployment.Id) !void {
     term.info("snapshotting src artifact", .{});
     const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment_id, "src");
     defer alloc.free(artifact_dir_path);

@@ -19,6 +19,7 @@ pub fn run_deployment(
     deployment: *Deployment,
 ) !void {
     const remotes = try inst.get_remotes(alloc, io, term);
+    defer alloc.free(remotes);
     while (!deployment.completed()) {
         while (try deployment.next_step()) |next_step|
             try spawn_step(
@@ -67,7 +68,7 @@ pub fn spawn_step(
     try client.conn.send_object(buffer, proto.Request, .task_spawn);
     try client.conn.send_object(buffer, proto.task.spawn.Req, .{
         .task = .{
-            .deployment = deployment.uuid,
+            .deployment = deployment.id,
             .env = deployment.env,
             .pipeline = pipeline.name,
             .service = deployment.service.name,
@@ -100,7 +101,7 @@ pub fn spawn_step(
     }
     buffer[0] = proto.task.spawn.end;
     try client.conn.send(buffer[0..1]);
-    const reply = try client.conn.recv_object_buf(buffer, anyerror!proto.task.spawn.Res);
+    const reply = try client.conn.recv_object_buf(buffer, proto.Res(proto.task.spawn.Res));
     if (reply) |_| {
         deployment.running = try alloc.realloc(deployment.running, deployment.running.len + 1);
         const item = &deployment.running[deployment.running.len - 1];
@@ -110,4 +111,7 @@ pub fn spawn_step(
         term.err("Remote error: {any}", .{err});
         return err;
     }
+
+    term.info("Waiting for a second...", .{});
+    try std.Io.sleep(io, .fromSeconds(1), .real);
 }

@@ -1,11 +1,10 @@
 const std = @import("std");
 
+const Weft = @import("../domain/Weft.zig");
 const Project = @import("Project.zig");
 pub const Step = @import("Step.zig");
-const UUIDv7 = @import("../util/UUIDv7.zig");
-const Weft = @import("../domain/Weft.zig");
 
-uuid: UUIDv7,
+id: Id,
 
 service: Weft,
 env: []const u8,
@@ -16,7 +15,68 @@ targets: []Step = &.{},
 pub const Artifact = struct {
     remote: []const u8,
     name: []const u8,
-    size: u64,
+};
+
+pub const Id = struct {
+    const alphabet = "0123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstvwxyz";
+
+    const decode_table: [128]u8 = blk: {
+        var table: [128]u8 = [_]u8{255} ** 128;
+        for (alphabet, 0..) |c, idx|
+            table[c] = @intCast(idx);
+
+        break :blk table;
+    };
+
+    raw: u64,
+
+    pub fn now(io: std.Io) !@This() {
+        const ms = @as(u64, @intCast(std.Io.Clock.now(.awake, io).toMilliseconds()));
+        var salt: [2]u8 = undefined;
+        try io.randomSecure(&salt);
+        const salt_u13: u64 = std.mem.readInt(u16, &salt, .little) & 0x1FFF;
+
+        return .{
+            .raw = (ms << 13) | salt_u13,
+        };
+    }
+
+    pub fn to_string(self: @This()) [10]u8 {
+        var buf: [10]u8 = undefined;
+        var v = self.raw;
+        var i: usize = 10;
+        while (i > 0) {
+            i -= 1;
+            buf[i] = alphabet[@as(usize, @intCast(v % alphabet.len))];
+            v /= alphabet.len;
+        }
+        return buf;
+    }
+
+    pub fn parse(str: []const u8) !@This() {
+        if (str.len != 10)
+            return error.InvalidLength;
+        var val: u64 = 0;
+        for (str) |c| {
+            if (c >= 128)
+                return error.InvalidCharacter;
+            const digit = decode_table[c];
+            if (digit == 255)
+                return error.InvalidCharacter;
+            val = val * alphabet.len + digit;
+        }
+        return .{ .raw = val };
+    }
+
+    pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+        const str = self.to_string();
+        try writer.writeAll(&str);
+    }
+
+    pub fn formatNumber(self: @This(), writer: *std.Io.Writer, num: std.fmt.Number) !void {
+        _ = num;
+        return self.format(writer);
+    }
 };
 
 pub fn next_target(self: @This()) ?*const Step {
@@ -102,9 +162,9 @@ pub fn completed(self: @This()) bool {
 }
 
 pub fn create(io: std.Io, service: Weft, env: []const u8, targets: []Step) !@This() {
-    const id = try UUIDv7.now(io);
+    const id = try Id.now(io);
     return .{
-        .uuid = id,
+        .id = id,
         .service = service,
         .artifacts = &.{},
         .running = &.{},
@@ -124,10 +184,10 @@ pub fn get_artifact(self: @This(), output: []const u8) ?*const Artifact {
 pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) !void {
     var buffer: [1 << 10]u8 = undefined;
 
-    const filename = try std.fmt.allocPrint(alloc, "{x}.zon", .{self.uuid});
+    const filename = try std.fmt.allocPrint(alloc, "{}.zon", .{self.id});
     defer alloc.free(filename);
 
-    const deployments_dir = try proj.open_deployment_dir(io, self.uuid);
+    const deployments_dir = try proj.open_deployment_dir(io, self.id);
     defer deployments_dir.close(io);
     var atomic = try deployments_dir.createFileAtomic(io, filename, .{
         .make_path = true,
