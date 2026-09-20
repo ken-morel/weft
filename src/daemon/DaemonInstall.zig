@@ -219,7 +219,6 @@ pub fn get_artifact_path(
         "/var/lib/weft/artifacts/",
         art.workspace,
         art.service,
-        art.env,
         &uuid,
         art.pipeline,
     });

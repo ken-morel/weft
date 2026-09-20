@@ -7,7 +7,6 @@ pub const Step = @import("Step.zig");
 id: Id,
 
 service: Weft,
-env: []const u8,
 artifacts: []Artifact = &.{},
 running: []Step = &.{},
 targets: []Step = &.{},
@@ -172,7 +171,7 @@ pub fn completed(self: @This()) bool {
     return self.next_target() == null;
 }
 
-pub fn create(io: std.Io, service: Weft, env: []const u8, targets: []Step) !@This() {
+pub fn create(io: std.Io, service: Weft, targets: []Step) !@This() {
     const id = try Id.now(io);
     return .{
         .id = id,
@@ -180,7 +179,6 @@ pub fn create(io: std.Io, service: Weft, env: []const u8, targets: []Step) !@Thi
         .artifacts = &.{},
         .running = &.{},
         .targets = targets,
-        .env = env,
     };
 }
 

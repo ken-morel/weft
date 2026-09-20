@@ -16,7 +16,6 @@ pub fn from_unit_name(name: []const u8) ?@This() {
         return null;
 
     const workspace = iter.next() orelse return null;
-    const env = iter.next() orelse return null;
     const service = iter.next() orelse return null;
     const pipeline = iter.next() orelse return null;
     const deployment_id = iter.next() orelse return null;
@@ -26,7 +25,6 @@ pub fn from_unit_name(name: []const u8) ?@This() {
     return .{ .id = .{
         .workspace = workspace,
         .service = service,
-        .env = env,
         .deployment = deployment,
         .pipeline = pipeline,
     } };
@@ -45,7 +43,6 @@ pub fn unit_name(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
         &.{
             "weft-runner",
             self.id.workspace,
-            self.id.env,
             self.id.service,
             self.id.pipeline,
             &self.id.deployment.to_string(),
@@ -58,9 +55,8 @@ pub fn run_dir_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
         alloc,
         self.id.workspace,
         self.id.service,
-        self.id.env,
-        &self.id.deployment.to_string(),
         self.id.pipeline,
+        &self.id.deployment.to_string(),
     );
 }
 
@@ -69,7 +65,6 @@ pub fn archive(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
         alloc,
         self.id.workspace,
         self.id.service,
-        self.id.env,
         &self.id.deployment.to_string(),
         self.id.pipeline,
     );
@@ -79,7 +74,6 @@ pub fn keep_path(self: @This(), alloc: std.mem.Allocator, name: []const u8) ![]c
     return paths.task_cache(
         alloc,
         self.id.workspace,
-        self.id.env,
         name,
     );
 }
@@ -89,7 +83,6 @@ pub fn artifacts_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
 
         self.id.workspace,
         self.id.service,
-        self.id.env,
         &self.id.deployment.to_string(),
     );
 }

@@ -52,7 +52,6 @@ pub const task = struct {
     pub const Id = struct {
         workspace: []const u8,
         service: []const u8,
-        env: []const u8,
         deployment: Deployment.Id,
         pipeline: []const u8,
         pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
@@ -60,14 +59,11 @@ pub const task = struct {
             errdefer alloc.free(workspace);
             const service = try alloc.dupe(u8, self.service);
             errdefer alloc.free(service);
-            const env = try alloc.dupe(u8, self.env);
-            errdefer alloc.free(env);
             const pipeline = try alloc.dupe(u8, self.pipeline);
             errdefer alloc.free(pipeline);
             return .{
                 .workspace = workspace,
                 .service = service,
-                .env = env,
                 .deployment = self.deployment,
                 .pipeline = pipeline,
             };
@@ -75,7 +71,6 @@ pub const task = struct {
         pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
             alloc.free(self.workspace);
             alloc.free(self.service);
-            alloc.free(self.env);
             alloc.free(self.pipeline);
         }
     };

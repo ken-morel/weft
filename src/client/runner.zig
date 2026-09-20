@@ -50,7 +50,6 @@ const Fetcher = struct {
 
         const task_id: proto.task.Id = .{
             .deployment = self.deployment.id,
-            .env = self.deployment.env,
             .pipeline = artifact,
             .service = self.deployment.service.name,
             .workspace = self.deployment.service.workspace,
@@ -185,7 +184,6 @@ const Fetcher = struct {
         const conn = &client.conn;
         const task_id: proto.task.Id = .{
             .deployment = self.deployment.id,
-            .env = self.deployment.env,
             .pipeline = artifact,
             .service = self.deployment.service.name,
             .workspace = self.deployment.service.workspace,
@@ -297,7 +295,6 @@ const Fetcher = struct {
 
         const task_id: proto.task.Id = .{
             .deployment = self.deployment.id,
-            .env = self.deployment.env,
             .pipeline = artifact,
             .service = self.deployment.service.name,
             .workspace = self.deployment.service.workspace,
@@ -515,7 +512,6 @@ pub fn spawn_step(
 
     const task_id: proto.task.Id = .{
         .deployment = deployment.id,
-        .env = deployment.env,
         .pipeline = pipeline.name,
         .service = deployment.service.name,
         .workspace = deployment.service.workspace,

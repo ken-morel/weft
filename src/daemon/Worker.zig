@@ -129,7 +129,6 @@ fn handle_artifact_has(self: *@This(), conn: *Connection) proto.Res(proto.artifa
         alloc,
         id.workspace,
         id.service,
-        id.env,
         &deployment,
         id.pipeline,
     );
@@ -155,10 +154,9 @@ fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artif
     const id = &req.header.id;
     const deployment = id.deployment.to_string();
 
-    self.daemon.term.info("artifact pull: {s}/{s}/{s}/{s}/{s}", .{
+    self.daemon.term.info("artifact pull: {s}/{s}/{s}/{s}", .{
         id.workspace,
         id.service,
-        id.env,
         &id.deployment.to_string(),
         id.pipeline,
     });
@@ -167,7 +165,6 @@ fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artif
         alloc,
         id.workspace,
         id.service,
-        id.env,
         &deployment,
         id.pipeline,
     );
@@ -231,10 +228,9 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
     const id = &req.id;
     const deployment = id.deployment.to_string();
 
-    self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}/{s}", .{
+    self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}", .{
         id.workspace,
         id.service,
-        id.env,
         &id.deployment.to_string(),
         id.pipeline,
     });
@@ -243,7 +239,6 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
         alloc,
         id.workspace,
         id.service,
-        id.env,
         &deployment,
         id.pipeline,
     );
@@ -332,9 +327,8 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
 
     const deployment = req.task.deployment.to_string();
 
-    term.info("task spawn: {s}/{s}/{s}/{s}/{s}", .{
+    term.info("task spawn: {s}/{s}/{s}/{s}", .{
         req.task.workspace,
-        req.task.env,
         req.task.service,
         &deployment,
         req.task.pipeline,
@@ -352,7 +346,6 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
             alloc,
             req.task.workspace,
             req.task.service,
-            req.task.env,
             &deployment,
             input.name,
         );
@@ -424,7 +417,6 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
         alloc,
         req.task.workspace,
         req.task.service,
-        req.task.env,
         &deployment,
     );
     // setup pipeline keep

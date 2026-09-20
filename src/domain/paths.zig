@@ -28,25 +28,23 @@ pub inline fn artifact(
     alloc: std.mem.Allocator,
     w: []const u8,
     s: []const u8,
-    e: []const u8,
     d: []const u8,
     p: []const u8,
 ) ![]u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ weft_artifacts_dir, w, s, e, d, p },
+        &.{ weft_artifacts_dir, w, s, d, p },
     );
 }
 pub inline fn artifacts(
     alloc: std.mem.Allocator,
     w: []const u8,
     s: []const u8,
-    e: []const u8,
     d: []const u8,
 ) ![]u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ weft_artifacts_dir, w, s, e, d },
+        &.{ weft_artifacts_dir, w, s, d },
     );
 }
 
@@ -54,13 +52,12 @@ pub inline fn run(
     alloc: std.mem.Allocator,
     w: []const u8,
     s: []const u8,
-    e: []const u8,
-    d: []const u8,
     p: []const u8,
+    d: []const u8,
 ) ![]u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ weft_run_dir, w, s, e, p, d },
+        &.{ weft_run_dir, w, s, p, d },
     );
 }
 
@@ -68,24 +65,22 @@ pub inline fn task_archive(
     alloc: std.mem.Allocator,
     w: []const u8,
     s: []const u8,
-    e: []const u8,
     d: []const u8,
     p: []const u8,
 ) ![]const u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ weft_archive, w, s, e, d, p },
+        &.{ weft_archive, w, s, d, p },
     );
 }
 
 pub inline fn task_cache(
     alloc: std.mem.Allocator,
     w: []const u8,
-    e: []const u8,
     k: []const u8,
 ) ![]const u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ weft_cache_dir, w, e, k },
+        &.{ weft_cache_dir, w, k },
     );
 }
