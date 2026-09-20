@@ -179,7 +179,6 @@ pub fn update(self: *@This(), io: std.Io) !void {
 }
 
 pub fn finish(self: *@This(), io: std.Io) !void {
-    _ = io;
     if (self.term.is_tty() and self.rendered_lines > 0) {
         self.term.move_up(self.rendered_lines);
         self.term.clear_to_end();
@@ -197,6 +196,7 @@ pub fn finish(self: *@This(), io: std.Io) !void {
             try self.mark_finalized(key);
         } else if (step.status == .err) {
             self.term.println("error: [{s}] {s}: {s}", .{ step.remote.get_name(), step.pipeline.name, step.err orelse "failed" });
+            _ = self.print_log_tail(io, step.pipeline.name, 20, 200);
             try self.mark_finalized(key);
         }
     }

@@ -344,8 +344,10 @@ pub fn run_deployment(
             if (deployment.completed())
                 break;
 
-            if (state.has_error() and deployment.running.len == 0)
+            if (state.has_error() and deployment.running.len == 0) {
+                try view.finish(io);
                 return error.DeploymentFailed;
+            }
 
             while (try deployment.next_step()) |step| {
                 const remote: *const Remote = remote: for (remotes) |*remote| {
@@ -509,6 +511,7 @@ pub fn spawn_step(
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 const err_msg = try std.fmt.allocPrint(alloc, "task failed with exit code {d}", .{code});
                 state.err(step.remote, step.pipeline, err_msg);
+                try deployment.save(alloc, io, project);
                 break;
             },
             .not_found => {
@@ -517,6 +520,7 @@ pub fn spawn_step(
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 state.err(step.remote, step.pipeline, "task not found on remote");
+                try deployment.save(alloc, io, project);
                 break;
             },
         }
