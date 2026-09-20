@@ -3,8 +3,8 @@ const std = @import("std");
 const ClientInstall = @import("../client/ClientInstall.zig");
 const read_only_user_permissions = ClientInstall.read_only_user_permissions;
 const read_only_user_mode = ClientInstall.read_only_user_mode;
-const proto = @import("../domain/proto.zig");
 const Deployment = @import("../client/Deployment.zig");
+const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 
 const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
@@ -34,6 +34,8 @@ const service_template =
     \\Restart=always
     \\User=root
     \\WorkingDirectory=/var/lib/weft
+    \\RuntimeDirectory=weft
+    \\RuntimeDirectoryMode=0700
     \\
     \\[Install]
     \\WantedBy=multi-user.target
@@ -63,8 +65,7 @@ pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
     var sub_dir = try self.temp_dir.createDirPathOpen(io, sub, .{});
     defer sub_dir.close(io);
 
-    try sub_dir.createDirPath(io, &uuid);
-    return try sub_dir.openDir(io, &uuid, .{});
+    return try sub_dir.createDirPathOpen(io, &uuid, .{});
 }
 
 pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {

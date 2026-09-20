@@ -11,6 +11,7 @@ const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
 const Task = @import("daemon/Task.zig");
+pub const monitor = @import("daemon/monitor.zig");
 const Term = @import("domain/Term.zig");
 
 pub const std_options: std.Options = .{

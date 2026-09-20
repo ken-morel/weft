@@ -454,6 +454,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
         .ignore => {},
         .kill => {
             var siblings = try task.siblings(alloc, self.daemon.io);
+            defer siblings.deinit(self.daemon.io);
             while (try siblings.next(io)) |sibling| {
                 if (try sibling.is_active(alloc, io))
                     try sibling.kill(alloc, io);
@@ -461,6 +462,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
         },
         .fail => {
             var siblings = try task.siblings(alloc, self.daemon.io);
+            defer siblings.deinit(self.daemon.io);
             while (try siblings.next(io)) |sibling| {
                 if (try sibling.is_active(alloc, io)) {
                     term.err("task {s} is already running", .{req.task.pipeline});

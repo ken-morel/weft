@@ -33,7 +33,7 @@ pub fn from_unit_name(name: []const u8) ?@This() {
 pub fn kill(self: @This(), alloc: std.mem.Allocator, io: std.Io) !void {
     const unit = try self.unit_name(alloc);
     defer alloc.free(unit);
-    try systemd.kill(io, unit);
+    try systemd.stop(io, unit);
 }
 
 pub fn is_active(self: @This(), alloc: std.mem.Allocator, io: std.Io) !bool {
@@ -95,21 +95,29 @@ pub fn artifacts_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
 
 pub const TaskSiblingsIterator = struct {
     task: *const Task,
-    walker: ?std.Io.Dir.SelectiveWalker,
+    dir: ?std.Io.Dir,
+    iter: ?std.Io.Dir.Iterator,
 
     pub fn next(self: *@This(), io: std.Io) !?Task {
-        if (self.walker) |*walker| {
+        if (self.iter) |*iter| {
             while (true) {
                 const task_deployment = self.task.id.deployment.to_string();
-                const entry = try walker.next(io) orelse return null;
-                var sibling = self.task.*; // copy
-
-                if (std.mem.eql(u8, &task_deployment, entry.basename))
+                const entry = try iter.next(io) orelse return null;
+                if (entry.kind != .directory)
                     continue;
-                sibling.id.deployment = try Deployment.Id.parse(entry.basename);
+                if (std.mem.eql(u8, &task_deployment, entry.name))
+                    continue;
+                const dep_id = Deployment.Id.parse(entry.name) catch continue;
+                var sibling = self.task.*;
+                sibling.id.deployment = dep_id;
                 return sibling;
             }
         } else return null;
+    }
+
+    pub fn deinit(self: *@This(), io: std.Io) void {
+        if (self.dir) |*dir|
+            dir.close(io);
     }
 };
 
@@ -117,16 +125,20 @@ pub fn siblings(self: *const @This(), alloc: std.mem.Allocator, io: std.Io) !Tas
     const run_dir = try self.run_dir_path(alloc);
     defer alloc.free(run_dir);
     const pipeline_dir = std.fs.path.dirname(run_dir).?;
-    const dir = try std.Io.Dir.cwd().openDir(io, pipeline_dir, .{ .iterate = true });
-    const walker: ?std.Io.Dir.SelectiveWalker = std.Io.Dir.walkSelectively(dir, alloc) catch |err|
+    const dir = std.Io.Dir.cwd().openDir(io, pipeline_dir, .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
-            null
+            return .{
+                .task = self,
+                .dir = null,
+                .iter = null,
+            }
         else
             return err;
 
     return .{
         .task = self,
-        .walker = walker,
+        .dir = dir,
+        .iter = dir.iterate(),
     };
 }
 

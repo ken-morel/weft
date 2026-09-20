@@ -315,6 +315,19 @@ pub fn kill(io: std.Io, unit: []const u8) !void {
     _ = try child.wait(io);
 }
 
+pub fn stop(io: std.Io, unit: []const u8) !void {
+    var child = try std.process.spawn(
+        io,
+        .{
+            .argv = &.{ "systemctl", "stop", unit },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .inherit,
+        },
+    );
+    _ = try child.wait(io);
+}
+
 pub fn is_active(io: std.Io, unit: []const u8) !bool {
     var child = try std.process.spawn(
         io,
