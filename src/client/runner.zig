@@ -18,8 +18,9 @@ const Remote = @import("Remote.zig");
 const Fetcher = struct {
     deployment: *Deployment,
     remotes: []const Remote,
-    pushing: std.StringHashMapUnmanaged(std.Io.Mutex),
-    pulling: std.StringHashMapUnmanaged(std.Io.Mutex),
+    lock: std.Io.Mutex = .init,
+    pushing: std.StringHashMapUnmanaged(*std.Io.Mutex),
+    pulling: std.StringHashMapUnmanaged(*std.Io.Mutex),
     alloc: std.mem.Allocator,
     state: *DeploymentState,
     term: *Term,
@@ -27,9 +28,14 @@ const Fetcher = struct {
     depl: *std.Io.RwLock,
 
     pub fn deinit(self: *@This()) void {
-        var pushing_iter = self.pushing.keyIterator();
-        while (pushing_iter.next()) |k|
-            self.alloc.free(k.*);
+        var pushing_iter = self.pushing.iterator();
+        while (pushing_iter.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+            self.alloc.destroy(entry.value_ptr.*);
+        }
+        var pulling_iter = self.pulling.valueIterator();
+        while (pulling_iter.next()) |entry|
+            self.alloc.destroy(entry.*);
         self.pushing.deinit(self.alloc);
         self.pulling.deinit(self.alloc);
     }
@@ -67,13 +73,17 @@ const Fetcher = struct {
 
         _ = fetch_artifact: {
             const m = m: {
-                if (self.pulling.getPtr(artifact)) |m| {
+                try self.lock.lock(io);
+                if (self.pulling.get(artifact)) |m| {
+                    self.lock.unlock(io);
                     try m.lock(io);
                     break :m m;
                 } else {
-                    try self.pulling.put(self.alloc, artifact, .init);
-                    const m = self.pulling.getPtr(artifact).?;
+                    const m = try self.alloc.create(std.Io.Mutex);
+                    m.* = .init;
                     m.lockUncancelable(io);
+                    try self.pulling.put(self.alloc, artifact, m);
+                    self.lock.unlock(io);
                     break :m m;
                 }
             };
@@ -93,18 +103,25 @@ const Fetcher = struct {
         const push_id = try std.mem.join(self.alloc, ".", &.{ remote.get_name(), artifact });
         defer self.alloc.free(push_id);
         const m = m: {
-            if (self.pushing.getPtr(push_id)) |m| {
+            try self.lock.lock(io);
+            if (self.pushing.get(push_id)) |m| {
+                self.lock.unlock(io);
                 try m.lock(io);
                 break :m m;
             } else {
                 const key = try self.alloc.dupe(u8, push_id);
-                try self.pushing.put(self.alloc, key, .init);
-                const m = self.pushing.getPtr(key).?;
+                errdefer self.alloc.free(key);
+                const m = try self.alloc.create(std.Io.Mutex);
+                m.* = .init;
                 m.lockUncancelable(io);
+                try self.pushing.put(self.alloc, key, m);
+                self.lock.unlock(io);
                 break :m m;
             }
         };
         defer m.unlock(io);
+        if (try self.has_artifact(io, remote, artifact))
+            return;
         try self.push_artifact(io, remote, artifact);
     }
 
