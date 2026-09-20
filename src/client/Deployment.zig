@@ -181,6 +181,29 @@ pub fn get_artifact(self: @This(), output: []const u8) ?*const Artifact {
     return null;
 }
 
+pub fn add_running(self: *@This(), alloc: std.mem.Allocator, step: Step) !void {
+    self.running = try alloc.realloc(self.running, self.running.len + 1);
+    self.running[self.running.len - 1] = step;
+}
+
+pub fn remove_running(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, pipeline: []const u8) void {
+    for (self.running, 0..) |s, idx| {
+        if (std.mem.eql(u8, s.remote, remote) and std.mem.eql(u8, s.pipeline, pipeline)) {
+            self.running[idx] = self.running[self.running.len - 1];
+            self.running = alloc.realloc(self.running, self.running.len - 1) catch self.running[0 .. self.running.len - 1];
+            return;
+        }
+    }
+}
+
+pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, name: []const u8) !void {
+    self.artifacts = try alloc.realloc(self.artifacts, self.artifacts.len + 1);
+    self.artifacts[self.artifacts.len - 1] = .{
+        .remote = remote,
+        .name = name,
+    };
+}
+
 pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) !void {
     var buffer: [1 << 10]u8 = undefined;
 

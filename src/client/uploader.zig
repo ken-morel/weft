@@ -22,6 +22,8 @@ pub fn get_artifact(
     remote: *const Remote,
     project: *const Project,
 ) !void {
+    const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.id, artifact.pipeline);
+    defer alloc.free(artifact_dir_path);
     if (local_artifact_exists(io, artifact_dir_path))
         return;
 
@@ -46,7 +48,16 @@ pub fn send_artifact(
     deployment: *const Deployment,
     remotes: []const Remote,
     remote: *const Remote,
-) !void {}
+) !void {
+    _ = alloc;
+    _ = io;
+    _ = term;
+    _ = artifact_id;
+    _ = project;
+    _ = deployment;
+    _ = remotes;
+    _ = remote;
+}
 
 pub fn send_artifact_concurrent(
     alloc: std.mem.Allocator,
