@@ -109,6 +109,8 @@ pub fn _run_system_server(self: *@This()) !void {
 
     defer std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch {};
 
+    std.Io.Dir.cwd().createDirPath(self.io, paths.weft_dir) catch {};
+
     const addr: std.Io.net.UnixAddress = try .init(paths.weft_socket);
     std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch |err|
         if (err != error.FileNotFound)

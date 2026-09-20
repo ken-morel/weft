@@ -157,13 +157,13 @@ pub fn run(
                     return error.NoDeployments;
                 };
             } else {
-                dep_id = Deployment.Id.parse(first_arg[0..dot]) catch {
-                    term.err("invalid deployment id in '{s}'", .{first_arg});
+                dep_id = project.find_deployment_id(io, first_arg[0..dot]) catch {
+                    term.err("deployment '{s}' not found or ambiguous", .{first_arg[0..dot]});
                     return error.InvalidDeploymentId;
                 };
             }
             pipeline_filter = first_arg[dot + 1 ..];
-        } else if (Deployment.Id.parse(first_arg)) |id| {
+        } else if (project.find_deployment_id(io, first_arg)) |id| {
             dep_id = id;
             if (args.len > 1)
                 pipeline_filter = args[1];

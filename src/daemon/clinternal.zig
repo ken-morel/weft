@@ -24,20 +24,20 @@ pub fn task_completed(alloc: std.mem.Allocator, io: std.Io, term: *Term, task: T
         try atomic.replace(io);
     }
 
-    {
-        const addr: std.Io.net.UnixAddress = try .init(paths.weft_socket);
+    notify: {
+        const addr: std.Io.net.UnixAddress = std.Io.net.UnixAddress.init(paths.weft_socket) catch break :notify;
 
-        var stream = try addr.connect(io);
+        var stream = addr.connect(io) catch break :notify;
         defer stream.close(io);
         var writer_buf: [1 << 5]u8 = undefined;
         var writer = stream.writer(io, &writer_buf);
 
-        try zoto.serialize(
+        zoto.serialize(
             &writer.interface,
             proto.DaemonMsg,
             .{ .task_completed = .{ .status = status, .task = task.id } },
             .{ .header = true },
-        );
-        try writer.interface.flush();
+        ) catch break :notify;
+        writer.interface.flush() catch break :notify;
     }
 }

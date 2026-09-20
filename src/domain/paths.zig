@@ -15,7 +15,7 @@ pub const weft_archive = weft_dir ++ "archive/";
 pub const weft_cache_dir = weft_dir ++ "cache/";
 pub const weft_home_dir = weft_dir ++ "home/";
 
-pub const weft_socket = "/tmp/weft.pipe";
+pub const weft_socket = weft_dir ++ "weft.pipe";
 
 pub inline fn home(alloc: std.mem.Allocator, w: []const u8) ![]u8 {
     return try std.fs.path.join(

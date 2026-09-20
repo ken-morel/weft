@@ -161,7 +161,7 @@ pub fn main(init: std.process.Init) !void {
 
             var maybe_continue_id: ?Deployment.Id = null;
             if (arg_start < args.len) {
-                if (Deployment.Id.parse(args[arg_start])) |id| {
+                if (project.find_deployment_id(init.io, args[arg_start])) |id| {
                     maybe_continue_id = id;
                     arg_start += 1;
                 } else |_| {}

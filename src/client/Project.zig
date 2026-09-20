@@ -105,6 +105,39 @@ pub fn latest_deployment_id(self: @This(), io: std.Io) !?Deployment.Id {
     return latest;
 }
 
+pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deployment.Id {
+    if (Deployment.Id.parse(query)) |id|
+        return id
+    else |_| {}
+
+    if (query.len < 2)
+        return error.QueryTooShort;
+
+    var weft_dir = try self.open_weft_dir(io);
+    defer weft_dir.close(io);
+
+    var iter = weft_dir.iterate();
+    var match: ?Deployment.Id = null;
+    var count: usize = 0;
+
+    while (try iter.next(io)) |entry| {
+        if (entry.kind != .directory)
+            continue;
+        const id = Deployment.Id.parse(entry.name) catch continue;
+        if (std.mem.endsWith(u8, entry.name, query) or std.mem.startsWith(u8, entry.name, query)) {
+            match = id;
+            count += 1;
+        }
+    }
+
+    if (count == 0)
+        return error.DeploymentNotFound;
+    if (count > 1)
+        return error.AmbiguousDeploymentId;
+
+    return match.?;
+}
+
 pub fn load_deployment(self: @This(), alloc: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
     @setEvalBranchQuota(100_000);
     var dep_dir = try self.open_deployment_dir(io, id);
