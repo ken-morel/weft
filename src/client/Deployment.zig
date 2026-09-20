@@ -14,6 +14,7 @@ targets: []Step = &.{},
 
 pub const Artifact = struct {
     remote: []const u8,
+    pipeline: []const u8,
     name: []const u8,
 };
 
@@ -82,7 +83,7 @@ pub const Id = struct {
 pub fn next_target(self: @This()) ?*const Step {
     target: for (self.targets) |*target| {
         for (self.artifacts) |artifact|
-            if (std.mem.eql(u8, artifact.name, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
+            if (std.mem.eql(u8, artifact.pipeline, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
                 continue :target;
         return target;
     }
@@ -92,7 +93,7 @@ pub fn next_target(self: @This()) ?*const Step {
 pub fn next_step(self: @This()) !?Step {
     target: for (self.targets) |*target| {
         for (self.artifacts) |artifact|
-            if (std.mem.eql(u8, artifact.name, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
+            if (std.mem.eql(u8, artifact.pipeline, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
                 continue :target;
 
         return switch (try self.resolve_pipeline(target.pipeline, 0)) {
@@ -102,7 +103,7 @@ pub fn next_step(self: @This()) !?Step {
                 .pipeline = n,
             },
             .runnable => target.*,
-            .done => return error.Unreachable,
+            .done => continue :target,
         };
     }
     return null;
@@ -202,10 +203,11 @@ pub fn remove_running(self: *@This(), alloc: std.mem.Allocator, remote: []const 
     }
 }
 
-pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, name: []const u8) !void {
+pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, pipeline: []const u8, name: []const u8) !void {
     self.artifacts = try alloc.realloc(self.artifacts, self.artifacts.len + 1);
     self.artifacts[self.artifacts.len - 1] = .{
         .remote = remote,
+        .pipeline = pipeline,
         .name = name,
     };
 }

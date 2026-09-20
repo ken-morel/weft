@@ -1,13 +1,13 @@
 const std = @import("std");
-const ClientInstall = @import("ClientInstall.zig");
+
+const Term = @import("../domain/Term.zig");
+const Walker = @import("../util/Walker.zig");
 const Connection = @import("../wire/Connection.zig");
 const Client = @import("Client.zig");
+const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const Term = @import("../domain/Term.zig");
-
 const runner = @import("runner.zig");
-const Walker = @import("../util/Walker.zig");
 
 pub fn create_src_artifact(alloc: std.mem.Allocator, io: std.Io, term: *Term, inst: ClientInstall, project: Project, deployment_id: Deployment.Id) !void {
     term.info("snapshotting src artifact", .{});

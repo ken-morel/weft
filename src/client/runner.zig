@@ -3,6 +3,7 @@ const std = @import("std");
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
+const Weft = @import("../domain/Weft.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
@@ -13,7 +14,6 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
-const Weft = @import("../domain/Weft.zig");
 
 const Fetcher = struct {
     deployment: *Deployment,
@@ -492,7 +492,7 @@ pub fn spawn_step(
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 for (pipeline.outputs) |output|
-                    try deployment.add_artifact(alloc, step.remote, output.name);
+                    try deployment.add_artifact(alloc, step.remote, step.pipeline, output.name);
 
                 state.completed(step.remote, step.pipeline);
                 try deployment.save(alloc, io, project);

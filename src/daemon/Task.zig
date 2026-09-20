@@ -119,7 +119,7 @@ pub const TaskSiblingsIterator = struct {
 pub fn siblings(self: *const @This(), alloc: std.mem.Allocator, io: std.Io) !TaskSiblingsIterator {
     const run_dir = try self.run_dir_path(alloc);
     defer alloc.free(run_dir);
-    const pipeline_dir = std.fs.path.dirname(run_dir) orelse return error.Unreachable;
+    const pipeline_dir = std.fs.path.dirname(run_dir).?;
     const dir = try std.Io.Dir.cwd().openDir(io, pipeline_dir, .{ .iterate = true });
     const walker: ?std.Io.Dir.SelectiveWalker = std.Io.Dir.walkSelectively(dir, alloc) catch |err|
         if (err == error.FileNotFound)
