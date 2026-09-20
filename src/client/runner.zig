@@ -14,6 +14,7 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
+const dotenv_mod = @import("../util/dotenv.zig");
 
 const Fetcher = struct {
     deployment: *Deployment,
@@ -334,6 +335,9 @@ pub fn run_deployment(
     const remotes = try inst.get_remotes(alloc, io, term);
     defer alloc.free(remotes);
 
+    var dotenv = try dotenv_mod.load(alloc, io, project.dir);
+    defer dotenv.deinit(alloc);
+
     var state: DeploymentState = .init(alloc, &project);
     defer state.deinit();
     var depl: std.Io.RwLock = .init;
@@ -383,7 +387,7 @@ pub fn run_deployment(
                     io,
                     &group,
                     spawn_step,
-                    .{ alloc, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step },
+                    .{ alloc, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, &dotenv, inst.env },
                 );
             }
 
@@ -408,12 +412,55 @@ pub fn spawn_step(
     pipeline: *const Weft.Pipeline,
     fetcher: *Fetcher,
     step: Deployment.Step,
+    dotenv: *const dotenv_mod.DotEnv,
+    env_map: *const std.process.Environ.Map,
 ) !void {
     errdefer if (deployment_lock.lock(io)) |_| {
         deployment.remove_running(alloc, step.remote, step.pipeline);
         state.err(step.remote, step.pipeline, "failed to spawn task");
         deployment_lock.unlock(io);
     } else |_| {};
+
+    var merged_env: std.StringHashMapUnmanaged([]const u8) = .empty;
+    defer merged_env.deinit(alloc);
+
+    for (deployment.service.env) |entry|
+        try merged_env.put(alloc, entry.@"0", entry.@"1");
+
+    for (pipeline.required_env) |key| {
+        if (dotenv.get(key)) |val|
+            try merged_env.put(alloc, key, val)
+        else if (env_map.get(key)) |val|
+            try merged_env.put(alloc, key, val)
+        else {
+            var found_in_pipeline = false;
+            for (pipeline.env) |entry| {
+                if (std.mem.eql(u8, entry.@"0", key)) {
+                    found_in_pipeline = true;
+                    break;
+                }
+            }
+            if (!found_in_pipeline) {
+                term.err("pipeline '{s}' requires environment variable '{s}', but it was not found in .env or environment", .{ pipeline.name, key });
+                return error.MissingRequiredEnv;
+            }
+        }
+    }
+
+    for (pipeline.env) |entry|
+        try merged_env.put(alloc, entry.@"0", entry.@"1");
+
+    const resolved_env = try alloc.alloc(struct { []const u8, []const u8 }, merged_env.count());
+    defer alloc.free(resolved_env);
+    var it = merged_env.iterator();
+    var idx: usize = 0;
+    while (it.next()) |entry| {
+        resolved_env[idx] = .{ entry.key_ptr.*, entry.value_ptr.* };
+        idx += 1;
+    }
+
+    var resolved_pipeline = pipeline.*;
+    resolved_pipeline.env = resolved_env;
 
     var buffer = try alloc.alloc(u8, Connection.max_packet_size);
     defer alloc.free(buffer);
@@ -436,7 +483,7 @@ pub fn spawn_step(
         try client.conn.send_object(buffer, proto.Request, .task_spawn);
         try client.conn.send_object(buffer, proto.task.spawn.Req, .{
             .task = task_id,
-            .pipeline = pipeline.*,
+            .pipeline = resolved_pipeline,
         });
 
         const script_path = try std.fs.path.join(alloc, &.{

@@ -11,6 +11,7 @@ pub const remotes_zon_file_name = "remotes.zon";
 config_dir: std.Io.Dir,
 data_dir: std.Io.Dir,
 temp_dir: std.Io.Dir,
+env: *const std.process.Environ.Map,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !@This() {
     const config_dir = try open_config_dir(alloc, io, env);
@@ -23,6 +24,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, env: *const std.process.Enviro
         .config_dir = config_dir,
         .data_dir = data_dir,
         .temp_dir = temp_dir,
+        .env = env,
     };
 }
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
