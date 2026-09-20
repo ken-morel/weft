@@ -4,9 +4,49 @@ const ClientInstall = @import("ClientInstall.zig");
 const Remote = @import("Remote.zig");
 const Term = @import("../domain/Term.zig");
 
-fn resolve_host(alloc: std.mem.Allocator, io: std.Io, ssh_target: []const u8) ![]const u8 {
+const TargetInfo = struct {
+    ssh_dest: []const u8,
+    host: []const u8,
+    port: ?[]const u8,
+};
+
+fn parse_target(alloc: std.mem.Allocator, raw: []const u8) !TargetInfo {
+    var user: []const u8 = "root";
+    var rest: []const u8 = raw;
+
+    if (std.mem.indexOfScalar(u8, raw, '@')) |at_idx| {
+        user = raw[0..at_idx];
+        rest = raw[at_idx + 1 ..];
+    }
+
+    var host: []const u8 = rest;
+    var maybe_port: ?[]const u8 = null;
+
+    if (std.mem.lastIndexOfScalar(u8, rest, ':')) |colon_idx| {
+        const candidate_port = rest[colon_idx + 1 ..];
+        if (candidate_port.len > 0 and (std.fmt.parseInt(u16, candidate_port, 10) catch null) != null) {
+            host = rest[0..colon_idx];
+            maybe_port = candidate_port;
+        }
+    }
+
+    const ssh_dest = try std.fmt.allocPrint(alloc, "{s}@{s}", .{ user, host });
+
+    return .{
+        .ssh_dest = ssh_dest,
+        .host = host,
+        .port = maybe_port,
+    };
+}
+
+fn resolve_host(alloc: std.mem.Allocator, io: std.Io, ssh_dest: []const u8, maybe_port: ?[]const u8, fallback_host: []const u8) ![]const u8 {
+    const argv: []const []const u8 = if (maybe_port) |p|
+        &.{ "ssh", "-p", p, "-G", ssh_dest }
+    else
+        &.{ "ssh", "-G", ssh_dest };
+
     if (std.process.run(alloc, io, .{
-        .argv = &.{ "ssh", "-G", ssh_target },
+        .argv = argv,
     })) |res| {
         defer alloc.free(res.stdout);
         defer alloc.free(res.stderr);
@@ -24,9 +64,7 @@ fn resolve_host(alloc: std.mem.Allocator, io: std.Io, ssh_target: []const u8) ![
         }
     } else |_| {}
 
-    if (std.mem.indexOfScalar(u8, ssh_target, '@')) |at_idx|
-        return try alloc.dupe(u8, ssh_target[at_idx + 1 ..]);
-    return try alloc.dupe(u8, ssh_target);
+    return try alloc.dupe(u8, fallback_host);
 }
 
 fn extract_token(output: []const u8) ?[]const u8 {
@@ -62,18 +100,25 @@ pub fn install(
     defer arena.deinit();
     const arena_alloc = arena.allocator();
 
+    const target = try parse_target(arena_alloc, ssh_target);
+
     const host = if (maybe_host) |h|
         h
     else
-        try resolve_host(arena_alloc, io, ssh_target);
+        try resolve_host(arena_alloc, io, target.ssh_dest, target.port, target.host);
 
     const exe_path = try std.process.executablePathAlloc(io, arena_alloc);
 
-    term.op("uploading weft binary to {s}...", .{ssh_target});
-    const scp_dst = try std.fmt.allocPrint(arena_alloc, "{s}:/tmp/weft", .{ssh_target});
+    term.op("uploading weft binary to {s}...", .{target.ssh_dest});
+    const scp_dst = try std.fmt.allocPrint(arena_alloc, "{s}:/tmp/weft", .{target.ssh_dest});
+
+    const scp_argv: []const []const u8 = if (target.port) |p|
+        &.{ "scp", "-P", p, exe_path, scp_dst }
+    else
+        &.{ "scp", exe_path, scp_dst };
 
     var scp_child = try std.process.spawn(io, .{
-        .argv = &.{ "scp", exe_path, scp_dst },
+        .argv = scp_argv,
         .stdin = .ignore,
         .stdout = .inherit,
         .stderr = .inherit,
@@ -84,11 +129,16 @@ pub fn install(
         return error.ScpFailed;
     }
 
-    term.op("installing weft daemon on {s}...", .{ssh_target});
+    term.op("installing weft daemon on {s}...", .{target.ssh_dest});
     const remote_script = "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft && /usr/local/bin/weft daemon install && /usr/local/bin/weft daemon show-token";
 
+    const ssh_argv: []const []const u8 = if (target.port) |p|
+        &.{ "ssh", "-p", p, target.ssh_dest, remote_script }
+    else
+        &.{ "ssh", target.ssh_dest, remote_script };
+
     const ssh_res = try std.process.run(arena_alloc, io, .{
-        .argv = &.{ "ssh", ssh_target, remote_script },
+        .argv = ssh_argv,
     });
     if (ssh_res.term != .exited or ssh_res.term.exited != 0) {
         term.err("remote installation failed (exit code {any}): {s}", .{ ssh_res.term, ssh_res.stderr });
