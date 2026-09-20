@@ -13,6 +13,7 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
+const Weft = @import("../domain/Weft.zig");
 
 const Fetcher = struct {
     deployment: *Deployment,
@@ -78,6 +79,16 @@ const Fetcher = struct {
     }
 
     pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
+        {
+            try self.depl.lock(io);
+            defer self.depl.unlock(io);
+            try self.state.artifact_progress(artifact, remote, .pushing, 0.0);
+        }
+        defer if (self.depl.lock(io)) |_| {
+            self.state.artifact_progress(artifact, remote, .ready, 1.0) catch {};
+            self.depl.unlock(io);
+        } else |_| {};
+
         const read_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
         defer self.alloc.free(read_buffer);
         const send_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
@@ -150,6 +161,16 @@ const Fetcher = struct {
                             break :remote rem;
             } else return error.ArtifactNotFound;
         };
+
+        {
+            try self.depl.lock(io);
+            defer self.depl.unlock(io);
+            try self.state.artifact_progress(artifact, remote, .pulling, 0.0);
+        }
+        defer if (self.depl.lock(io)) |_| {
+            self.state.artifact_progress(artifact, remote, .ready, 1.0) catch {};
+            self.depl.unlock(io);
+        } else |_| {};
 
         var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
         defer client.destroy(self.alloc, io);
@@ -244,21 +265,32 @@ pub fn run_deployment(
     defer view.deinit();
     while (true) {
         {
-            try depl.lockShared(io);
-            defer depl.unlockShared(io);
+            try depl.lock(io);
+            defer depl.unlock(io);
             if (deployment.completed())
                 break;
 
             if (state.has_error() and deployment.running.len == 0)
                 return error.DeploymentFailed;
 
-            while (try deployment.next_step()) |step|
+            while (try deployment.next_step()) |step| {
+                const remote: *const Remote = remote: for (remotes) |*remote| {
+                    if (std.mem.eql(u8, remote.get_name(), step.remote))
+                        break :remote remote;
+                } else return error.InvalidRemote;
+
+                const pipeline = deployment.service.get_pipeline(step.pipeline) orelse
+                    return error.InvalidPipeline;
+
+                _ = try state.add(remote, pipeline);
+                try deployment.add_running(alloc, step);
                 spawn(
                     io,
                     &group,
                     spawn_step,
-                    .{ alloc, io, &state, term, project, &depl, deployment, remotes, &fetcher, step },
+                    .{ alloc, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step },
                 );
+            }
 
             try view.update(io);
         }
@@ -277,26 +309,19 @@ pub fn spawn_step(
     project: Project,
     deployment_lock: *std.Io.RwLock,
     deployment: *Deployment,
-    remotes: []const Remote,
+    remote: *const Remote,
+    pipeline: *const Weft.Pipeline,
     fetcher: *Fetcher,
     step: Deployment.Step,
 ) !void {
+    errdefer if (deployment_lock.lock(io)) |_| {
+        deployment.remove_running(alloc, step.remote, step.pipeline);
+        state.err(step.remote, step.pipeline, "failed to spawn task");
+        deployment_lock.unlock(io);
+    } else |_| {};
+
     var buffer = try alloc.alloc(u8, Connection.max_packet_size);
     defer alloc.free(buffer);
-
-    const remote: *const Remote = remote: for (remotes) |*remote| {
-        if (std.mem.eql(u8, remote.get_name(), step.remote))
-            break :remote remote;
-    } else return error.InvalidRemote;
-
-    const pipeline = deployment.service.get_pipeline(step.pipeline) orelse
-        return error.InvalidPipeline;
-
-    {
-        try deployment_lock.lock(io);
-        defer deployment_lock.unlock(io);
-        _ = try state.add(remote, pipeline);
-    }
 
     for (pipeline.inputs) |input|
         try fetcher.add(io, remote, input.name);
@@ -349,7 +374,6 @@ pub fn spawn_step(
     {
         try deployment_lock.lock(io);
         defer deployment_lock.unlock(io);
-        try deployment.add_running(alloc, step);
         state.running(step.remote, step.pipeline);
     }
 

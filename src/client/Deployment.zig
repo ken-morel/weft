@@ -90,16 +90,22 @@ pub fn next_target(self: @This()) ?*const Step {
 }
 
 pub fn next_step(self: @This()) !?Step {
-    const target = self.next_target() orelse return null;
-    return switch (try self.resolve_pipeline(target.pipeline, 0)) {
-        .waits, .running => null,
-        .needs => |n| .{
-            .remote = target.remote,
-            .pipeline = n,
-        },
-        .runnable => target.*,
-        .done => return error.Unreachable,
-    };
+    target: for (self.targets) |*target| {
+        for (self.artifacts) |artifact|
+            if (std.mem.eql(u8, artifact.name, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
+                continue :target;
+
+        return switch (try self.resolve_pipeline(target.pipeline, 0)) {
+            .waits, .running => continue :target,
+            .needs => |n| .{
+                .remote = target.remote,
+                .pipeline = n,
+            },
+            .runnable => target.*,
+            .done => return error.Unreachable,
+        };
+    }
+    return null;
 }
 
 pub const StepStatus = union(enum) {
