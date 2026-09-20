@@ -73,6 +73,12 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
     try cwd.createDirPath(io, "/var/lib/weft/run");
     try cwd.createDirPath(io, "/var/lib/weft/artifacts");
     term.debug("created /var/lib/weft directory tree", .{});
+
+    var child_stop = try std.process.spawn(io, .{
+        .argv = &.{ "systemctl", "stop", "weftd.service" },
+    });
+    _ = try child_stop.wait(io);
+
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);
         defer alloc.free(exe_path);
@@ -86,31 +92,34 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
         break :install_exe;
     }
     term.debug("installed binary to /usr/local/bin/weft", .{});
+
     write_config: {
-        var secret: [32]u8 = undefined;
-        try io.randomSecure(&secret);
-        const secret_hex = std.fmt.bytesToHex(&secret, .lower);
-        const config = Config{
-            .secret = &secret_hex,
+        cwd.access(io, "/etc/weft.zon", .{}) catch |err| {
+            if (err != error.FileNotFound) return err;
+
+            var secret: [32]u8 = undefined;
+            try io.randomSecure(&secret);
+            const secret_hex = std.fmt.bytesToHex(&secret, .lower);
+            const config = Config{
+                .secret = &secret_hex,
+            };
+
+            var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
+                .permissions = read_only_user_permissions,
+                .replace = true,
+            });
+
+            var write_buffer: [4 << 10]u8 = undefined;
+            var config_writer = config_file.file.writer(io, &write_buffer);
+
+            try std.zon.stringify.serialize(config, .{}, &config_writer.interface);
+            try config_writer.interface.flush();
+
+            try config_file.replace(io);
         };
-
-        var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
-            .permissions = read_only_user_permissions,
-            .replace = true,
-        });
-
-        var write_buffer: [4 << 10]u8 = undefined;
-        var config_writer = config_file.file.writer(io, &write_buffer);
-
-        try std.zon.stringify.serialize(config, .{}, &config_writer.interface);
-        try config_writer.interface.flush();
-
-        try config_file.replace(io);
-
-        term.println("secret: {s}", .{config.secret});
-
         break :write_config;
     }
+
     setup_service: {
         const systemd_dir = try cwd.openDir(io, "/etc/systemd/system", .{});
         defer systemd_dir.close(io);
