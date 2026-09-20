@@ -31,7 +31,7 @@ pub const Pipeline = struct {
     name: []const u8,
     inputs: []const Input = &.{},
     outputs: []const Output = &.{},
-    script: []const u8,
+    script: ?[]const u8 = null,
 
     max_ram: ?u64 = null,
     mem_lock: bool = false,

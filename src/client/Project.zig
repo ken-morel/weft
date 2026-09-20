@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const Deployment = @import("Deployment.zig");
 const Weft = @import("../domain/Weft.zig");
+const Deployment = @import("Deployment.zig");
 
 dir: std.Io.Dir,
 
@@ -47,8 +47,8 @@ pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: Deployment.Id)
     return weft_dir.openDir(io, &deployment_name, .{ .iterate = true });
 }
 
-pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deployment: Deployment.Id, pipeline: []const u8) ![]const u8 {
-    const deployment_dir = try self.open_deployment_dir(io, deployment);
+pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deployment_id: Deployment.Id, pipeline: []const u8) ![]const u8 {
+    const deployment_dir = try self.open_deployment_dir(io, deployment_id);
     defer deployment_dir.close(io);
 
     const deployment_dir_path = try deployment_dir.realPathFileAlloc(io, ".", alloc);
