@@ -209,6 +209,9 @@ pub fn finish(self: *@This(), io: std.Io) !void {
             const term_size = self.term.get_size();
             _ = self.print_log_tail(io, step.pipeline.name, 10, term_size.cols);
             try self.mark_finalized(key);
+        } else {
+            self.term.println("cancelled: [{s}] {s}", .{ step.remote.get_name(), step.pipeline.name });
+            try self.mark_finalized(key);
         }
     }
     try self.term.flush();

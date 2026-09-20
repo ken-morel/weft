@@ -397,12 +397,13 @@ pub fn run_deployment(
     defer fetcher.deinit();
 
     var group: std.Io.Group = .init;
+    var view: DeploymentView = .init(alloc, term, &state, deployment.id);
+    defer view.deinit();
     errdefer {
+        view.finish(io) catch {};
         term.err("Deployment failed... cancelling tasks", .{});
         group.cancel(io);
     }
-    var view: DeploymentView = .init(alloc, term, &state, deployment.id);
-    defer view.deinit();
     while (true) {
         {
             try depl.lock(io);
