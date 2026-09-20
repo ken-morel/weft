@@ -17,7 +17,7 @@ pub fn get_config(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
         io,
         "weft.zon",
         alloc,
-        .limited(4 << 10),
+        .limited(64 << 10),
         .of(u8),
         0,
     ) catch |err|
