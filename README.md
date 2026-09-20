@@ -1,89 +1,282 @@
-# weft
+# Weft
 
-First Zig project: a small build/workflow tool written in Zig.
+A lightweight, distributed build and deployment runner written in Zig.
 
-## Overview
+Weft connects local development environments and remote servers into a unified pipeline graph. It coordinates artifact packaging, cache persistence, dependency resolution, process lifecycle management, and task execution across machines.
 
-Weft is a lightweight project/workflow runner written in Zig. It supports running a local daemon, performing workspace "pipelines" (defined in weft.zon), and managing remote installations.
+---
 
-This repository contains the core implementation and a CLI (see `src/main.zig`).
+## Key Features
 
-## Features
+- **Declarative Pipeline Graph (`weft.zon`)**: Define pipelines with explicit input dependencies, output artifacts, persistent caches, and environment bindings.
+- **Distributed Remote Execution**: Run build pipelines locally and deploy or run services on remote servers with one command:
+  ```bash
+  weft do build bellacall.run
+  ```
+- **Zero-Friction Remote Provisioning**: Install and register remote servers over SSH with a single command:
+  ```bash
+  weft remote install bellacall s.bellacall
+  ```
+- **Sandboxed Systemd Execution**: Tasks run in isolated systemd transient units with cgroup accounting, custom mount points, and clean lifecycle management.
+- **Process Lifecycle Management (`.second_instance = .kill`)**: Automatically terminate older running instances of a service when deploying a new release.
+- **Incremental Build Caching (`.keep`)**: Persist build caches (such as Cargo `target/`, Flutter `.dart_tool/`, and npm/bun caches) across runs per workspace.
+- **Streaming Wire Protocol**: Binary artifacts are packed, compressed, streamed over TCP, and unpacked with progress tracking.
+- **Live Interactive Terminal UI**: Real-time deployment visualization showing step progress, logs, and artifacts.
 
-- CLI with subcommands: `daemon`, `do`, and `remote`.
-- Simple pipeline description in `weft.zon`.
-- Client and daemon implementations, plus utilities for project discovery and execution.
-- Uses Zig's build system (see `build.zig`).
+---
+
+## Architecture
+
+```
+   Local Machine (Client)                         Remote VPS (Daemon)
+┌──────────────────────────────┐              ┌──────────────────────────────┐
+│  weft do build bellacall.run │              │  weftd (systemd / port 9338) │
+│                              │              │                              │
+│  1. Snapshot 'src' artifact  │              │  1. Receive artifacts        │
+│  2. Execute [local] build    │  TCP (Wire)  │  2. Kill previous instances  │
+│  3. Push artifacts ──────────┼─────────────►│  3. Spawn systemd unit       │
+│  4. Stream remote logs ◄─────┼──────────────┼─ 4. Run service & stream logs│
+└──────────────────────────────┘              └──────────────────────────────┘
+```
+
+---
 
 ## Requirements
 
-- Zig compiler >= 0.16.0 (declared in build.zig.zon)
+- **Zig**: `>= 0.16.0`
+- **Linux**: Kernel with `systemd` support (for daemon task runner).
+- **SSH**: OpenSSH client (for remote provisioning).
 
-## Quick start
+---
 
-Build the project:
+## Installation & Setup
 
-```bash
-zig build
-```
-
-Run the compiled binary directly:
+### Build from Source
 
 ```bash
-./zig-out/bin/weft --help
+git clone https://github.com/dev-safe/weft.git
+cd weft
+zig build -Doptimize=ReleaseFast
+sudo cp zig-out/bin/weft /usr/local/bin/weft
 ```
 
-Or run via the build system (passes arguments through to the program):
+### Install Local Daemon
+
+To run local pipelines or tasks:
 
 ```bash
-zig build run -- <args>
-# examples:
-zig build run -- daemon install
-zig build run -- daemon run
-zig build run -- do build
+sudo weft daemon install
 ```
 
-Run tests:
+This creates `/var/lib/weft`, initializes `/etc/weft.zon` with a secure token, installs the systemd unit `weftd.service`, and starts the service.
+
+To view your daemon token:
 
 ```bash
-zig build test
-# or
-zig test
+weft daemon show-token
 ```
 
-## Common commands
+To run the daemon in foreground for debugging:
 
-- Start and install the daemon:
-  - zig build run -- daemon install
-  - zig build run -- daemon run
+```bash
+sudo weft daemon run
+```
 
-- Run pipelines in the current project:
-  - zig build run -- do <pipeline>
-  - Example: zig build run -- do build
+---
 
-- Manage remotes (interactive):
-  - zig build run -- remote add <name>
+## Remote Management
 
-## Project layout
+Weft manages remote servers in `~/.config/weft/remotes.zon`.
 
-- build.zig — Zig build script that defines `weft` executable and test steps.
-- weft.zon — Simple workspace/pipeline description used by the tool.
-- src/ — Zig source files, including:
-  - main.zig — CLI entrypoint and command parsing.
-  - Weft.zig — Core functionality.
-  - Client.zig, Server.zig, DaemonInstall.zig, ClientInstall.zig — client/daemon helpers and installers.
-  - Many small utilities (UUIDv7.zig, Term.zig, Walker.zig, etc.)
+### Add & Install a Remote
 
-## Contributing
+To upload the `weft` binary to a remote server, install the daemon systemd service, configure its secret, and register the remote locally:
 
-Contributions are welcome. Please open issues or pull requests with proposed changes.
+```bash
+# Using an SSH alias or hostname (defaults to root@):
+weft remote install bellacall s.bellacall
 
-If you fork this repository, note that `build.zig.zon` contains a package fingerprint comment — when forking an actively maintained Zig project you may want to regenerate the package identifier (delete the fingerprint field and run `zig build`).
+# With custom SSH user or port:
+weft remote install prod user@57.129.106.133:2222
+
+# Specifying a different public host address for the weft daemon:
+weft remote install prod root@10.0.0.5 57.129.106.133
+```
+
+- If no user is specified, `remote install` defaults to `root@`.
+- If a custom SSH port is given (`host:port`), `scp` and `ssh` connect using that port.
+- If the remote is already registered, existing host addresses and custom daemon ports are preserved.
+
+---
+
+## Pipeline Configuration (`weft.zon`)
+
+Place a `weft.zon` in your project root:
+
+```zon
+.{
+    .name = "bellacall",
+    .workspace = "bellacall",
+    .pipelines = .{
+        .{
+            .name = "build-backend-release",
+            .inputs = .{
+                .{ .name = "src" },
+            },
+            .outputs = .{
+                .{ .name = "backend-release" },
+            },
+            .keep = .{
+                .{ "backend-target", "backend/target/" },
+            },
+        },
+        .{
+            .name = "build-frontend-web",
+            .inputs = .{
+                .{ .name = "src" },
+            },
+            .outputs = .{
+                .{ .name = "frontend-web" },
+            },
+            .keep = .{
+                .{ "flutter-tool", "frontend/.dart_tool/" },
+                .{ "flutter-build", "frontend/build/" },
+            },
+        },
+        .{
+            .name = "build-release",
+            .inputs = .{
+                .{ .name = "backend-release" },
+                .{ .name = "frontend-web" },
+            },
+            .outputs = .{},
+        },
+        .{
+            .name = "build",
+            .inputs = .{
+                .{ .name = "backend-release" },
+                .{ .name = "frontend-web" },
+            },
+            .outputs = .{},
+            .script = "build-release",
+        },
+        .{
+            .name = "run",
+            .inputs = .{
+                .{ .name = "backend-release" },
+                .{ .name = "frontend-web" },
+            },
+            .outputs = .{},
+            .second_instance = .kill,
+            .env = .{
+                .{ "PORT", "3000" },
+                .{ "DATABASE_URL", "postgresql://user:pass@127.0.0.1:5432/db" },
+            },
+        },
+    },
+}
+```
+
+### Pipeline Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `[]const u8` | Unique pipeline name. |
+| `inputs` | `[]Input` | Artifacts needed before this pipeline can run (`src` represents the repository snapshot). |
+| `outputs` | `[]Output` | Artifacts produced by this pipeline to store and pass downstream. |
+| `keep` | `[]Keep` | Tuple of `.{ "cache-name", "path/relative/to/cwd/" }` mounted into the sandbox and preserved across runs. |
+| `second_instance` | `.kill` \| `.ignore` | When set to `.kill`, kills sibling running tasks from previous deployments of the same pipeline. |
+| `env` | `[][2][]const u8` | Environment key-value pairs injected into the running task. |
+| `script` | `?[]const u8` | Executable script inside `bin/` (defaults to `bin/<pipeline_name>`). |
+
+---
+
+## Pipeline Scripts (`bin/`)
+
+Pipeline executables live in `./bin/` relative to `weft.zon`. Scripts can be written in any language (`sh`, `bash`, `nu`, `python`, etc.):
+
+When a task executes:
+- `$IN`: Path to the input artifacts directory (e.g. `$IN/src/`, `$IN/backend-release/`).
+- `$OUT`: Path to the output directory where produced artifacts should be saved (e.g. `$OUT/backend-release/`).
+- Working directory (`cwd`): Isolated sandbox per deployment.
+
+### Example Build Script (`bin/build-backend-release`)
+
+```nu
+#!/usr/bin/env nu
+
+glob $"($env.IN)/src/*" | each { |f| cp -r $f ./ }
+
+cd backend
+cargo build --release
+
+mkdir $"($env.OUT)/backend-release"
+cp target/release/backend ($env.OUT + "/backend-release/backend")
+```
+
+### Example Service Runner (`bin/run`)
+
+```bash
+#!/usr/bin/env bash
+set -e
+
+cp "$IN/backend-release/backend" ./backend
+chmod +x ./backend
+
+exec ./backend
+```
+
+---
+
+## Running Pipelines (`weft do`)
+
+### Local Builds
+
+```bash
+# Run a specific pipeline locally:
+weft do build-backend-release
+
+# Run a composite build:
+weft do build
+```
+
+### Remote Deployments
+
+Target a remote by prefixing the pipeline name with `<remote>.`:
+
+```bash
+# Build locally and run the service on 'bellacall' remote:
+weft do build bellacall.run
+
+# Target multiple remotes or pipelines:
+weft do local.build bellacall.run
+
+# Run directly on remote (dependencies automatically resolve and upload):
+weft do bellacall.run
+```
+
+---
+
+## CLI Reference
+
+```
+Usage: weft [options] <command> [args]
+
+Commands:
+  daemon install                      Install the weft daemon (systemd service, config)
+  daemon run                          Run the daemon in the foreground
+  daemon show-token                   Print the daemon secret token
+  do <pipeline[.remote]...>           Run pipelines: weft do [remote.]pipeline ...
+  remote install <name> <ssh> [host]  Install weft on a remote and register it
+
+Options:
+  -q, --quiet                         Only log errors
+  -v, --verbose                       Log debug messages
+  --no-color                          Disable colored output
+```
+
+---
 
 ## License
 
-See the LICENSE file in the repository (if present). If there is no license, add one to clarify usage permissions.
-
-## Contact
-
-Created by ken-morel.
+MIT / Apache-2.0
