@@ -82,3 +82,55 @@ pub fn task_log_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deploy
         &.{ log_dir_path, filename },
     );
 }
+
+pub fn latest_deployment_id(self: @This(), io: std.Io) !?Deployment.Id {
+    var weft_dir = self.open_weft_dir(io) catch |err|
+        if (err == error.FileNotFound)
+            return null
+        else
+            return err;
+    defer weft_dir.close(io);
+
+    var iter = weft_dir.iterate();
+    var latest: ?Deployment.Id = null;
+    while (try iter.next(io)) |entry| {
+        if (entry.kind != .directory)
+            continue;
+        const id = Deployment.Id.parse(entry.name) catch continue;
+        if (latest) |curr| {
+            if (id.raw > curr.raw)
+                latest = id;
+        } else latest = id;
+    }
+    return latest;
+}
+
+pub fn load_deployment(self: @This(), alloc: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
+    @setEvalBranchQuota(100_000);
+    var dep_dir = try self.open_deployment_dir(io, id);
+    defer dep_dir.close(io);
+
+    var iter = dep_dir.iterate();
+    var content: ?[]u8 = null;
+    defer if (content) |c| alloc.free(c);
+
+    while (try iter.next(io)) |entry| {
+        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zon")) {
+            var file = try dep_dir.openFile(io, entry.name, .{});
+            defer file.close(io);
+            var buffer: [1 << 10]u8 = undefined;
+            var reader = file.reader(io, &buffer);
+            content = try reader.interface.allocRemaining(alloc, .limited(512 << 10));
+            break;
+        }
+    }
+
+    const zon_content = content orelse return error.DeploymentNotFound;
+    const null_terminated = try alloc.dupeSentinel(u8, zon_content, 0);
+    defer alloc.free(null_terminated);
+
+    var deployment = try std.zon.parse.fromSliceAlloc(Deployment, alloc, null_terminated, null, .{});
+    deployment.id = id;
+    deployment.running = &.{};
+    return deployment;
+}

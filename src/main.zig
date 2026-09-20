@@ -3,6 +3,8 @@ const std = @import("std");
 const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_remote = @import("client/cmd_remote.zig");
 const cmd_do = @import("client/do.zig");
+const cmd_follow = @import("client/cmd_follow.zig");
+const Deployment = @import("client/Deployment.zig");
 const Project = @import("client/Project.zig");
 const Step = @import("client/Step.zig");
 const clinternal = @import("daemon/clinternal.zig");
@@ -22,7 +24,9 @@ const usage_text =
     \\  daemon install          Install the weft daemon (systemd service, config)
     \\  daemon run              Run the daemon in the foreground
     \\  daemon show-token       Print the daemon secret token
-    \\  do <pipeline[.remote]...>        Run pipelines: weft do [remote.]pipeline ...
+    \\  do <target...>          Run pipelines: weft do [remote.]pipeline ...
+    \\  continue [id] [targets] Continue an existing deployment
+    \\  follow [id][.pipeline]  Follow a running deployment or pipeline
     \\  remote install <name> <ssh> [host]   Install weft on a remote and register it
     \\
     \\Options (before the command):
@@ -147,7 +151,51 @@ pub fn main(init: std.process.Init) !void {
             const targets_slice = try targets.toOwnedSlice(alloc);
             defer alloc.free(targets_slice);
 
-            return cmd_do.run(alloc, init.io, &term, project, installation, targets_slice);
+            return cmd_do.run(alloc, init.io, &term, project, installation, targets_slice, null);
+        } else if (std.mem.eql(u8, cmd, "continue")) {
+            var arg_start = first + 1;
+            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open(project_dir);
+
+            var maybe_continue_id: ?Deployment.Id = null;
+            if (arg_start < args.len) {
+                if (Deployment.Id.parse(args[arg_start])) |id| {
+                    maybe_continue_id = id;
+                    arg_start += 1;
+                } else |_| {}
+            }
+            if (maybe_continue_id == null) {
+                maybe_continue_id = try project.latest_deployment_id(init.io) orelse {
+                    term.err("no deployments found in .weft", .{});
+                    return error.NoDeployments;
+                };
+            }
+
+            const target_args = args[arg_start..];
+            var targets: std.ArrayList(Step) = .empty;
+            defer targets.deinit(alloc);
+
+            for (target_args) |arg| {
+                const target = Step.parse(arg) catch |err| {
+                    term.err("invalid target '{s}': {any}", .{ arg, err });
+                    return err;
+                };
+                try targets.append(alloc, target);
+            }
+            const targets_slice = try targets.toOwnedSlice(alloc);
+            defer alloc.free(targets_slice);
+
+            return cmd_do.run(alloc, init.io, &term, project, installation, targets_slice, maybe_continue_id);
+        } else if (std.mem.eql(u8, cmd, "follow")) {
+            const follow_args = args[first + 1 ..];
+            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open(project_dir);
+
+            return cmd_follow.run(alloc, init.io, &term, project, installation, follow_args);
         }
     }
     show_usage(&term);

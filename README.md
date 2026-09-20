@@ -34,8 +34,8 @@ Weft connects local development environments and remote servers into a unified p
 │                              │              │                              │
 │  1. Snapshot 'src' artifact  │              │  1. Receive artifacts        │
 │  2. Execute [local] build    │  TCP (Wire)  │  2. Kill previous instances  │
-│  3. Push artifacts ──────────┼─────────────►│  3. Spawn systemd unit       │
-│  4. Stream remote logs ◄─────┼──────────────┼─ 4. Run service & stream logs│
+│  3. Push artifacts           │─────────────►│  3. Spawn systemd unit       │
+│  4. Stream remote logs       │◄─────────────│  4. Run service & stream logs│
 └──────────────────────────────┘              └──────────────────────────────┘
 ```
 
@@ -267,6 +267,8 @@ Commands:
   daemon run                          Run the daemon in the foreground
   daemon show-token                   Print the daemon secret token
   do <pipeline[.remote]...>           Run pipelines: weft do [remote.]pipeline ...
+  continue [id] [targets]             Continue an existing deployment
+  follow [id][.pipeline]              Follow a running deployment or pipeline
   remote install <name> <ssh> [host]  Install weft on a remote and register it
 
 Options:

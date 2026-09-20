@@ -217,7 +217,7 @@ pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, remote: []const u8
 pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) !void {
     var buffer: [1 << 10]u8 = undefined;
 
-    const filename = try std.fmt.allocPrint(alloc, "{}.zon", .{self.id});
+    const filename = try std.fmt.allocPrint(alloc, "{s}.zon", .{&self.id.to_string()});
     defer alloc.free(filename);
 
     const deployments_dir = try proj.open_deployment_dir(io, self.id);

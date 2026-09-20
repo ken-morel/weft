@@ -16,7 +16,7 @@ const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
 const dotenv_mod = @import("../util/dotenv.zig");
 
-const Fetcher = struct {
+pub const Fetcher = struct {
     deployment: *Deployment,
     remotes: []const Remote,
     lock: std.Io.Mutex = .init,
