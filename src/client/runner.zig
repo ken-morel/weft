@@ -124,10 +124,8 @@ const Fetcher = struct {
         var pressor: Pressor = .init(pressor_buffer);
 
         while (try packer.get(io, read_buffer)) |pack| switch (pack) {
-            .file => |path|
-                try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .file = path }),
-            .folder => |path|
-                try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .folder = path }),
+            .file => |path| try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .file = path }),
+            .folder => |path| try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .folder = path }),
             .data => |data| {
                 var reader: std.Io.Reader = .fixed(data);
                 var writer: std.Io.Writer = .fixed(compressed_buffer);
@@ -222,7 +220,6 @@ pub fn run_deployment(
 
     var state: DeploymentState = .init(alloc, &project);
     defer state.deinit();
-    var view: DeploymentView = .init(&state);
     var depl: std.Io.RwLock = .init;
 
     var fetcher: Fetcher = .{
@@ -239,32 +236,36 @@ pub fn run_deployment(
     defer fetcher.deinit();
 
     var group: std.Io.Group = .init;
+    errdefer {
+        term.err("Deployment failed... cancelling tasks", .{});
+        group.cancel(io);
+    }
+    var view: DeploymentView = .init(alloc, term, &state, deployment.id);
+    defer view.deinit();
     while (true) {
-        try depl.lockShared(io);
-        if (deployment.completed()) {
-            depl.unlockShared(io);
-            break;
+        {
+            try depl.lockShared(io);
+            defer depl.unlockShared(io);
+            if (deployment.completed())
+                break;
+
+            if (state.has_error() and deployment.running.len == 0)
+                return error.DeploymentFailed;
+
+            while (try deployment.next_step()) |step|
+                spawn(
+                    io,
+                    &group,
+                    spawn_step,
+                    .{ alloc, io, &state, term, project, &depl, deployment, remotes, &fetcher, step },
+                );
+
+            try view.update(io);
         }
-
-        if (state.has_error() and deployment.running.len == 0) {
-            depl.unlockShared(io);
-            term.err("Deployment failed", .{});
-            return error.DeploymentFailed;
-        }
-
-        while (try deployment.next_step()) |step|
-            spawn(
-                io,
-                &group,
-                spawn_step,
-                .{ alloc, io, &state, term, project, &depl, deployment, remotes, &fetcher, step },
-            );
-
-        try view.update();
-        depl.unlockShared(io);
         try std.Io.sleep(io, .fromMilliseconds(250), .awake);
     }
     try group.await(io);
+    try view.finish(io);
     term.success("Deployment completed", .{});
 }
 
@@ -294,7 +295,7 @@ pub fn spawn_step(
     {
         try deployment_lock.lock(io);
         defer deployment_lock.unlock(io);
-        _ = try state.add_step(remote, pipeline);
+        _ = try state.add(remote, pipeline);
     }
 
     for (pipeline.inputs) |input|
@@ -349,7 +350,7 @@ pub fn spawn_step(
         try deployment_lock.lock(io);
         defer deployment_lock.unlock(io);
         try deployment.add_running(alloc, step);
-        state.set_step_running(step.remote, step.pipeline);
+        state.running(step.remote, step.pipeline);
     }
 
     const log_path = try project.task_log_path(alloc, io, deployment.id, step.pipeline);
@@ -372,8 +373,8 @@ pub fn spawn_step(
             },
         });
 
-        const poll_res = try client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
-        const footer = (try poll_res).footer;
+        const res = try try client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
+        const footer = &res.footer;
 
         if (footer.logs) |logs| {
             if (logs.data.len > 0) {
@@ -394,7 +395,7 @@ pub fn spawn_step(
                 for (pipeline.outputs) |output|
                     try deployment.add_artifact(alloc, step.remote, output.name);
 
-                state.set_step_completed(step.remote, step.pipeline);
+                state.completed(step.remote, step.pipeline);
                 try deployment.save(alloc, io, project);
                 break;
             },
@@ -404,7 +405,7 @@ pub fn spawn_step(
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 const err_msg = try std.fmt.allocPrint(alloc, "task failed with exit code {d}", .{code});
-                state.set_step_err(step.remote, step.pipeline, err_msg);
+                state.err(step.remote, step.pipeline, err_msg);
                 break;
             },
             .not_found => {
@@ -412,7 +413,7 @@ pub fn spawn_step(
                 defer deployment_lock.unlock(io);
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
-                state.set_step_err(step.remote, step.pipeline, "task not found on remote");
+                state.err(step.remote, step.pipeline, "task not found on remote");
                 break;
             },
         }

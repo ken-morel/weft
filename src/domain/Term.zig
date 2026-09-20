@@ -109,6 +109,71 @@ pub inline fn byte(self: *@This(), b: u8) !void {
     try self.writer().writeByte(b);
 }
 
+pub const Size = struct {
+    rows: u16,
+    cols: u16,
+};
+
+pub fn get_size(self: *@This()) Size {
+    var ws: std.posix.winsize = .{
+        .row = 0,
+        .col = 0,
+        .xpixel = 0,
+        .ypixel = 0,
+    };
+    const res = self.io.operate(.{ .device_io_control = .{
+        .file = self.rw_io.@"1",
+        .code = std.posix.T.IOCGWINSZ,
+        .arg = &ws,
+    } }) catch null;
+
+    if (res) |r|
+        if (r.device_io_control >= 0 and ws.row > 0 and ws.col > 0)
+            return .{ .rows = ws.row, .cols = ws.col };
+
+    return .{ .rows = 24, .cols = 80 };
+}
+
+pub inline fn is_tty(self: @This()) bool {
+    return self.color;
+}
+
+pub fn move_up(self: *@This(), n: u16) void {
+    if (!self.color or n == 0)
+        return;
+    self.writer().print("\x1b[{d}A", .{n}) catch {};
+}
+
+pub fn move_down(self: *@This(), n: u16) void {
+    if (!self.color or n == 0)
+        return;
+    self.writer().print("\x1b[{d}B", .{n}) catch {};
+}
+
+pub fn clear_to_end(self: *@This()) void {
+    if (!self.color)
+        return;
+    self.writer().writeAll("\x1b[J") catch {};
+}
+
+pub fn clear_line(self: *@This()) void {
+    if (!self.color)
+        return;
+    self.writer().writeAll("\x1b[2K\r") catch {};
+}
+
+pub fn hide_cursor(self: *@This()) void {
+    if (!self.color)
+        return;
+    self.writer().writeAll("\x1b[?25l") catch {};
+}
+
+pub fn show_cursor(self: *@This()) void {
+    if (!self.color)
+        return;
+    self.writer().writeAll("\x1b[?25h") catch {};
+}
+
 pub fn read_till(self: *@This(), buf: []u8, tk: u8) ![]u8 {
     for (buf, 0..) |*c, i| {
         c.* = try self.reader().takeByte();

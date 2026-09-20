@@ -49,7 +49,7 @@ pub fn deinit(self: *@This()) void {
     self.steps.deinit(self.alloc);
 }
 
-pub fn add_step(self: *@This(), remote: *const Remote, pipeline: *const Weft.Pipeline) !*Step {
+pub fn add(self: *@This(), remote: *const Remote, pipeline: *const Weft.Pipeline) !*Step {
     for (self.steps.items) |*s|
         if (std.mem.eql(u8, s.remote.get_name(), remote.get_name()) and std.mem.eql(u8, s.pipeline.name, pipeline.name))
             return s;
@@ -63,7 +63,7 @@ pub fn add_step(self: *@This(), remote: *const Remote, pipeline: *const Weft.Pip
     return &self.steps.items[self.steps.items.len - 1];
 }
 
-pub fn get_step(self: *@This(), remote_name: []const u8, pipeline_name: []const u8) ?*Step {
+pub fn get(self: *@This(), remote_name: []const u8, pipeline_name: []const u8) ?*Step {
     for (self.steps.items) |*s|
         if (std.mem.eql(u8, s.remote.get_name(), remote_name) and std.mem.eql(u8, s.pipeline.name, pipeline_name))
             return s;
@@ -71,24 +71,24 @@ pub fn get_step(self: *@This(), remote_name: []const u8, pipeline_name: []const 
     return null;
 }
 
-pub fn set_step_running(self: *@This(), remote_name: []const u8, pipeline_name: []const u8) void {
-    if (self.get_step(remote_name, pipeline_name)) |s|
+pub fn running(self: *@This(), remote_name: []const u8, pipeline_name: []const u8) void {
+    if (self.get(remote_name, pipeline_name)) |s|
         s.status = .running;
 }
 
-pub fn set_step_completed(self: *@This(), remote_name: []const u8, pipeline_name: []const u8) void {
-    if (self.get_step(remote_name, pipeline_name)) |s|
+pub fn completed(self: *@This(), remote_name: []const u8, pipeline_name: []const u8) void {
+    if (self.get(remote_name, pipeline_name)) |s|
         s.status = .completed;
 }
 
-pub fn set_step_err(self: *@This(), remote_name: []const u8, pipeline_name: []const u8, err_msg: []const u8) void {
-    if (self.get_step(remote_name, pipeline_name)) |s| {
+pub fn err(self: *@This(), remote_name: []const u8, pipeline_name: []const u8, err_msg: []const u8) void {
+    if (self.get(remote_name, pipeline_name)) |s| {
         s.status = .err;
         s.err = err_msg;
     }
 }
 
-pub fn get_artifact(self: *@This(), name: []const u8, remote_name: []const u8) ?*Artifact {
+pub fn artifact(self: *@This(), name: []const u8, remote_name: []const u8) ?*Artifact {
     for (self.artifacts.items) |*a|
         if (std.mem.eql(u8, a.name, name) and std.mem.eql(u8, a.remote.get_name(), remote_name))
             return a;
@@ -96,8 +96,8 @@ pub fn get_artifact(self: *@This(), name: []const u8, remote_name: []const u8) ?
     return null;
 }
 
-pub fn set_artifact_progress(self: *@This(), name: []const u8, remote: *const Remote, status: Artifact.Status, percent: f32) !void {
-    if (self.get_artifact(name, remote.get_name())) |a| {
+pub fn artifact_progress(self: *@This(), name: []const u8, remote: *const Remote, status: Artifact.Status, percent: f32) !void {
+    if (self.artifact(name, remote.get_name())) |a| {
         a.status = status;
         a.percent = percent;
     } else {
