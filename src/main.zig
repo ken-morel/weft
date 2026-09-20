@@ -23,7 +23,7 @@ const usage_text =
     \\  daemon run              Run the daemon in the foreground
     \\  daemon show-token       Print the daemon secret token
     \\  do <pipeline[.remote]...>        Run pipelines: weft do [remote.]pipeline ...
-    \\  remote add <name> <ssh>          Install weft on a remote and register it
+    \\  remote install <name> <ssh> [host]   Install weft on a remote and register it
     \\
     \\Options (before the command):
     \\  -q, --quiet             Only log errors
@@ -109,15 +109,18 @@ pub fn main(init: std.process.Init) !void {
             }
         } else if (std.mem.eql(u8, cmd, "remote")) {
             if (first + 1 >= args.len) break :cmd;
-            if (std.mem.eql(u8, args[first + 1], "add")) {
+            const sub = args[first + 1];
+
+            if (std.mem.eql(u8, sub, "install")) {
                 if (args.len < first + 4) {
-                    term.err("usage: weft remote add <name> <ssh_target>", .{});
+                    term.err("usage: weft remote install <name> <ssh_target> [host]", .{});
                     return error.Usage;
                 }
                 const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
                 const name = args[first + 2];
                 const ssh_target = args[first + 3];
-                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target);
+                const maybe_host = if (args.len > first + 4) args[first + 4] else null;
+                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target, maybe_host);
             }
             break :cmd;
         } else if (std.mem.eql(u8, cmd, "do")) {

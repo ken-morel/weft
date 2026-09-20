@@ -139,6 +139,11 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
         });
         _ = try child_en.wait(io);
 
+        var child_restart = try std.process.spawn(io, .{
+            .argv = &.{ "systemctl", "restart", "weftd.service" },
+        });
+        _ = try child_restart.wait(io);
+
         break :setup_service;
     }
     setup_sysusers: {
