@@ -14,7 +14,6 @@ pub const artifact = struct {
             folder: []const u8,
             file: []const u8,
             data: []const u8,
-            compressed: []const u8,
             end,
         };
         pub const Res = union(enum) {

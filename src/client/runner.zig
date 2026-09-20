@@ -123,7 +123,7 @@ const Fetcher = struct {
         defer self.alloc.free(read_buffer);
         const send_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
         defer self.alloc.free(send_buffer);
-        const compressed_buffer = try self.alloc.alloc(u8, Pressor.chunk_size);
+        const compressed_buffer = try self.alloc.alloc(u8, Pressor.max_compressed_size);
         defer self.alloc.free(compressed_buffer);
         const artifact_dir_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
         defer self.alloc.free(artifact_dir_path);
@@ -195,12 +195,8 @@ const Fetcher = struct {
             .data => |data| {
                 var reader: std.Io.Reader = .fixed(data);
                 var writer: std.Io.Writer = .fixed(compressed_buffer);
-                if (pressor.compress(&reader, &writer)) |_|
-                    try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .compressed = writer.buffered() })
-                else |err| {
-                    if (err != error.WriteFailed) return err;
-                    try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .data = data });
-                }
+                try pressor.compress(&reader, &writer);
+                try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .data = writer.buffered() });
             },
         };
         try conn.send_object(send_buffer, proto.artifact.push.Req, .end);
@@ -264,7 +260,7 @@ const Fetcher = struct {
         const pressor_buffer = try self.alloc.alloc(u8, Pressor.buffer_size);
         defer self.alloc.free(pressor_buffer);
         var pressor: Pressor = .init(pressor_buffer);
-        const decompress_buffer = try self.alloc.alloc(u8, Pressor.chunk_size);
+        const decompress_buffer = try self.alloc.alloc(u8, Pressor.max_uncompressed_size);
         defer self.alloc.free(decompress_buffer);
 
         var total_files: u32 = 0;
@@ -344,10 +340,8 @@ pub fn run_deployment(
             if (deployment.completed())
                 break;
 
-            if (state.has_error() and deployment.running.len == 0) {
-                try view.finish(io);
+            if (state.has_error() and deployment.running.len == 0)
                 return error.DeploymentFailed;
-            }
 
             while (try deployment.next_step()) |step| {
                 const remote: *const Remote = remote: for (remotes) |*remote| {
@@ -511,7 +505,6 @@ pub fn spawn_step(
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 const err_msg = try std.fmt.allocPrint(alloc, "task failed with exit code {d}", .{code});
                 state.err(step.remote, step.pipeline, err_msg);
-                try deployment.save(alloc, io, project);
                 break;
             },
             .not_found => {
@@ -520,7 +513,6 @@ pub fn spawn_step(
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 state.err(step.remote, step.pipeline, "task not found on remote");
-                try deployment.save(alloc, io, project);
                 break;
             },
         }

@@ -195,7 +195,7 @@ fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artif
     var packer: Packer = try .packer(alloc, artifact_dir);
     defer packer.deinit(io);
     const zoto_buffer = try alloc.alloc(u8, Connection.max_packet_size);
-    const packet_buffer = try alloc.alloc(u8, Pressor.chunk_size);
+    const packet_buffer = try alloc.alloc(u8, Pressor.max_uncompressed_size);
 
     try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .files = file_count });
 
@@ -283,9 +283,6 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
                     try packer.put(io, .{ .file = path });
                 },
                 .data => |data| {
-                    try packer.put(io, .{ .data = data });
-                },
-                .compressed => |data| {
                     const pressor = try self.daemon.pressor.acquire();
                     defer pressor.release();
                     var reader: std.Io.Reader = .fixed(data);

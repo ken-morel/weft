@@ -79,9 +79,7 @@ pub fn keep_path(self: @This(), alloc: std.mem.Allocator, name: []const u8) ![]c
     return paths.task_cache(
         alloc,
         self.id.workspace,
-        self.id.service,
         self.id.env,
-        self.id.pipeline,
         name,
     );
 }

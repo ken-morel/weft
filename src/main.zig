@@ -22,8 +22,9 @@ const usage_text =
     \\  daemon install          Install the weft daemon (systemd service, config)
     \\  daemon run              Run the daemon in the foreground
     \\  daemon show-token       Print the daemon secret token
+    \\  daemon install-remote   Install weft daemon on a remote host via SSH
     \\  do <pipeline[.remote]...>        Run pipelines: weft do [remote.]pipeline ...
-    \\  remote add <name> <ssh>          Install weft on a remote and register it
+    \\  remote add <name> <ssh> [host]   Add and install a remote via SSH
     \\
     \\Options (before the command):
     \\  -q, --quiet             Only log errors
@@ -92,6 +93,16 @@ pub fn main(init: std.process.Init) !void {
                 defer std.zon.parse.free(alloc, config);
                 term.println("{s}", .{config.secret});
                 return;
+            } else if (std.mem.eql(u8, sub, "install-remote")) {
+                if (args.len < first + 4) {
+                    term.err("usage: weft daemon install-remote <name> <ssh_target> [host]", .{});
+                    return error.Usage;
+                }
+                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+                const name = args[first + 2];
+                const ssh_target = args[first + 3];
+                const maybe_host = if (args.len > first + 4) args[first + 4] else null;
+                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target, maybe_host);
             }
             break :cmd;
         } else if (std.mem.eql(u8, cmd, "_daemon")) {
@@ -107,19 +118,6 @@ pub fn main(init: std.process.Init) !void {
                 try clinternal.task_completed(alloc, init.io, &term, task, exit_code);
                 return;
             }
-        } else if (std.mem.eql(u8, cmd, "remote")) {
-            if (first + 1 >= args.len) break :cmd;
-            if (std.mem.eql(u8, args[first + 1], "add")) {
-                if (args.len < first + 4) {
-                    term.err("usage: weft remote add <name> <ssh_target>", .{});
-                    return error.Usage;
-                }
-                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
-                const name = args[first + 2];
-                const ssh_target = args[first + 3];
-                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target);
-            }
-            break :cmd;
         } else if (std.mem.eql(u8, cmd, "do")) {
             if (args.len < first + 2) {
                 term.err("usage: weft do [remote.]pipeline [[remote.]pipeline ...]", .{});

@@ -81,13 +81,11 @@ pub inline fn task_archive(
 pub inline fn task_cache(
     alloc: std.mem.Allocator,
     w: []const u8,
-    s: []const u8,
     e: []const u8,
-    p: []const u8,
     k: []const u8,
 ) ![]const u8 {
     return try std.fs.path.join(
         alloc,
-        &.{ weft_cache_dir, "pipelines", w, s, e, p, k },
+        &.{ weft_cache_dir, w, e, k },
     );
 }

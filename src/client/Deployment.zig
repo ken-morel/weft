@@ -203,11 +203,11 @@ pub fn remove_running(self: *@This(), alloc: std.mem.Allocator, remote: []const 
     }
 }
 
-pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, pipeline: []const u8, name: []const u8) !void {
+pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, pipeline: ?[]const u8, name: []const u8) !void {
     self.artifacts = try alloc.realloc(self.artifacts, self.artifacts.len + 1);
     self.artifacts[self.artifacts.len - 1] = .{
         .remote = remote,
-        .pipeline = pipeline,
+        .pipeline = pipeline orelse "",
         .name = name,
     };
 }
