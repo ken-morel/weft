@@ -5,7 +5,7 @@ const Pack = union(enum) {
     folder: []const u8,
     data: []const u8,
 
-    pub const max_size = @import("Pressor.zig").max_uncompressed_size;
+    pub const max_size = @import("Pressor.zig").chunk_size;
 };
 
 root: std.Io.Dir,

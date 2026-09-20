@@ -123,7 +123,7 @@ const Fetcher = struct {
         defer self.alloc.free(read_buffer);
         const send_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
         defer self.alloc.free(send_buffer);
-        const compressed_buffer = try self.alloc.alloc(u8, Pressor.max_compressed_size);
+        const compressed_buffer = try self.alloc.alloc(u8, Pressor.chunk_size);
         defer self.alloc.free(compressed_buffer);
         const artifact_dir_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
         defer self.alloc.free(artifact_dir_path);
@@ -195,8 +195,16 @@ const Fetcher = struct {
             .data => |data| {
                 var reader: std.Io.Reader = .fixed(data);
                 var writer: std.Io.Writer = .fixed(compressed_buffer);
-                try pressor.compress(&reader, &writer);
-                try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .data = writer.buffered() });
+                if (pressor.compress(&reader, &writer)) |_| {
+                    if (writer.buffered().len < data.len)
+                        try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .data = writer.buffered() })
+                    else
+                        try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .raw = data });
+                } else |err| {
+                    if (err != error.WriteFailed)
+                        return err;
+                    try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .raw = data });
+                }
             },
         };
         try conn.send_object(send_buffer, proto.artifact.push.Req, .end);
@@ -260,7 +268,7 @@ const Fetcher = struct {
         const pressor_buffer = try self.alloc.alloc(u8, Pressor.buffer_size);
         defer self.alloc.free(pressor_buffer);
         var pressor: Pressor = .init(pressor_buffer);
-        const decompress_buffer = try self.alloc.alloc(u8, Pressor.max_uncompressed_size);
+        const decompress_buffer = try self.alloc.alloc(u8, Pressor.chunk_size);
         defer self.alloc.free(decompress_buffer);
 
         var total_files: u32 = 0;

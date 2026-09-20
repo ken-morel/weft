@@ -1,11 +1,7 @@
 const std = @import("std");
 
 const window_size = 64 << 10;
-pub const max_compressed_size = std.math.maxInt(u16) - 20;
-
-// Strip possible deflate overhead (above 0.03%)
-pub const max_uncompressed_size = max_compressed_size - (max_compressed_size / 2000);
-
+pub const chunk_size = (64 << 10) - 128;
 pub const buffer_size = window_size;
 
 pub fn init(buffer: []u8) @This() {

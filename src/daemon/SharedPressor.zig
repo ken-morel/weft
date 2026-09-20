@@ -8,7 +8,7 @@ pressor: Pressor,
 lock: std.Io.Mutex,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
-    const output = try alloc.alloc(u8, Pressor.max_compressed_size);
+    const output = try alloc.alloc(u8, Pressor.chunk_size);
     const buffer = try alloc.alloc(u8, Pressor.buffer_size);
     return .{
         .io = io,
