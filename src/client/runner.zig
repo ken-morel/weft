@@ -27,6 +27,7 @@ const Fetcher = struct {
     term: *Term,
     project: *const Project,
     depl: *std.Io.RwLock,
+    active_fetches: u32 = 0,
 
     pub fn deinit(self: *@This()) void {
         var pushing_iter = self.pushing.iterator();
@@ -34,9 +35,11 @@ const Fetcher = struct {
             self.alloc.free(entry.key_ptr.*);
             self.alloc.destroy(entry.value_ptr.*);
         }
-        var pulling_iter = self.pulling.valueIterator();
-        while (pulling_iter.next()) |entry|
-            self.alloc.destroy(entry.*);
+        var pulling_iter = self.pulling.iterator();
+        while (pulling_iter.next()) |entry| {
+            self.alloc.free(entry.key_ptr.*);
+            self.alloc.destroy(entry.value_ptr.*);
+        }
         self.pushing.deinit(self.alloc);
         self.pulling.deinit(self.alloc);
     }
@@ -64,7 +67,38 @@ const Fetcher = struct {
         return res.has;
     }
 
-    pub fn add(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
+    pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
+        const m = m: {
+            try self.lock.lock(io);
+            if (self.pulling.get(artifact)) |m| {
+                self.lock.unlock(io);
+                try m.lock(io);
+                break :m m;
+            } else {
+                const key = try self.alloc.dupe(u8, artifact);
+                errdefer self.alloc.free(key);
+                const m = try self.alloc.create(std.Io.Mutex);
+                m.* = .init;
+                m.lockUncancelable(io);
+                try self.pulling.put(self.alloc, key, m);
+                self.lock.unlock(io);
+                break :m m;
+            }
+        };
+        defer m.unlock(io);
+
+        const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
+        defer self.alloc.free(artifact_path);
+
+        std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {
+            if (err == error.FileNotFound)
+                try self.pull_artifact(io, artifact)
+            else
+                return err;
+        };
+    }
+
+    pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
         if (try self.has_artifact(io, remote, artifact)) {
             try self.depl.lock(io);
             defer self.depl.unlock(io);
@@ -72,35 +106,8 @@ const Fetcher = struct {
             return;
         }
 
-        _ = fetch_artifact: {
-            const m = m: {
-                try self.lock.lock(io);
-                if (self.pulling.get(artifact)) |m| {
-                    self.lock.unlock(io);
-                    try m.lock(io);
-                    break :m m;
-                } else {
-                    const m = try self.alloc.create(std.Io.Mutex);
-                    m.* = .init;
-                    m.lockUncancelable(io);
-                    try self.pulling.put(self.alloc, artifact, m);
-                    self.lock.unlock(io);
-                    break :m m;
-                }
-            };
-            defer m.unlock(io);
+        try self.fetch(io, artifact);
 
-            const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
-            defer self.alloc.free(artifact_path);
-
-            std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {
-                if (err == error.FileNotFound)
-                    try self.pull_artifact(io, artifact)
-                else
-                    return err;
-            };
-            break :fetch_artifact;
-        };
         const push_id = try std.mem.join(self.alloc, ".", &.{ remote.get_name(), artifact });
         defer self.alloc.free(push_id);
         const m = m: {
@@ -124,6 +131,32 @@ const Fetcher = struct {
         if (try self.has_artifact(io, remote, artifact))
             return;
         try self.push_artifact(io, remote, artifact);
+    }
+
+    pub inline fn add(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
+        return self.upload(io, remote, artifact);
+    }
+
+    pub fn spawn_fetch(self: *@This(), io: std.Io, group: *std.Io.Group, artifact: []const u8) !void {
+        {
+            try self.lock.lock(io);
+            defer self.lock.unlock(io);
+            self.active_fetches += 1;
+        }
+        const key = try self.alloc.dupe(u8, artifact);
+        errdefer {
+            self.lock.lockUncancelable(io);
+            self.active_fetches -= 1;
+            self.lock.unlock(io);
+            self.alloc.free(key);
+        }
+        spawn(io, group, run_fetch, .{ self, io, key });
+    }
+
+    pub fn is_idle(self: *@This(), io: std.Io) bool {
+        self.lock.lock(io) catch return true;
+        defer self.lock.unlock(io);
+        return self.active_fetches == 0;
     }
 
     pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
@@ -324,6 +357,17 @@ const Fetcher = struct {
     }
 };
 
+pub fn run_fetch(fetcher: *Fetcher, io: std.Io, artifact: []const u8) !void {
+    defer {
+        fetcher.lock.lockUncancelable(io);
+        fetcher.active_fetches -= 1;
+        fetcher.lock.unlock(io);
+        fetcher.alloc.free(artifact);
+    }
+    fetcher.fetch(io, artifact) catch |err|
+        fetcher.term.err("failed to fetch artifact {s}: {any}", .{ artifact, err });
+}
+
 pub fn run_deployment(
     alloc: std.mem.Allocator,
     io: std.Io,
@@ -366,7 +410,7 @@ pub fn run_deployment(
         {
             try depl.lock(io);
             defer depl.unlock(io);
-            if (deployment.completed())
+            if (deployment.completed() and fetcher.is_idle(io))
                 break;
 
             if (state.has_error() and deployment.running.len == 0)
@@ -387,7 +431,7 @@ pub fn run_deployment(
                     io,
                     &group,
                     spawn_step,
-                    .{ alloc, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, &dotenv, inst.env },
+                    .{ alloc, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, &dotenv, inst.env, &group },
                 );
             }
 
@@ -414,6 +458,7 @@ pub fn spawn_step(
     step: Deployment.Step,
     dotenv: *const dotenv_mod.DotEnv,
     env_map: *const std.process.Environ.Map,
+    group: *std.Io.Group,
 ) !void {
     errdefer if (deployment_lock.lock(io)) |_| {
         deployment.remove_running(alloc, step.remote, step.pipeline);
@@ -565,8 +610,10 @@ pub fn spawn_step(
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 if (pipeline.outputs.len == 0)
                     try deployment.add_artifact(alloc, step.remote, step.pipeline, "");
-                for (pipeline.outputs) |output|
+                for (pipeline.outputs) |output| {
                     try deployment.add_artifact(alloc, step.remote, step.pipeline, output.name);
+                    try fetcher.spawn_fetch(io, group, output.name);
+                }
 
                 state.completed(step.remote, step.pipeline);
                 try deployment.save(alloc, io, project);

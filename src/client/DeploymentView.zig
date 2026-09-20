@@ -59,10 +59,10 @@ fn print_log_tail(self: *@This(), io: std.Io, pipeline_name: []const u8, max_lin
     _ = file.readPositionalAll(io, buf[0..read_size], offset) catch return 0;
     const content = buf[0..read_size];
 
-    var lines: [5][]const u8 = undefined;
+    var lines: [10][]const u8 = undefined;
     var count: usize = 0;
     var slice = std.mem.trimEnd(u8, content, "\r\n");
-    while (slice.len > 0 and count < max_lines and count < 5) {
+    while (slice.len > 0 and count < max_lines and count < 10) {
         if (std.mem.lastIndexOfScalar(u8, slice, '\n')) |idx| {
             lines[count] = slice[idx + 1 ..];
             count += 1;
@@ -109,6 +109,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
                 try self.mark_finalized(key);
             } else if (step.status == .err) {
                 self.term.println("error: [{s}] {s}: {s}", .{ step.remote.get_name(), step.pipeline.name, step.err orelse "failed" });
+                _ = self.print_log_tail(io, step.pipeline.name, 10, 80);
                 try self.mark_finalized(key);
             }
         }
@@ -121,6 +122,8 @@ pub fn update(self: *@This(), io: std.Io) !void {
         self.rendered_lines = 0;
     }
 
+    const term_size = self.term.get_size();
+
     for (self.state.steps.items) |step| {
         const key = try std.fmt.allocPrint(self.alloc, "{s}:{s}", .{ step.remote.get_name(), step.pipeline.name });
         defer self.alloc.free(key);
@@ -132,11 +135,10 @@ pub fn update(self: *@This(), io: std.Io) !void {
             try self.mark_finalized(key);
         } else if (step.status == .err) {
             self.term.println("error: [{s}] {s}: {s}", .{ step.remote.get_name(), step.pipeline.name, step.err orelse "failed" });
+            _ = self.print_log_tail(io, step.pipeline.name, 10, term_size.cols);
             try self.mark_finalized(key);
         }
     }
-
-    const term_size = self.term.get_size();
     var running_count: usize = 0;
     var active_art_count: usize = 0;
 
@@ -187,7 +189,6 @@ pub fn update(self: *@This(), io: std.Io) !void {
 }
 
 pub fn finish(self: *@This(), io: std.Io) !void {
-    _ = io;
     if (self.term.is_tty() and self.rendered_lines > 0) {
         self.term.move_up(self.rendered_lines);
         self.term.clear_to_end();
@@ -205,6 +206,8 @@ pub fn finish(self: *@This(), io: std.Io) !void {
             try self.mark_finalized(key);
         } else if (step.status == .err) {
             self.term.println("error: [{s}] {s}: {s}", .{ step.remote.get_name(), step.pipeline.name, step.err orelse "failed" });
+            const term_size = self.term.get_size();
+            _ = self.print_log_tail(io, step.pipeline.name, 10, term_size.cols);
             try self.mark_finalized(key);
         }
     }
