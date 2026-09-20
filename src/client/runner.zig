@@ -552,8 +552,24 @@ pub fn spawn_step(
         buffer[0] = proto.task.spawn.end;
         try client.conn.send(buffer[0..1]);
 
-        const reply = try client.conn.recv_object_buf(buffer, proto.Res(proto.task.spawn.Res));
-        _ = try reply;
+        const reply = client.conn.recv_object_buf(buffer, proto.Res(proto.task.spawn.Res)) catch |err| {
+            try deployment_lock.lock(io);
+            defer deployment_lock.unlock(io);
+            deployment.remove_running(alloc, step.remote, step.pipeline);
+            state.err(step.remote, step.pipeline, @errorName(err));
+            return;
+        };
+        _ = reply catch |err| {
+            try deployment_lock.lock(io);
+            defer deployment_lock.unlock(io);
+            deployment.remove_running(alloc, step.remote, step.pipeline);
+            const msg = if (err == error.AlreadyRunning)
+                "task already running on remote"
+            else
+                @errorName(err);
+            state.err(step.remote, step.pipeline, msg);
+            return;
+        };
     }
 
     {

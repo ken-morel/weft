@@ -314,3 +314,17 @@ pub fn kill(io: std.Io, unit: []const u8) !void {
     );
     _ = try child.wait(io);
 }
+
+pub fn is_active(io: std.Io, unit: []const u8) !bool {
+    var child = try std.process.spawn(
+        io,
+        .{
+            .argv = &.{ "systemctl", "is-active", "--quiet", unit },
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        },
+    );
+    const term = try child.wait(io);
+    return term == .exited and term.exited == 0;
+}

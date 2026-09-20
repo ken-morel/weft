@@ -23,9 +23,10 @@ pub const Pipeline = struct {
     const Output = struct {
         name: []const u8,
     };
-    const SecondInstance = union(enum) {
+    pub const SecondInstance = union(enum) {
         kill: void,
         ignore: void,
+        fail: void,
     };
 
     name: []const u8,

@@ -450,13 +450,22 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     for (req.pipeline.env) |pair|
         try env.append(alloc, try std.mem.join(alloc, "=", &.{ pair.@"0", pair.@"1" }));
 
-    // --- handle other instances
     switch (req.pipeline.second_instance) {
         .ignore => {},
         .kill => {
             var siblings = try task.siblings(alloc, self.daemon.io);
             while (try siblings.next(io)) |sibling| {
-                try sibling.kill(alloc, io);
+                if (try sibling.is_active(alloc, io))
+                    try sibling.kill(alloc, io);
+            }
+        },
+        .fail => {
+            var siblings = try task.siblings(alloc, self.daemon.io);
+            while (try siblings.next(io)) |sibling| {
+                if (try sibling.is_active(alloc, io)) {
+                    term.err("task {s} is already running", .{req.task.pipeline});
+                    return error.AlreadyRunning;
+                }
             }
         },
     }

@@ -36,6 +36,12 @@ pub fn kill(self: @This(), alloc: std.mem.Allocator, io: std.Io) !void {
     try systemd.kill(io, unit);
 }
 
+pub fn is_active(self: @This(), alloc: std.mem.Allocator, io: std.Io) !bool {
+    const unit = try self.unit_name(alloc);
+    defer alloc.free(unit);
+    return systemd.is_active(io, unit);
+}
+
 pub fn unit_name(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
     return try std.mem.join(
         alloc,
