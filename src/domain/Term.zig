@@ -282,8 +282,11 @@ pub fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
     const w = self.writer();
     self.write_timestamp(w) catch {};
-    if (self.color) try w.writeAll(Style.bold.code() ++ ">> ") else try w.writeAll(">> ");
-    if (self.color) try w.writeAll(Style.reset.code());
+    if (self.color) {
+        w.writeAll(Style.bold.code()) catch {};
+        w.writeAll(">> ") catch {};
+        w.writeAll(Style.reset.code()) catch {};
+    } else w.writeAll(">> ") catch {};
     w.print(fmt ++ "\n", args) catch {};
     w.flush() catch {};
 }

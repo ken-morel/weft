@@ -64,7 +64,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
 
     self.daemon.term.info("Request: {any}", .{request});
 
-    var response_buf: [16]u8 = undefined;
+    const response_buf = try alloc.alloc(u8, Connection.max_packet_size);
     switch (request) {
         .artifact_push => {
             var res: proto.Res(proto.artifact.push.Res) = undefined;
@@ -74,7 +74,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
                 self.daemon.term.err("daemon::worker::artifact_push {any}", .{err});
                 break :err err;
             };
-            try conn.send_object(&response_buf, @TypeOf(res), res);
+            try conn.send_object(response_buf, @TypeOf(res), res);
         },
         .task_spawn => {
             var res: proto.Res(proto.task.spawn.Res) = undefined;
@@ -84,7 +84,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
                 self.daemon.term.err("daemon::worker::task_spawn {any}", .{err});
                 break :err err;
             };
-            try conn.send_object(&response_buf, @TypeOf(res), res);
+            try conn.send_object(response_buf, @TypeOf(res), res);
         },
         .artifact_pull => {
             var res: proto.Res(proto.artifact.pull.Res) = undefined;
@@ -94,7 +94,7 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
                 self.daemon.term.err("daemon::worker::task_spawn {any}", .{err});
                 break :err err;
             };
-            try conn.send_object(&response_buf, @TypeOf(res), res);
+            try conn.send_object(response_buf, @TypeOf(res), res);
         },
         .task_poll => {
             var res: proto.Res(proto.task.poll.Res) = undefined;
@@ -104,10 +104,48 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
                 self.daemon.term.err("daemon::worker::task_poll {any}", .{err});
                 break :err err;
             };
-            try conn.send_object(&response_buf, @TypeOf(res), res);
+            try conn.send_object(response_buf, @TypeOf(res), res);
+        },
+        .artifact_has => {
+            var res: proto.Res(proto.artifact.has.Res) = undefined;
+            res = self.handle_artifact_has(&conn) catch |err| err: {
+                if (@errorReturnTrace()) |trace|
+                    std.debug.dumpErrorReturnTrace(trace);
+                self.daemon.term.err("daemon::worker::artifact_has {any}", .{err});
+                break :err err;
+            };
+            try conn.send_object(response_buf, @TypeOf(res), res);
         },
         else => {},
     }
+}
+
+fn handle_artifact_has(self: *@This(), conn: *Connection) proto.Res(proto.artifact.has.Res) {
+    const alloc = self.allocator.allocator();
+    const req = try conn.recv_object(alloc, proto.artifact.has.Req);
+    const id = &req.id;
+    const deployment = id.deployment.to_string();
+    const artifact_dir_path = try paths.artifact(
+        alloc,
+        id.workspace,
+        id.service,
+        id.env,
+        &deployment,
+        id.pipeline,
+    );
+    const has = has: {
+        std.Io.Dir.cwd().access(
+            self.daemon.io,
+            artifact_dir_path,
+            .{},
+        ) catch |err|
+            if (err == error.FileNotFound)
+                break :has false
+            else
+                return err;
+        break :has true;
+    };
+    return .{ .has = has };
 }
 
 fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artifact.pull.Res) {
@@ -144,11 +182,22 @@ fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artif
         else
             err;
 
+    var file_count: u32 = 0;
+    {
+        var walker = try artifact_dir.walk(alloc);
+        defer walker.deinit();
+        while (try walker.next(io)) |entry|
+            if (entry.kind == .file) {
+                file_count += 1;
+            };
+    }
+
     var packer: Packer = try .packer(alloc, artifact_dir);
-    // 32 for zoto overhead
-    // we will remove one of those buffers by serializing ourselves
+    defer packer.deinit(io);
     const zoto_buffer = try alloc.alloc(u8, Connection.max_packet_size);
     const packet_buffer = try alloc.alloc(u8, Pressor.max_uncompressed_size);
+
+    try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .files = file_count });
 
     while (try packer.get(io, packet_buffer)) |pack| {
         switch (pack) {
@@ -157,11 +206,13 @@ fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artif
             .data => |data| if (try self.daemon.pressor.try_acquire()) |pressor| {
                 defer pressor.release();
                 var reader: std.Io.Reader = .fixed(data);
-                const compressed = try pressor.compress(&reader);
-                try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .compressed = compressed });
-            } else {
-                try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .raw = data });
-            },
+                if (pressor.compress(&reader)) |compressed| {
+                    if (compressed.len < data.len)
+                        try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .compressed = compressed })
+                    else
+                        try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .raw = data });
+                } else |_| try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .raw = data });
+            } else try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .{ .raw = data }),
         }
     }
     try conn.send_object(zoto_buffer, proto.artifact.pull.Res, .end);

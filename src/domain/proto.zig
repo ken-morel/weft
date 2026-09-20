@@ -21,6 +21,14 @@ pub const artifact = struct {
             footer: struct {},
         };
     };
+    pub const has = struct {
+        pub const Req = struct {
+            id: task.Id,
+        };
+        pub const Res = struct {
+            has: bool,
+        };
+    };
     pub const pull = struct {
         pub const Req = union(enum) {
             header: struct {
@@ -28,6 +36,7 @@ pub const artifact = struct {
             },
         };
         pub const Res = union(enum) {
+            files: u32,
             folder: []const u8,
             file: []const u8,
             raw: []const u8,
@@ -139,6 +148,7 @@ pub const system = struct {
 pub const Request = enum(u8) {
     artifact_push,
     artifact_pull,
+    artifact_has,
 
     task_spawn,
     task_poll,

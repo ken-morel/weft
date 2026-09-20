@@ -11,7 +11,7 @@ pub fn init(
     const addr = try std.Io.net.IpAddress.parse("0.0.0.0", port);
     const tcp_listener = try addr.listen(
         io,
-        .{},
+        .{ .reuse_address = true },
     );
     errdefer tcp_listener.deinit(io);
     return .{

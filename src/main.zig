@@ -4,6 +4,7 @@ const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_do = @import("client/do.zig");
 const Project = @import("client/Project.zig");
 const Step = @import("client/Step.zig");
+const cmd_remote = @import("client/cmd_remote.zig");
 const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
@@ -20,8 +21,10 @@ const usage_text =
     \\Commands:
     \\  daemon install          Install the weft daemon (systemd service, config)
     \\  daemon run              Run the daemon in the foreground
+    \\  daemon show-token       Print the daemon secret token
+    \\  daemon install-remote   Install weft daemon on a remote host via SSH
     \\  do <pipeline[.remote]...>        Run pipelines: weft do [remote.]pipeline ...
-    \\  remote add <name>       Interactively add a remote
+    \\  remote add <name> <ssh> [host]   Add and install a remote via SSH
     \\
     \\Options (before the command):
     \\  -q, --quiet             Only log errors
@@ -85,6 +88,37 @@ pub fn main(init: std.process.Init) !void {
                 defer daemon.deinit();
                 term.info("starting daemon on :{d}", .{daemon.config.port});
                 return daemon.run();
+            } else if (std.mem.eql(u8, sub, "show-token") or std.mem.eql(u8, sub, "token") or (std.mem.eql(u8, sub, "show") and first + 2 < args.len and std.mem.eql(u8, args[first + 2], "token"))) {
+                const config = try DaemonInstall.read_config(init.io, alloc, &term);
+                defer std.zon.parse.free(alloc, config);
+                term.println("{s}", .{config.secret});
+                return;
+            } else if (std.mem.eql(u8, sub, "install-remote")) {
+                if (args.len < first + 4) {
+                    term.err("usage: weft daemon install-remote <name> <ssh_target> [host]", .{});
+                    return error.Usage;
+                }
+                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+                const name = args[first + 2];
+                const ssh_target = args[first + 3];
+                const maybe_host = if (args.len > first + 4) args[first + 4] else null;
+                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target, maybe_host);
+            }
+            break :cmd;
+        } else if (std.mem.eql(u8, cmd, "remote")) {
+            if (first + 1 >= args.len) break :cmd;
+            const sub = args[first + 1];
+
+            if (std.mem.eql(u8, sub, "add") or std.mem.eql(u8, sub, "install")) {
+                if (args.len < first + 4) {
+                    term.err("usage: weft remote add <name> <ssh_target> [host]", .{});
+                    return error.Usage;
+                }
+                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+                const name = args[first + 2];
+                const ssh_target = args[first + 3];
+                const maybe_host = if (args.len > first + 4) args[first + 4] else null;
+                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target, maybe_host);
             }
             break :cmd;
         } else if (std.mem.eql(u8, cmd, "_daemon")) {

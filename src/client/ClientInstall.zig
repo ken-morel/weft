@@ -80,3 +80,15 @@ pub fn get_remotes(self: @This(), alloc: std.mem.Allocator, io: std.Io, term: *T
         return err;
     };
 }
+
+pub fn save_remotes(self: @This(), io: std.Io, remotes: []const Remote) !void {
+    var atomic = try self.config_dir.createFileAtomic(io, remotes_zon_file_name, .{
+        .permissions = read_only_user_permissions,
+        .replace = true,
+    });
+    var buffer: [4 << 10]u8 = undefined;
+    var writer = atomic.file.writer(io, &buffer);
+    try std.zon.stringify.serialize(remotes, .{}, &writer.interface);
+    try writer.interface.flush();
+    try atomic.replace(io);
+}

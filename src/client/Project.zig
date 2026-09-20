@@ -82,4 +82,3 @@ pub fn task_log_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deploy
         &.{ log_dir_path, filename },
     );
 }
-

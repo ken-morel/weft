@@ -34,7 +34,37 @@ const Fetcher = struct {
         self.pulling.deinit(self.alloc);
     }
 
+    pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
+        var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
+        defer client.destroy(self.alloc, io);
+
+        const task_id: proto.task.Id = .{
+            .deployment = self.deployment.id,
+            .env = self.deployment.env,
+            .pipeline = artifact,
+            .service = self.deployment.service.name,
+            .workspace = self.deployment.service.workspace,
+        };
+
+        const buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
+        defer self.alloc.free(buffer);
+
+        try client.conn.send_object(buffer, proto.Request, .artifact_has);
+        try client.conn.send_object(buffer, proto.artifact.has.Req, .{ .id = task_id });
+
+        const reply = try client.conn.recv_object(self.alloc, proto.Res(proto.artifact.has.Res));
+        const res = try reply;
+        return res.has;
+    }
+
     pub fn add(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
+        if (try self.has_artifact(io, remote, artifact)) {
+            try self.depl.lock(io);
+            defer self.depl.unlock(io);
+            self.state.artifact_progress(artifact, remote, .ready, 1.0) catch {};
+            return;
+        }
+
         _ = fetch_artifact: {
             const m = m: {
                 if (self.pulling.getPtr(artifact)) |m| {
@@ -113,10 +143,22 @@ const Fetcher = struct {
         try conn.send_object(send_buffer, proto.Request, .artifact_push);
         try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .header = .{ .id = task_id } });
 
-        const has_artifact = try conn.recv_object_buf(send_buffer, proto.artifact.push.Res);
-        switch (has_artifact) {
+        const check_res = try conn.recv_object_buf(send_buffer, proto.artifact.push.Res);
+        switch (check_res) {
             .has_artifact => |present| if (present) return,
             .footer => {},
+        }
+
+        var total_files: u32 = 0;
+        {
+            var count_dir = try std.Io.Dir.cwd().openDir(io, artifact_dir_path, .{ .iterate = true });
+            defer count_dir.close(io);
+            var count_walker = try count_dir.walk(self.alloc);
+            defer count_walker.deinit();
+            while (try count_walker.next(io)) |entry|
+                if (entry.kind == .file) {
+                    total_files += 1;
+                };
         }
 
         var packer: Packer = try .packer(
@@ -134,8 +176,21 @@ const Fetcher = struct {
         defer self.alloc.free(pressor_buffer);
         var pressor: Pressor = .init(pressor_buffer);
 
+        var sent_files: u32 = 0;
         while (try packer.get(io, read_buffer)) |pack| switch (pack) {
-            .file => |path| try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .file = path }),
+            .file => |path| {
+                try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .file = path });
+                sent_files += 1;
+                const pct = if (total_files > 0)
+                    @as(f32, @floatFromInt(sent_files)) / @as(f32, @floatFromInt(total_files))
+                else
+                    1.0;
+                {
+                    try self.depl.lock(io);
+                    defer self.depl.unlock(io);
+                    try self.state.artifact_progress(artifact, remote, .pushing, pct);
+                }
+            },
             .folder => |path| try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .folder = path }),
             .data => |data| {
                 var reader: std.Io.Reader = .fixed(data);
@@ -197,7 +252,6 @@ const Fetcher = struct {
         );
 
         const dir = try std.Io.Dir.cwd().createDirPathOpen(io, artifact_path, .{});
-        defer dir.close(io);
 
         var arena: std.heap.ArenaAllocator = .init(self.alloc);
         defer arena.deinit();
@@ -209,10 +263,26 @@ const Fetcher = struct {
         const decompress_buffer = try self.alloc.alloc(u8, Pressor.max_uncompressed_size);
         defer self.alloc.free(decompress_buffer);
 
+        var total_files: u32 = 0;
+        var received_files: u32 = 0;
+
         while (true) : (_ = arena.reset(.retain_capacity)) {
             const res = try client.conn.recv_object(arena.allocator(), proto.artifact.pull.Res);
             switch (res) {
-                .file => |path| try packer.put(io, .{ .file = path }),
+                .files => |f| total_files = f,
+                .file => |path| {
+                    try packer.put(io, .{ .file = path });
+                    received_files += 1;
+                    const pct = if (total_files > 0)
+                        @as(f32, @floatFromInt(received_files)) / @as(f32, @floatFromInt(total_files))
+                    else
+                        1.0;
+                    {
+                        try self.depl.lock(io);
+                        defer self.depl.unlock(io);
+                        try self.state.artifact_progress(artifact, remote, .pulling, pct);
+                    }
+                },
                 .folder => |path| try packer.put(io, .{ .folder = path }),
                 .raw => |data| try packer.put(io, .{ .data = data }),
                 .compressed => |comp| {
@@ -326,9 +396,6 @@ pub fn spawn_step(
     for (pipeline.inputs) |input|
         try fetcher.add(io, remote, input.name);
 
-    const client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
-    defer client.destroy(alloc, io);
-
     const task_id: proto.task.Id = .{
         .deployment = deployment.id,
         .env = deployment.env,
@@ -337,39 +404,44 @@ pub fn spawn_step(
         .workspace = deployment.service.workspace,
     };
 
-    try client.conn.send_object(buffer, proto.Request, .task_spawn);
-    try client.conn.send_object(buffer, proto.task.spawn.Req, .{
-        .task = task_id,
-        .pipeline = pipeline.*,
-    });
+    {
+        const client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
+        defer client.destroy(alloc, io);
 
-    const script_path = try std.fs.path.join(alloc, &.{
-        "bin",
-        pipeline.script orelse pipeline.name,
-    });
-    defer alloc.free(script_path);
+        try client.conn.send_object(buffer, proto.Request, .task_spawn);
+        try client.conn.send_object(buffer, proto.task.spawn.Req, .{
+            .task = task_id,
+            .pipeline = pipeline.*,
+        });
 
-    const script = project.dir.openFile(io, script_path, .{}) catch |err| {
-        if (err == error.FileNotFound)
-            term.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name });
-        return err;
-    };
-    defer script.close(io);
+        const script_path = try std.fs.path.join(alloc, &.{
+            "bin",
+            pipeline.script orelse pipeline.name,
+        });
+        defer alloc.free(script_path);
 
-    while (true) {
-        const size = script.readStreaming(io, &.{buffer[1..]}) catch |err|
-            if (err == error.EndOfStream)
-                break
-            else
-                return err;
-        buffer[0] = proto.task.spawn.data;
-        try client.conn.send(buffer[0 .. size + 1]);
+        const script = project.dir.openFile(io, script_path, .{}) catch |err| {
+            if (err == error.FileNotFound)
+                term.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name });
+            return err;
+        };
+        defer script.close(io);
+
+        while (true) {
+            const size = script.readStreaming(io, &.{buffer[1..]}) catch |err|
+                if (err == error.EndOfStream)
+                    break
+                else
+                    return err;
+            buffer[0] = proto.task.spawn.data;
+            try client.conn.send(buffer[0 .. size + 1]);
+        }
+        buffer[0] = proto.task.spawn.end;
+        try client.conn.send(buffer[0..1]);
+
+        const reply = try client.conn.recv_object_buf(buffer, proto.Res(proto.task.spawn.Res));
+        _ = try reply;
     }
-    buffer[0] = proto.task.spawn.end;
-    try client.conn.send(buffer[0..1]);
-
-    const reply = try client.conn.recv_object_buf(buffer, proto.Res(proto.task.spawn.Res));
-    _ = try reply;
 
     {
         try deployment_lock.lock(io);
@@ -389,15 +461,18 @@ pub fn spawn_step(
     while (true) {
         try std.Io.sleep(io, .fromSeconds(2), .awake);
 
-        try client.conn.send_object(buffer, proto.Request, .task_poll);
-        try client.conn.send_object(buffer, proto.task.poll.Req, .{
+        const poll_client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
+        defer poll_client.destroy(alloc, io);
+
+        try poll_client.conn.send_object(buffer, proto.Request, .task_poll);
+        try poll_client.conn.send_object(buffer, proto.task.poll.Req, .{
             .header = .{
                 .task = task_id,
                 .logs_offset = remote_offset,
             },
         });
 
-        const res = try try client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
+        const res = try try poll_client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
         const footer = &res.footer;
 
         if (footer.logs) |logs| {

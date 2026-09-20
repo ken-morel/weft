@@ -30,7 +30,7 @@ const service_template =
     \\
     \\[Service]
     \\Type=simple
-    \\ExecStart=/usr/local/bin/weft daemon
+    \\ExecStart=/usr/local/bin/weft daemon run
     \\Restart=always
     \\User=root
     \\WorkingDirectory=/var/lib/weft
@@ -146,13 +146,15 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
     }
 }
 
-pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*Term) !Config {
-    _ = self;
+pub fn read_config(io: std.Io, alloc: std.mem.Allocator, term: ?*Term) !Config {
     const cwd = std.Io.Dir.cwd();
 
     var file = cwd.openFile(io, "/etc/weft.zon", .{}) catch |err| {
         if (term) |t|
-            t.err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
+            if (err == error.AccessDenied)
+                t.err("cannot read /etc/weft.zon: permission denied (must be run as root)", .{})
+            else
+                t.err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
         return err;
     };
     defer file.close(io);
@@ -176,6 +178,7 @@ pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*T
         content,
         0,
     );
+    defer alloc.free(null_terminated);
 
     return try std.zon.parse.fromSliceAlloc(
         Config,
@@ -184,6 +187,11 @@ pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*T
         null,
         .{},
     );
+}
+
+pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*Term) !Config {
+    _ = self;
+    return read_config(io, alloc, term);
 }
 
 pub fn get_artifact_path(

@@ -22,6 +22,7 @@ pressor: SharedPressor,
 pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
     self.pressor.deinit(self.alloc);
+    std.zon.parse.free(self.alloc, self.config);
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
     const config = try install.get_config(io, alloc, term);
