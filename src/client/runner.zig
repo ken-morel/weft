@@ -491,6 +491,8 @@ pub fn spawn_step(
                 defer deployment_lock.unlock(io);
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
+                if (pipeline.outputs.len == 0)
+                    try deployment.add_artifact(alloc, step.remote, step.pipeline, "");
                 for (pipeline.outputs) |output|
                     try deployment.add_artifact(alloc, step.remote, step.pipeline, output.name);
 

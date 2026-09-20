@@ -126,6 +126,10 @@ pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !S
         for (pipeline.outputs) |output|
             if (self.get_artifact(output.name)) |_|
                 return .done;
+        if (pipeline.outputs.len == 0)
+            for (self.artifacts) |art|
+                if (std.mem.eql(u8, art.pipeline, pipeline_name))
+                    return .done;
         if (self.get_running_step(pipeline.name)) |_|
             return .running;
 
