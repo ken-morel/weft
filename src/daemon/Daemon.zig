@@ -102,6 +102,7 @@ pub fn run_system_server(self: *@This()) !void {
             return err;
 
     var srv = try addr.listen(self.io, .{});
+    defer srv.deinit(self.io);
 
     var buff: [4 << 10]u8 = undefined;
 
@@ -155,8 +156,22 @@ pub fn run_system_server(self: *@This()) !void {
     }
 }
 
+fn setup_signal_handlers() void {
+    var sa = std.mem.zeroes(std.posix.Sigaction);
+    sa.handler = .{ .handler = handle_signal };
+    std.posix.sigaction(std.posix.SIG.TERM, &sa, null);
+    std.posix.sigaction(std.posix.SIG.INT, &sa, null);
+}
+
+fn handle_signal(_: std.posix.SIG) callconv(.c) void {
+    _ = std.os.linux.unlink(paths.weft_socket);
+    std.process.exit(0);
+}
+
 pub fn run(self: *@This()) !void {
     self.term.debug("max workers: {d}", .{self.config.max_workers});
+
+    setup_signal_handlers();
 
     const client_thread = try std.Thread.spawn(.{}, run_client_server, .{self});
     client_thread.detach();
@@ -176,7 +191,6 @@ pub fn finalize_task(self: *@This(), task: Task, status: u16) void {
     task.free_duped(self.alloc);
 }
 pub fn _finalize_task(self: *@This(), task: Task, status: u16) !void {
-    _ = status;
     const cwd = std.Io.Dir.cwd();
     const run_dir_path = try task.run_dir_path(self.alloc);
     defer self.alloc.free(run_dir_path);
@@ -185,6 +199,11 @@ pub fn _finalize_task(self: *@This(), task: Task, status: u16) !void {
         return if (err == error.FileNotFound) error.TaskNotFound else err;
     defer run_dir.close(self.io);
     defer cwd.deleteTree(self.io, run_dir_path) catch {};
+
+    if (status != 0) {
+        self.term.warn("task {s} failed with exit code {d}, skipping artifact promotion", .{ task.id.pipeline, status });
+        return;
+    }
 
     const output_dirs_path = try std.fs.path.join(self.alloc, &.{ run_dir_path, "out" });
     defer self.alloc.free(output_dirs_path);
