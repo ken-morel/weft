@@ -272,4 +272,3 @@ test "StatsIterator wrapped" {
     try std.testing.expectEqual(s1.?.time.nanoseconds, 600);
     try std.testing.expect(it.next() == null);
 }
-

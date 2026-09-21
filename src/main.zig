@@ -4,6 +4,7 @@ const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_remote = @import("client/cmd_remote.zig");
 const cmd_do = @import("client/do.zig");
 const cmd_follow = @import("client/cmd_follow.zig");
+const cmd_monitor = @import("client/cmd_monitor.zig");
 const Deployment = @import("client/Deployment.zig");
 const Project = @import("client/Project.zig");
 const Step = @import("client/Step.zig");
@@ -28,6 +29,7 @@ const usage_text =
     \\  do <target...>          Run pipelines: weft do [remote.]pipeline ...
     \\  continue [id] [targets] Continue an existing deployment
     \\  follow [id][.pipeline]  Follow a running deployment or pipeline
+    \\  monitor [group]         Monitor system statistics for a remote group
     \\  remote install <name> <ssh> [host]   Install weft on a remote and register it
     \\
     \\Options (before the command):
@@ -197,6 +199,10 @@ pub fn main(init: std.process.Init) !void {
             const project = try Project.open(project_dir);
 
             return cmd_follow.run(alloc, init.io, &term, project, installation, follow_args);
+        } else if (std.mem.eql(u8, cmd, "monitor")) {
+            const target_group: ?[]const u8 = if (first + 1 < args.len) args[first + 1] else null;
+            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            return cmd_monitor.run(alloc, init.io, &term, installation, target_group);
         }
     }
     show_usage(&term);
