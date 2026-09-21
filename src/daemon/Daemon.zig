@@ -10,6 +10,7 @@ const Server = @import("Server.zig");
 const SharedPressor = @import("SharedPressor.zig");
 const Task = @import("Task.zig");
 const Worker = @import("Worker.zig");
+const Monitor = @import("../util/Monitor.zig");
 
 io: std.Io,
 alloc: std.mem.Allocator,
@@ -43,15 +44,17 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
     };
 }
 
-pub fn run_client_server(self: *@This()) void {
-    _run_client_server(self) catch |err| {
-        if (err == error.Canceled)
-            return;
-        if (@errorReturnTrace()) |trace|
-            std.debug.dumpErrorReturnTrace(trace);
-    };
+pub fn run_system_monitor(self: *@This()) !void {
+    var mon = Monitor{};
+    defer mon.deinit(self.alloc);
+    while (true) {
+        const stats = try mon.fetch(self.alloc, self.io);
+        defer stats.free(self.alloc);
+        try std.Io.sleep(self.io, .fromSeconds(2), .awake);
+    }
 }
-pub fn _run_client_server(self: *@This()) !void {
+
+pub fn run_client_server(self: *@This()) !void {
     self.term.info("listening on TCP :{d}", .{self.config.port});
 
     var group: std.Io.Group = .init;
@@ -90,20 +93,9 @@ pub fn _run_client_server(self: *@This()) !void {
     }
 }
 
-pub fn run_system_server(self: *@This()) void {
-    while (true) {
-        _run_system_server(self) catch |err| {
-            if (err == error.Canceled)
-                return;
-            self.term.err("Error: {any}", .{err});
-            if (@errorReturnTrace()) |trace|
-                std.debug.dumpErrorReturnTrace(trace);
-        };
-        break;
-    }
-}
 
-pub fn _run_system_server(self: *@This()) !void {
+
+pub fn run_system_server(self: *@This()) !void {
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
@@ -175,8 +167,9 @@ pub fn _run_system_server(self: *@This()) !void {
 pub fn run(self: *@This()) !void {
     self.term.debug("max workers: {d}", .{self.config.max_workers});
     _ = std.Io.async(self.io, run_client_server, .{self});
+    _ = std.Io.async(self.io, run_system_monitor, .{self});
 
-    self.run_system_server();
+    try self.run_system_server();
 }
 
 pub fn finalize_task(self: *@This(), task: Task, status: u16) void {
@@ -185,7 +178,7 @@ pub fn finalize_task(self: *@This(), task: Task, status: u16) void {
         if (@errorReturnTrace()) |trace|
             std.debug.dumpErrorReturnTrace(trace);
     };
-    task.free_duped(self.alloc) catch {};
+    task.free_duped(self.alloc);
 }
 pub fn _finalize_task(self: *@This(), task: Task, status: u16) !void {
     _ = status;

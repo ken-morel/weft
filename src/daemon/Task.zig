@@ -147,6 +147,6 @@ pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
         .id = try self.id.dupe(alloc),
     };
 }
-pub fn free_duped(self: @This(), alloc: std.mem.Allocator) !void {
+pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
     self.id.free_duped(alloc);
 }

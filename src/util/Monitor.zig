@@ -2,7 +2,124 @@ const std = @import("std");
 
 const Deployment = @import("../client/Deployment.zig");
 const proto = @import("../domain/proto.zig");
-const Task = @import("Task.zig");
+const Task = @import("../daemon/Task.zig");
+
+pub const CpuCore = struct {
+    id: u16,
+    freq: u32,
+    usage: f16,
+};
+
+pub const Cpu = struct {
+    model: []const u8,
+    usage: u8,
+    freq: u32,
+    cores: []const CpuCore,
+};
+
+pub const Ram = struct {
+    total: u64,
+    used: u64,
+    free: u64,
+    available: u64,
+    buffers: u64,
+    cached: u64,
+};
+
+pub const Swap = struct {
+    total: u64,
+    used: u64,
+    free: u64,
+    in_bytes: u64,
+    out_bytes: u64,
+};
+
+pub const ZramDevice = struct {
+    name: []const u8,
+    disksize: u64,
+    used: u64,
+    compressed: u64,
+    total: u64,
+};
+
+pub const Zram = struct {
+    total: u64,
+    used: u64,
+    compressed: u64,
+    devices: []const ZramDevice,
+};
+
+pub const DiskMount = struct {
+    mount_point: []const u8,
+    device: []const u8,
+    fs: []const u8,
+    total: u64,
+    used: u64,
+    available: u64,
+};
+
+pub const DiskIo = struct {
+    device: []const u8,
+    read: u64,
+    written: u64,
+    read_ops: u64,
+    write_ops: u64,
+    io_time_ms: u64,
+};
+
+pub const NetDev = struct {
+    interface: []const u8,
+    rx_bytes: u64,
+    tx_bytes: u64,
+    rx_packets: u64,
+    tx_packets: u64,
+    rx_errors: u64,
+    tx_errors: u64,
+};
+
+pub const Service = struct {
+    task: Task,
+    cpu_usage_usec: u64,
+    memory_bytes: u64,
+    memory_peak_bytes: u64,
+    io_read_bytes: u64,
+    io_write_bytes: u64,
+};
+
+pub const Stats = struct {
+    time: std.Io.Timestamp,
+    cpu: Cpu,
+    ram: Ram,
+    swap: Swap,
+    zram: Zram,
+    disks: []const DiskMount,
+    disk_io: []const DiskIo,
+    net: []const NetDev,
+    services: []const Service,
+
+    pub fn free(self: @This(), alloc: std.mem.Allocator) void {
+        alloc.free(self.cpu.model);
+        alloc.free(self.cpu.cores);
+        for (self.zram.devices) |d|
+            alloc.free(d.name);
+        alloc.free(self.zram.devices);
+        for (self.disks) |d| {
+            alloc.free(d.mount_point);
+            alloc.free(d.device);
+            alloc.free(d.fs);
+        }
+        alloc.free(self.disks);
+        for (self.disk_io) |d|
+            alloc.free(d.device);
+        alloc.free(self.disk_io);
+        for (self.net) |n|
+            alloc.free(n.interface);
+        alloc.free(self.net);
+        for (self.services) |svc|
+            svc.task.free_duped(alloc);
+        alloc.free(self.services);
+    }
+};
 
 pub const CoreTicks = struct {
     core_id: u16,
@@ -38,15 +155,16 @@ pub const CoreTicks = struct {
     }
 };
 
-pub const Monitor = struct {
-    prev_total_ticks: ?CoreTicks = null,
-    prev_core_ticks: std.ArrayListUnmanaged(CoreTicks) = .empty,
+prev_total_ticks: ?CoreTicks = null,
+prev_core_ticks: std.ArrayListUnmanaged(CoreTicks) = .empty,
 
-    pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
-        self.prev_core_ticks.deinit(alloc);
-    }
+pub const Monitor = @This();
 
-    pub fn fetch(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !proto.system.stats.Stats {
+pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
+    self.prev_core_ticks.deinit(alloc);
+}
+
+    pub fn fetch(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats {
         const time: std.Io.Timestamp = std.Io.Clock.now(.real, io);
 
         var cur_total_ticks: ?CoreTicks = null;
@@ -54,7 +172,7 @@ pub const Monitor = struct {
         defer cur_core_ticks.deinit(alloc);
 
         const cpu = try self.fetch_cpu(alloc, io, &cur_total_ticks, &cur_core_ticks);
-        const ram = fetch_ram(io) catch proto.system.stats.Ram{
+        const ram = fetch_ram(io) catch Ram{
             .total = 0,
             .used = 0,
             .free = 0,
@@ -63,14 +181,14 @@ pub const Monitor = struct {
             .cached = 0,
         };
         var swap_zram = fetch_swap_and_zram(alloc, io) catch SwapAndZram{
-            .swap = proto.system.stats.Swap{
+            .swap = Swap{
                 .total = 0,
                 .used = 0,
                 .free = 0,
                 .in_bytes = 0,
                 .out_bytes = 0,
             },
-            .zram = proto.system.stats.Zram{
+            .zram = Zram{
                 .total = 0,
                 .used = 0,
                 .compressed = 0,
@@ -111,7 +229,7 @@ pub const Monitor = struct {
         io: std.Io,
         out_total: *?CoreTicks,
         out_cores: *std.ArrayListUnmanaged(CoreTicks),
-    ) !proto.system.stats.Cpu {
+    ) !Cpu {
         var stat_buf: [32768]u8 = undefined;
         const stat_content = read_file(io, "/proc/stat", &stat_buf) orelse "";
 
@@ -152,7 +270,7 @@ pub const Monitor = struct {
         }
 
         var lines = std.mem.splitScalar(u8, stat_content, '\n');
-        var core_list = std.ArrayListUnmanaged(proto.system.stats.CpuCore).empty;
+        var core_list = std.ArrayListUnmanaged(CpuCore).empty;
         errdefer core_list.deinit(alloc);
 
         var total_ticks: ?CoreTicks = null;
@@ -184,9 +302,9 @@ pub const Monitor = struct {
                 const freq = fetch_core_freq(io, core_id) orelse mhz_map.get(core_id) orelse 0;
 
                 try core_list.append(alloc, .{
-                    .core_id = core_id,
-                    .freq_mhz = freq,
-                    .usage_percent = usage_pct,
+                    .id = core_id,
+                    .freq = freq,
+                    .usage = @floatCast(@as(f32, @floatFromInt(usage_pct))),
                 });
             }
         }
@@ -200,7 +318,7 @@ pub const Monitor = struct {
 
         var freq_sum: u64 = 0;
         for (core_list.items) |c|
-            freq_sum += c.freq_mhz;
+            freq_sum += c.freq;
 
         const avg_freq: u32 = if (core_list.items.len > 0)
             @intCast(freq_sum / core_list.items.len)
@@ -211,13 +329,11 @@ pub const Monitor = struct {
 
         return .{
             .model = model_duped,
-            .cores_count = @intCast(core_list.items.len),
-            .total_usage_percent = total_usage,
-            .avg_freq_mhz = avg_freq,
+            .usage = total_usage,
+            .freq = avg_freq,
             .cores = try core_list.toOwnedSlice(alloc),
         };
     }
-};
 
 fn parse_cpu_ticks(line: []const u8, core_id: u16) CoreTicks {
     var it = std.mem.tokenizeScalar(u8, line, ' ');
@@ -248,7 +364,7 @@ fn fetch_core_freq(io: std.Io, core_id: u16) ?u32 {
     return khz / 1000;
 }
 
-fn fetch_ram(io: std.Io) !proto.system.stats.Ram {
+fn fetch_ram(io: std.Io) !Ram {
     var buf: [8192]u8 = undefined;
     const content = read_file(io, "/proc/meminfo", &buf) orelse return error.FileNotFound;
 
@@ -297,15 +413,15 @@ fn parse_meminfo_kb(line: []const u8) u64 {
 }
 
 const SwapAndZram = struct {
-    swap: proto.system.stats.Swap,
-    zram: proto.system.stats.Zram,
+    swap: Swap,
+    zram: Zram,
 };
 
 fn fetch_swap_and_zram(alloc: std.mem.Allocator, io: std.Io) !SwapAndZram {
     var swaps_buf: [8192]u8 = undefined;
     const swaps_content = read_file(io, "/proc/swaps", &swaps_buf) orelse "";
 
-    var zram_devices = std.ArrayListUnmanaged(proto.system.stats.ZramDevice).empty;
+    var zram_devices = std.ArrayListUnmanaged(ZramDevice).empty;
     errdefer zram_devices.deinit(alloc);
 
     var swap_total: u64 = 0;
@@ -333,13 +449,14 @@ fn fetch_swap_and_zram(alloc: std.mem.Allocator, io: std.Io) !SwapAndZram {
             const orig_size = if (stat.orig_size > 0) stat.orig_size else used_kb * 1024;
             const compr_size = stat.compr_size;
             const mem_used = if (stat.mem_used > 0) stat.mem_used else used_kb * 1024;
+            _ = orig_size;
 
             try zram_devices.append(alloc, .{
                 .name = try alloc.dupe(u8, dev_name),
                 .disksize = disksize,
-                .orig_data_size = orig_size,
-                .compr_data_size = compr_size,
-                .mem_used_total = mem_used,
+                .used = mem_used,
+                .compressed = compr_size,
+                .total = disksize,
             });
 
             zram_total += disksize;
@@ -419,11 +536,11 @@ fn fetch_zram_stats(io: std.Io, dev_name: []const u8) ZramSysStat {
     return res;
 }
 
-fn fetch_disks(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.stats.DiskMount {
+fn fetch_disks(alloc: std.mem.Allocator, io: std.Io) ![]const DiskMount {
     var buf: [16384]u8 = undefined;
     const content = read_file(io, "/proc/mounts", &buf) orelse return &.{};
 
-    var list = std.ArrayListUnmanaged(proto.system.stats.DiskMount).empty;
+    var list = std.ArrayListUnmanaged(DiskMount).empty;
     errdefer list.deinit(alloc);
 
     var seen = std.StringHashMapUnmanaged(void).empty;
@@ -481,21 +598,21 @@ fn fetch_disks(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.stats
         try list.append(alloc, .{
             .mount_point = try alloc.dupe(u8, mount_point),
             .device = try alloc.dupe(u8, dev),
-            .fs_type = try alloc.dupe(u8, fs_type),
-            .total_bytes = total_bytes,
-            .used_bytes = used_bytes,
-            .avail_bytes = avail_bytes,
+            .fs = try alloc.dupe(u8, fs_type),
+            .total = total_bytes,
+            .used = used_bytes,
+            .available = avail_bytes,
         });
     }
 
     return try list.toOwnedSlice(alloc);
 }
 
-fn fetch_disk_io(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.stats.DiskIo {
+fn fetch_disk_io(alloc: std.mem.Allocator, io: std.Io) ![]const DiskIo {
     var buf: [32768]u8 = undefined;
     const content = read_file(io, "/proc/diskstats", &buf) orelse return &.{};
 
-    var list = std.ArrayListUnmanaged(proto.system.stats.DiskIo).empty;
+    var list = std.ArrayListUnmanaged(DiskIo).empty;
     errdefer list.deinit(alloc);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -529,8 +646,8 @@ fn fetch_disk_io(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.sta
 
         try list.append(alloc, .{
             .device = try alloc.dupe(u8, dev_name),
-            .read_bytes = sectors_read * 512,
-            .written_bytes = sectors_written * 512,
+            .read = sectors_read * 512,
+            .written = sectors_written * 512,
             .read_ops = reads_completed,
             .write_ops = writes_completed,
             .io_time_ms = time_io,
@@ -540,11 +657,11 @@ fn fetch_disk_io(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.sta
     return try list.toOwnedSlice(alloc);
 }
 
-fn fetch_net(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.stats.NetDev {
+fn fetch_net(alloc: std.mem.Allocator, io: std.Io) ![]const NetDev {
     var buf: [16384]u8 = undefined;
     const content = read_file(io, "/proc/net/dev", &buf) orelse return &.{};
 
-    var list = std.ArrayListUnmanaged(proto.system.stats.NetDev).empty;
+    var list = std.ArrayListUnmanaged(NetDev).empty;
     errdefer list.deinit(alloc);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -584,7 +701,7 @@ fn fetch_net(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.stats.N
     return try list.toOwnedSlice(alloc);
 }
 
-fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.stats.Service {
+fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Service {
     var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/system.slice", .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
             std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup", .{ .iterate = true }) catch return &.{}
@@ -592,7 +709,7 @@ fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.st
             return &.{};
     defer cgroup_dir.close(io);
 
-    var list = std.ArrayListUnmanaged(proto.system.stats.Service).empty;
+    var list = std.ArrayListUnmanaged(Service).empty;
     errdefer list.deinit(alloc);
 
     var iter = cgroup_dir.iterate();
@@ -662,11 +779,7 @@ fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const proto.system.st
         } else |_| {}
 
         try list.append(alloc, .{
-            .workspace = try alloc.dupe(u8, t.id.workspace),
-            .service = try alloc.dupe(u8, t.id.service),
-            .pipeline = try alloc.dupe(u8, t.id.pipeline),
-            .deployment = t.id.deployment,
-            .unit_name = try alloc.dupe(u8, unit_name),
+            .task = try t.dupe(alloc),
             .cpu_usage_usec = cpu_usage_usec,
             .memory_bytes = mem_bytes,
             .memory_peak_bytes = peak_bytes,
@@ -687,35 +800,8 @@ fn read_file(io: std.Io, path: []const u8, buf: []u8) ?[]const u8 {
 
 var global_monitor: Monitor = .{};
 
-pub fn fetch_stats(alloc: std.mem.Allocator, io: std.Io) !proto.system.stats.Stats {
+pub fn fetch_stats(alloc: std.mem.Allocator, io: std.Io) !Stats {
     return global_monitor.fetch(alloc, io);
-}
-
-pub fn free_stats(alloc: std.mem.Allocator, s: proto.system.stats.Stats) void {
-    alloc.free(s.cpu.model);
-    alloc.free(s.cpu.cores);
-    for (s.zram.devices) |d|
-        alloc.free(d.name);
-    alloc.free(s.zram.devices);
-    for (s.disks) |d| {
-        alloc.free(d.mount_point);
-        alloc.free(d.device);
-        alloc.free(d.fs_type);
-    }
-    alloc.free(s.disks);
-    for (s.disk_io) |d|
-        alloc.free(d.device);
-    alloc.free(s.disk_io);
-    for (s.net) |n|
-        alloc.free(n.interface);
-    alloc.free(s.net);
-    for (s.services) |svc| {
-        alloc.free(svc.workspace);
-        alloc.free(svc.service);
-        alloc.free(svc.pipeline);
-        alloc.free(svc.unit_name);
-    }
-    alloc.free(s.services);
 }
 
 test "fetch_stats" {
@@ -723,9 +809,9 @@ test "fetch_stats" {
     defer mon.deinit(std.testing.allocator);
 
     const s1 = try mon.fetch(std.testing.allocator, std.testing.io);
-    defer free_stats(std.testing.allocator, s1);
+    defer s1.free(std.testing.allocator);
 
-    try std.testing.expect(s1.cpu.cores_count > 0);
+    try std.testing.expect(s1.cpu.cores.len > 0);
     try std.testing.expect(s1.ram.total > 0);
     try std.testing.expect(s1.disks.len > 0);
 }
