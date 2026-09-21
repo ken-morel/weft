@@ -146,13 +146,11 @@ fn _run(self: *@This()) !void {
     defer self.alloc.free(buffer);
 
     while (true) {
-        self.term.info("daemon::stats_server fetching stats...", .{});
         const stats = self.monitor.fetch(self.alloc, self.io) catch |err| {
             self.term.err("daemon::stats_server fetch error: {any}", .{err});
             try std.Io.sleep(self.io, .fromSeconds(5), .awake);
             continue;
         };
-        self.term.info("daemon::stats_server fetch complete, updating history", .{});
 
         {
             try self.lock.lock(self.io);
@@ -162,8 +160,6 @@ fn _run(self: *@This()) !void {
                 stat.free(self.alloc);
             self.stats_history[@intCast(self.stats_idx)] = stats;
             self.stats_idx = (self.stats_idx + 1) % self.stats_history.len;
-
-            self.term.info("daemon::stats_server broadcasting to {d} listeners", .{self.listeners.items.len});
 
             var serialized_len: usize = 0;
             var idx: usize = 0;
