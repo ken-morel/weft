@@ -13,6 +13,7 @@ pub const Config = struct {
     secret: []const u8,
     port: u16 = 9338,
     max_workers: u32 = 8,
+    runner_user: []const u8 = "weft-runner",
 
     pub fn get_secret(self: @This()) ![32]u8 {
         var secret: [32]u8 = undefined;
@@ -68,7 +69,7 @@ pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
     return try sub_dir.createDirPathOpen(io, &uuid, .{});
 }
 
-pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
+pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[]const u8) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, "/var/lib/weft/workspaces");
     try cwd.createDirPath(io, "/var/lib/weft/run");
@@ -95,29 +96,45 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term) !void {
     term.debug("installed binary to /usr/local/bin/weft", .{});
 
     write_config: {
-        cwd.access(io, "/etc/weft.zon", .{}) catch |err| {
-            if (err != error.FileNotFound) return err;
+        const current_config: ?Config = read_config(io, alloc, null) catch null;
+        defer if (current_config) |c| std.zon.parse.free(alloc, c);
 
-            var secret: [32]u8 = undefined;
+        var secret: [32]u8 = undefined;
+        var secret_hex_buf: [64]u8 = undefined;
+        const secret_hex: []const u8 = if (current_config) |c|
+            c.secret
+        else blk: {
             try io.randomSecure(&secret);
-            const secret_hex = std.fmt.bytesToHex(&secret, .lower);
-            const config = Config{
-                .secret = &secret_hex,
-            };
-
-            var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
-                .permissions = read_only_user_permissions,
-                .replace = true,
-            });
-
-            var write_buffer: [4 << 10]u8 = undefined;
-            var config_writer = config_file.file.writer(io, &write_buffer);
-
-            try std.zon.stringify.serialize(config, .{}, &config_writer.interface);
-            try config_writer.interface.flush();
-
-            try config_file.replace(io);
+            secret_hex_buf = std.fmt.bytesToHex(&secret, .lower);
+            break :blk &secret_hex_buf;
         };
+
+        const runner_user = if (maybe_user) |u|
+            u
+        else if (current_config) |c|
+            c.runner_user
+        else
+            "weft-runner";
+
+        const config = Config{
+            .secret = secret_hex,
+            .port = if (current_config) |c| c.port else 9338,
+            .max_workers = if (current_config) |c| c.max_workers else 8,
+            .runner_user = runner_user,
+        };
+
+        var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
+            .permissions = read_only_user_permissions,
+            .replace = true,
+        });
+
+        var write_buffer: [4 << 10]u8 = undefined;
+        var config_writer = config_file.file.writer(io, &write_buffer);
+
+        try std.zon.stringify.serialize(config, .{}, &config_writer.interface);
+        try config_writer.interface.flush();
+
+        try config_file.replace(io);
         break :write_config;
     }
 

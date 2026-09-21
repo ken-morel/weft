@@ -95,6 +95,7 @@ pub fn install(
     name: []const u8,
     ssh_target: []const u8,
     maybe_host: ?[]const u8,
+    extra_args: []const []const u8,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
@@ -130,7 +131,18 @@ pub fn install(
     }
 
     term.op("installing weft daemon on {s}...", .{target.ssh_dest});
-    const remote_script = "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft && /usr/local/bin/weft daemon install && /usr/local/bin/weft daemon show-token";
+    var install_cmd: std.ArrayList([]const u8) = .empty;
+    try install_cmd.append(arena_alloc, "/usr/local/bin/weft daemon install");
+    for (extra_args) |arg| {
+        try install_cmd.append(arena_alloc, arg);
+    }
+    const install_cmd_str = try std.mem.join(arena_alloc, " ", install_cmd.items);
+
+    const remote_script = try std.fmt.allocPrint(
+        arena_alloc,
+        "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft && {s} && /usr/local/bin/weft daemon show-token",
+        .{install_cmd_str},
+    );
 
     const ssh_argv: []const []const u8 = if (target.port) |p|
         &.{ "ssh", "-p", p, target.ssh_dest, remote_script }

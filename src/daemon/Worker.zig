@@ -390,14 +390,26 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     script_file.close(io);
     term.debug("wrote script: {s}", .{script_path});
 
-    const home_dir_path = try paths.home(alloc, req.task.workspace);
-    try std.Io.Dir.cwd().createDirPath(self.daemon.io, home_dir_path);
+    const runner_user = self.daemon.config.runner_user;
+    const is_default_runner = std.mem.eql(u8, runner_user, "weft-runner");
+
+    const home_dir_path = if (is_default_runner)
+        try paths.home(alloc, req.task.workspace)
+    else
+        try std.fmt.allocPrint(alloc, "/home/{s}", .{runner_user});
+    defer if (!is_default_runner) alloc.free(home_dir_path);
+
+    if (is_default_runner) {
+        try std.Io.Dir.cwd().createDirPath(self.daemon.io, home_dir_path);
+    }
 
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
-    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 1);
+    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 2);
     try state_dirs.append(alloc, paths.state_dir(cwd_dir_path));
-    try state_dirs.append(alloc, paths.state_dir(home_dir_path));
+    if (is_default_runner) {
+        try state_dirs.append(alloc, paths.state_dir(home_dir_path));
+    }
 
     for (req.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
@@ -439,6 +451,8 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     try env.append(alloc, try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}));
     try env.append(alloc, try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}));
     try env.append(alloc, try std.mem.join(alloc, "=", &.{ "HOME", home_dir_path }));
+    try env.append(alloc, try std.mem.join(alloc, "=", &.{ "USER", runner_user }));
+    try env.append(alloc, try std.mem.join(alloc, "=", &.{ "LOGNAME", runner_user }));
 
     for (req.pipeline.env) |pair|
         try env.append(alloc, try std.mem.join(alloc, "=", &.{ pair.@"0", pair.@"1" }));
@@ -497,7 +511,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
                 .no_new_privileges = true,
             },
             .run = .{
-                .user = "weft-runner",
+                .user = runner_user,
                 .group = null,
                 .wait = false,
                 .collect = true,

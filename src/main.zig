@@ -23,13 +23,13 @@ const usage_text =
     \\Usage: weft [options] <command> [args]
     \\
     \\Commands:
-    \\  daemon install          Install the weft daemon (systemd service, config)
-    \\  daemon run              Run the daemon in the foreground
-    \\  daemon show-token       Print the daemon secret token
-    \\  do <target...>          Run pipelines: weft do [remote.]pipeline ...
-    \\  continue [id] [targets] Continue an existing deployment
-    \\  follow [id][.pipeline]  Follow a running deployment or pipeline
-    \\  monitor [group]         Monitor system statistics for a remote group
+    \\  daemon install [--user <name>]       Install the weft daemon (systemd service, config)
+    \\  daemon run                           Run the daemon in the foreground
+    \\  daemon show-token                    Print the daemon secret token
+    \\  do <target...>                       Run pipelines: weft do [remote.]pipeline ...
+    \\  continue [id] [targets]              Continue an existing deployment
+    \\  follow [id][.pipeline]               Follow a running deployment or pipeline
+    \\  monitor [group]                      Monitor system statistics for a remote group
     \\  remote install <name> <ssh> [host]   Install weft on a remote and register it
     \\
     \\Options (before the command):
@@ -85,7 +85,15 @@ pub fn main(init: std.process.Init) !void {
             const sub = args[first + 1];
 
             if (std.mem.eql(u8, sub, "install")) {
-                try DaemonInstall.install(init.io, alloc, &term);
+                var maybe_user: ?[]const u8 = null;
+                var arg_i: usize = first + 2;
+                while (arg_i < args.len) : (arg_i += 1) {
+                    if (std.mem.eql(u8, args[arg_i], "--user") and arg_i + 1 < args.len) {
+                        arg_i += 1;
+                        maybe_user = args[arg_i];
+                    }
+                }
+                try DaemonInstall.install(init.io, alloc, &term, maybe_user);
                 term.success("weft daemon installed", .{});
                 return;
             } else if (std.mem.eql(u8, sub, "run")) {
@@ -120,14 +128,22 @@ pub fn main(init: std.process.Init) !void {
 
             if (std.mem.eql(u8, sub, "install")) {
                 if (args.len < first + 4) {
-                    term.err("usage: weft remote install <name> <ssh_target> [host]", .{});
+                    term.err("usage: weft remote install <name> <ssh_target> [host] [--user <username>]", .{});
                     return error.Usage;
                 }
                 const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
                 const name = args[first + 2];
                 const ssh_target = args[first + 3];
-                const maybe_host = if (args.len > first + 4) args[first + 4] else null;
-                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target, maybe_host);
+
+                var maybe_host: ?[]const u8 = null;
+                var extra_start: usize = first + 4;
+                if (first + 4 < args.len and !std.mem.startsWith(u8, args[first + 4], "-")) {
+                    maybe_host = args[first + 4];
+                    extra_start = first + 5;
+                }
+                const extra_args = if (extra_start < args.len) args[extra_start..] else &.{};
+
+                return cmd_remote.install(alloc, init.io, &term, installation, name, ssh_target, maybe_host, extra_args);
             }
             break :cmd;
         } else if (std.mem.eql(u8, cmd, "do")) {
