@@ -11,7 +11,6 @@ pub const EnvBinding = union(enum) {
     interpolate: []const EnvBinding,
 };
 
-/// Keep {name, path}
 pub const Keep = struct {
     []const u8,
     []const u8,
@@ -32,7 +31,7 @@ pub const Pipeline = struct {
     name: []const u8,
     inputs: []const Input = &.{},
     outputs: []const Output = &.{},
-    script: ?[]const u8 = null,
+    script: bool = true,
 
     max_ram: ?u64 = null,
     mem_lock: bool = false,
@@ -67,6 +66,7 @@ runtimes: []const struct {} = &.{},
 env: []struct { []const u8, []const u8 } = &.{},
 
 pipelines: []const Pipeline = &.{},
+required_env: []const []const u8 = &.{},
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
     for (self.pipelines) |*pipeline|

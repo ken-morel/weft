@@ -461,11 +461,33 @@ pub fn spawn_step(
         deployment_lock.unlock(io);
     } else |_| {};
 
+    if (!pipeline.script)
+        return;
+
     var merged_env: std.StringHashMapUnmanaged([]const u8) = .empty;
     defer merged_env.deinit(alloc);
 
     for (deployment.config.env) |entry|
         try merged_env.put(alloc, entry.@"0", entry.@"1");
+    for (deployment.config.required_env) |key| {
+        if (dotenv.get(key)) |val|
+            try merged_env.put(alloc, key, val)
+        else if (env_map.get(key)) |val|
+            try merged_env.put(alloc, key, val)
+        else {
+            var found_in_workspace = false;
+            for (deployment.config.env) |entry| {
+                if (std.mem.eql(u8, entry.@"0", key)) {
+                    found_in_workspace = true;
+                    break;
+                }
+            }
+            if (!found_in_workspace) {
+                term.err("workspace requires environment variable '{s}', but it was not found in .env or environment", .{key});
+                return error.MissingRequiredEnv;
+            }
+        }
+    }
 
     for (pipeline.required_env) |key| {
         if (dotenv.get(key)) |val|
@@ -525,8 +547,7 @@ pub fn spawn_step(
         });
 
         const script_path = script_path: {
-            const script_name = pipeline.script orelse pipeline.name;
-            const script_with_dot = try std.mem.join(alloc, "", &.{ script_name, "." });
+            const script_with_dot = try std.mem.join(alloc, "", &.{ pipeline.name, "." });
             defer alloc.free(script_with_dot);
             const script_dir = project.dir.createDirPathOpen(io, "weft", .{}) catch |err| {
                 if (err == error.FileNotFound)
@@ -539,10 +560,10 @@ pub fn spawn_step(
             while (try walker.next(io)) |entry| {
                 if ((std.mem.startsWith(u8, entry.basename, script_with_dot) and
                     std.mem.countScalar(u8, entry.basename[script_with_dot.len..], '.') == 0) or
-                    std.mem.eql(u8, entry.basename, script_name))
+                    std.mem.eql(u8, entry.basename, pipeline.name))
                     break :script_path try script_dir.realPathFileAlloc(io, entry.path, alloc);
             } else {
-                term.err("script {s} not found", .{script_name});
+                term.err("script {s} not found", .{pipeline.name});
                 return error.InvalidScript;
             }
         };
