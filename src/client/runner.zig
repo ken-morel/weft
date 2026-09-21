@@ -4,6 +4,7 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
+const dotenv_mod = @import("../util/dotenv.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
@@ -14,7 +15,6 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
-const dotenv_mod = @import("../util/dotenv.zig");
 
 pub const Fetcher = struct {
     deployment: *Deployment,
@@ -524,10 +524,29 @@ pub fn spawn_step(
             .pipeline = resolved_pipeline,
         });
 
-        const script_path = try std.fs.path.join(alloc, &.{
-            "bin",
-            pipeline.script orelse pipeline.name,
-        });
+        const script_path = script_path: {
+            const script_name = pipeline.script orelse pipeline.name;
+            const script_with_dot = try std.mem.join(alloc, "", &.{ script_name, "." });
+            defer alloc.free(script_with_dot);
+            const script_dir = project.dir.createDirPathOpen(io, "weft", .{}) catch |err| {
+                if (err == error.FileNotFound)
+                    term.err("weft folder not found, cannot run pipeline {s}", .{pipeline.name});
+                return err;
+            };
+            defer script_dir.close(io);
+            var walker = try std.Io.Dir.walkSelectively(script_dir, alloc);
+            defer walker.deinit();
+            while (try walker.next(io)) |entry| {
+                if ((std.mem.startsWith(u8, entry.basename, script_with_dot) and
+                    std.mem.countScalar(u8, entry.basename[script_with_dot.len..], '.') == 0) or
+                    std.mem.eql(u8, entry.basename, script_name))
+                    break :script_path try script_dir.realPathFileAlloc(io, entry.path, alloc);
+            } else {
+                term.err("script {s} not found", .{script_name});
+                return error.InvalidScript;
+            }
+        };
+
         defer alloc.free(script_path);
 
         const script = project.dir.openFile(io, script_path, .{}) catch |err| {
@@ -549,14 +568,16 @@ pub fn spawn_step(
         buffer[0] = proto.task.spawn.end;
         try client.conn.send(buffer[0..1]);
 
-        const reply = client.conn.recv_object_buf(buffer, proto.Res(proto.task.spawn.Res)) catch |err| {
+        _ = client.conn.recv_object_buf(
+            buffer,
+            proto.Res(proto.task.spawn.Res),
+        ) catch |err| {
             try deployment_lock.lock(io);
             defer deployment_lock.unlock(io);
             deployment.remove_running(alloc, step.remote, step.pipeline);
             state.err(step.remote, step.pipeline, @errorName(err));
             return;
-        };
-        _ = reply catch |err| {
+        } catch |err| {
             try deployment_lock.lock(io);
             defer deployment_lock.unlock(io);
             deployment.remove_running(alloc, step.remote, step.pipeline);
