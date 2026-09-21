@@ -104,8 +104,8 @@ fn follow_step(
                 if (pipeline.outputs.len == 0)
                     try deployment.add_artifact(alloc, step.remote, step.pipeline, "");
                 for (pipeline.outputs) |output| {
-                    try deployment.add_artifact(alloc, step.remote, step.pipeline, output.name);
-                    try fetcher.spawn_fetch(io, group, output.name);
+                    try deployment.add_artifact(alloc, step.remote, step.pipeline, output);
+                    try fetcher.spawn_fetch(io, group, output);
                 }
 
                 state.completed(step.remote, step.pipeline);

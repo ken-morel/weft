@@ -461,8 +461,11 @@ pub fn spawn_step(
         deployment_lock.unlock(io);
     } else |_| {};
 
-    if (!pipeline.script)
-        return;
+    const script_name = switch (pipeline.run) {
+        .nothing => return,
+        .default => pipeline.name,
+        .script => |custom| custom,
+    };
 
     var merged_env: std.StringHashMapUnmanaged([]const u8) = .empty;
     defer merged_env.deinit(alloc);
@@ -528,7 +531,7 @@ pub fn spawn_step(
     defer alloc.free(buffer);
 
     for (pipeline.inputs) |input|
-        try fetcher.add(io, remote, input.name);
+        try fetcher.add(io, remote, input);
 
     const task_id: proto.task.Id = .{
         .deployment = deployment.id,
@@ -547,7 +550,7 @@ pub fn spawn_step(
         });
 
         const script_path = script_path: {
-            const script_with_dot = try std.mem.join(alloc, "", &.{ pipeline.name, "." });
+            const script_with_dot = try std.mem.join(alloc, "", &.{ script_name, "." });
             defer alloc.free(script_with_dot);
             const script_dir = project.dir.createDirPathOpen(io, "weft", .{ .open_options = .{ .iterate = true } }) catch |err| {
                 if (err == error.FileNotFound)
@@ -560,10 +563,10 @@ pub fn spawn_step(
             while (try walker.next(io)) |entry| {
                 if ((std.mem.startsWith(u8, entry.basename, script_with_dot) and
                     std.mem.countScalar(u8, entry.basename[script_with_dot.len..], '.') == 0) or
-                    std.mem.eql(u8, entry.basename, pipeline.name))
+                    std.mem.eql(u8, entry.basename, script_name))
                     break :script_path try script_dir.realPathFileAlloc(io, entry.path, alloc);
             } else {
-                term.err("script {s} not found", .{pipeline.name});
+                term.err("script {s} not found", .{script_name});
                 return error.InvalidScript;
             }
         };
@@ -668,8 +671,8 @@ pub fn spawn_step(
                 if (pipeline.outputs.len == 0)
                     try deployment.add_artifact(alloc, step.remote, step.pipeline, "");
                 for (pipeline.outputs) |output| {
-                    try deployment.add_artifact(alloc, step.remote, step.pipeline, output.name);
-                    try fetcher.spawn_fetch(io, group, output.name);
+                    try deployment.add_artifact(alloc, step.remote, step.pipeline, output);
+                    try fetcher.spawn_fetch(io, group, output);
                 }
 
                 state.completed(step.remote, step.pipeline);

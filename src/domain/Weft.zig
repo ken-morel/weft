@@ -16,22 +16,23 @@ pub const Keep = struct {
     []const u8,
 };
 pub const Pipeline = struct {
-    const Input = struct {
-        name: []const u8,
-    };
-    const Output = struct {
-        name: []const u8,
-    };
+    const Input = []const u8;
+    const Output = []const u8;
     pub const SecondInstance = union(enum) {
         kill: void,
         ignore: void,
         fail: void,
     };
+    pub const Run = union(enum) {
+        default,
+        script: []const u8,
+        nothing,
+    };
 
     name: []const u8,
     inputs: []const Input = &.{},
     outputs: []const Output = &.{},
-    script: bool = true,
+    run: Run = .default,
 
     max_ram: ?u64 = null,
     mem_lock: bool = false,

@@ -108,7 +108,7 @@ pub fn send_required_artifacts(
             send_artifact_concurrent,
             .{ alloc, io, term, proto.task.Id{
                 .deployment = deployment.id,
-                .pipeline = input.name,
+                .pipeline = input,
                 .workspace = deployment.config.workspace,
             }, &project, &deployment, remotes, remote, &failed },
         );

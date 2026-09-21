@@ -347,7 +347,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
             alloc,
             req.task.workspace,
             &deployment,
-            input.name,
+            input,
         );
         std.Io.Dir.cwd().access(
             self.daemon.io,
@@ -402,7 +402,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     for (req.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
             output_dir_path,
-            output.name,
+            output,
         });
         try std.Io.Dir.cwd().createDirPath(self.daemon.io, path);
         try state_dirs.append(alloc, paths.state_dir(path));

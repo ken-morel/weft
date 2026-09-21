@@ -126,7 +126,7 @@ pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !S
         return error.CyclicPipeline;
     if (self.config.get_pipeline(pipeline_name)) |pipeline| {
         for (pipeline.outputs) |output|
-            if (self.get_artifact(output.name)) |_|
+            if (self.get_artifact(output)) |_|
                 return .done;
         if (pipeline.outputs.len == 0)
             for (self.artifacts) |art|
@@ -142,7 +142,7 @@ pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !S
             other_pipeline: for (self.config.pipelines) |other_pipeline| {
                 blk: {
                     for (other_pipeline.outputs) |output|
-                        if (std.mem.eql(u8, output.name, input.name))
+                        if (std.mem.eql(u8, output, input))
                             break :blk;
                     continue :other_pipeline;
                 }
