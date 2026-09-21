@@ -614,6 +614,8 @@ pub fn handle_task_poll(self: *@This(), conn: *Connection) proto.Res(proto.task.
         };
     } else null;
 
+    const usage: ?proto.task.poll.TaskUsage = if (status == null) fetch_task_usage(alloc, io, task) else null;
+
     return .{ .footer = .{
         .logs = logs,
         .status = if (status) |code|
@@ -623,5 +625,56 @@ pub fn handle_task_poll(self: *@This(), conn: *Connection) proto.Res(proto.task.
                 .{ .failed = code }
         else
             .running,
+        .usage = usage,
     } };
+}
+
+fn fetch_task_usage(alloc: std.mem.Allocator, io: std.Io, task: Task) ?proto.task.poll.TaskUsage {
+    const unit = task.unit_name(alloc) catch return null;
+    defer alloc.free(unit);
+
+    var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/system.slice", .{}) catch |err|
+        if (err == error.FileNotFound)
+            std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup", .{}) catch return null
+        else
+            return null;
+    defer cgroup_dir.close(io);
+
+    var unit_dir_name_buf: [256]u8 = undefined;
+    const unit_dir_name = std.fmt.bufPrint(&unit_dir_name_buf, "{s}.service", .{unit}) catch return null;
+
+    var svc_dir = cgroup_dir.openDir(io, unit_dir_name, .{}) catch |err|
+        if (err == error.FileNotFound)
+            cgroup_dir.openDir(io, unit, .{}) catch return null
+        else
+            return null;
+    defer svc_dir.close(io);
+
+    var mem_buf: [64]u8 = undefined;
+    var mem_bytes: u64 = 0;
+    if (svc_dir.openFile(io, "memory.current", .{ .mode = .read_only })) |f| {
+        defer f.close(io);
+        const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
+        const s = std.mem.trim(u8, mem_buf[0..n], " \t\r\n");
+        mem_bytes = std.fmt.parseInt(u64, s, 10) catch 0;
+    } else |_| {}
+
+    var cpu_stat_buf: [1024]u8 = undefined;
+    var cpu_usage_usec: u64 = 0;
+    if (svc_dir.openFile(io, "cpu.stat", .{ .mode = .read_only })) |f| {
+        defer f.close(io);
+        const n = f.readPositionalAll(io, &cpu_stat_buf, 0) catch 0;
+        var clines = std.mem.splitScalar(u8, cpu_stat_buf[0..n], '\n');
+        while (clines.next()) |cline| {
+            if (std.mem.startsWith(u8, cline, "usage_usec ")) {
+                const num_str = std.mem.trim(u8, cline["usage_usec ".len..], " \t\r\n");
+                cpu_usage_usec = std.fmt.parseInt(u64, num_str, 10) catch 0;
+            }
+        }
+    } else |_| {}
+
+    return .{
+        .cpu_usec = cpu_usage_usec,
+        .memory_bytes = mem_bytes,
+    };
 }

@@ -51,8 +51,10 @@ pub const StatsIterator = struct {
     }
 };
 
+pub const history_capacity: usize = 120;
+
 pub fn init(alloc: std.mem.Allocator, io: std.Io, term: *Term) !@This() {
-    const history = try alloc.alloc(?Monitor.Stats, 1000);
+    const history = try alloc.alloc(?Monitor.Stats, history_capacity);
     @memset(history, null);
     return .{
         .monitor = .{},
@@ -85,8 +87,41 @@ pub fn iterator(self: *const @This()) StatsIterator {
 pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io.Timestamp) !void {
     try self.lock.lock(self.io);
     defer self.lock.unlock(self.io);
+
+    self.term.info("daemon::stats_server new listener connected, catchup from timestamp {d}", .{timestamp.nanoseconds});
+
+    var last_time = timestamp;
+    const hist_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
+    defer self.alloc.free(hist_buffer);
+
+    var it = StatsIterator.init(self);
+    var catchup_count: usize = 0;
+    while (it.next()) |hist_stat| {
+        if (timestamp.nanoseconds != 0 and hist_stat.time.nanoseconds < timestamp.nanoseconds)
+            continue;
+
+        var hw: std.Io.Writer = .fixed(hist_buffer);
+        zoto.serialize(&hw, Monitor.Stats, hist_stat.*, .{ .header = true }) catch continue;
+        var w_buf: [256]u8 = undefined;
+        var w = stream.writer(self.io, &w_buf);
+        w.interface.writeAll(hw.buffered()) catch |err| {
+            self.term.err("daemon::stats_server send catchup error: {any}", .{err});
+            stream.close(self.io);
+            return;
+        };
+        w.interface.flush() catch |err| {
+            self.term.err("daemon::stats_server flush catchup error: {any}", .{err});
+            stream.close(self.io);
+            return;
+        };
+        last_time = hist_stat.time;
+        catchup_count += 1;
+    }
+
+    self.term.info("daemon::stats_server sent {d} catchup samples to listener", .{catchup_count});
+
     try self.listeners.append(self.alloc, .{
-        .last = timestamp,
+        .last = last_time,
         .stream = stream,
     });
 }
@@ -106,27 +141,34 @@ pub fn run(self: *@This()) error{Canceled}!void {
 }
 
 fn _run(self: *@This()) !void {
+    self.term.info("daemon::stats_server started background sampling loop", .{});
     const buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
     defer self.alloc.free(buffer);
-    const hist_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
-    defer self.alloc.free(hist_buffer);
 
     while (true) {
-        const stats = try self.monitor.fetch(self.alloc, self.io);
-        if (self.stats_history[@intCast(self.stats_idx)]) |stat|
-            stat.free(self.alloc);
-        self.stats_history[@intCast(self.stats_idx)] = stats;
-        self.stats_idx = (self.stats_idx + 1) % self.stats_history.len;
+        self.term.info("daemon::stats_server fetching stats...", .{});
+        const stats = self.monitor.fetch(self.alloc, self.io) catch |err| {
+            self.term.err("daemon::stats_server fetch error: {any}", .{err});
+            try std.Io.sleep(self.io, .fromSeconds(5), .awake);
+            continue;
+        };
+        self.term.info("daemon::stats_server fetch complete, updating history", .{});
 
         {
             try self.lock.lock(self.io);
             defer self.lock.unlock(self.io);
 
+            if (self.stats_history[@intCast(self.stats_idx)]) |stat|
+                stat.free(self.alloc);
+            self.stats_history[@intCast(self.stats_idx)] = stats;
+            self.stats_idx = (self.stats_idx + 1) % self.stats_history.len;
+
+            self.term.info("daemon::stats_server broadcasting to {d} listeners", .{self.listeners.items.len});
+
             var serialized_len: usize = 0;
             var idx: usize = 0;
             while (idx < self.listeners.items.len) {
                 const listener = &self.listeners.items[idx];
-                const timestamp = listener.last;
 
                 if (serialized_len == 0) {
                     var writer: std.Io.Writer = .fixed(buffer);
@@ -138,43 +180,21 @@ fn _run(self: *@This()) !void {
                 }
 
                 var send_failed = false;
-                if (timestamp.nanoseconds < stats.time.nanoseconds) {
-                    var it = StatsIterator.init(self);
-                    while (it.next()) |hist_stat| {
-                        if (timestamp.nanoseconds != 0 and hist_stat.time.nanoseconds < timestamp.nanoseconds)
-                            continue;
-                        if (hist_stat.time.nanoseconds >= stats.time.nanoseconds)
-                            continue;
-
-                        var hw: std.Io.Writer = .fixed(hist_buffer);
-                        zoto.serialize(&hw, Monitor.Stats, hist_stat.*, .{ .header = true }) catch continue;
-                        var w_buf: [256]u8 = undefined;
-                        var w = listener.stream.writer(self.io, &w_buf);
-                        w.interface.writeAll(hw.buffered()) catch {
-                            send_failed = true;
-                            break;
-                        };
-                        w.interface.flush() catch {
-                            send_failed = true;
-                            break;
-                        };
-                    }
-                }
-
-                if (!send_failed and serialized_len > 0) {
-                    var w_buf: [256]u8 = undefined;
-                    var w = listener.stream.writer(self.io, &w_buf);
-                    w.interface.writeAll(buffer[0..serialized_len]) catch {
+                var w_buf: [256]u8 = undefined;
+                var w = listener.stream.writer(self.io, &w_buf);
+                w.interface.writeAll(buffer[0..serialized_len]) catch |err| {
+                    self.term.err("daemon::stats_server send live stat error: {any}", .{err});
+                    send_failed = true;
+                };
+                if (!send_failed) {
+                    w.interface.flush() catch |err| {
+                        self.term.err("daemon::stats_server flush live stat error: {any}", .{err});
                         send_failed = true;
                     };
-                    if (!send_failed) {
-                        w.interface.flush() catch {
-                            send_failed = true;
-                        };
-                    }
                 }
 
                 if (send_failed) {
+                    self.term.info("daemon::stats_server listener disconnected, removing", .{});
                     listener.stream.close(self.io);
                     _ = self.listeners.swapRemove(idx);
                 } else {
@@ -184,7 +204,7 @@ fn _run(self: *@This()) !void {
             }
         }
 
-        try std.Io.sleep(self.io, .fromSeconds(2), .awake);
+        try std.Io.sleep(self.io, .fromSeconds(5), .awake);
     }
 }
 

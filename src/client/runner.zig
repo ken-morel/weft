@@ -614,6 +614,12 @@ pub fn spawn_step(
             alloc.free(logs.data);
         }
 
+        if (footer.usage) |u| {
+            try deployment_lock.lock(io);
+            state.update_usage(step.remote, step.pipeline, u.cpu_usec, u.memory_bytes, std.Io.Clock.now(.real, io));
+            deployment_lock.unlock(io);
+        }
+
         switch (footer.status) {
             .running => continue,
             .success => {

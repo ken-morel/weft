@@ -89,6 +89,18 @@ fn print_log_tail(self: *@This(), io: std.Io, pipeline_name: []const u8, max_lin
     return printed;
 }
 
+fn format_bytes(buf: []u8, bytes: u64) []const u8 {
+    const f: f64 = @floatFromInt(bytes);
+    if (bytes >= 1024 * 1024 * 1024)
+        return std.fmt.bufPrint(buf, "{d:.1} GB", .{f / (1024.0 * 1024.0 * 1024.0)}) catch "..."
+    else if (bytes >= 1024 * 1024)
+        return std.fmt.bufPrint(buf, "{d:.1} MB", .{f / (1024.0 * 1024.0)}) catch "..."
+    else if (bytes >= 1024)
+        return std.fmt.bufPrint(buf, "{d:.1} KB", .{f / 1024.0}) catch "..."
+    else
+        return std.fmt.bufPrint(buf, "{d} B", .{bytes}) catch "...";
+}
+
 fn print_truncated(self: *@This(), cols: u16, comptime fmt: []const u8, args: anytype) void {
     var buf: [1024]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, fmt, args) catch return;
@@ -165,7 +177,25 @@ pub fn update(self: *@This(), io: std.Io) !void {
             self.print_truncated(term_size.cols, "[wait   ] [{s}] {s}", .{ step.remote.get_name(), step.pipeline.name });
             lines_count += 1;
         } else if (step.status == .running) {
-            self.print_truncated(term_size.cols, "[running] [{s}] {s}", .{ step.remote.get_name(), step.pipeline.name });
+            var stats_buf: [128]u8 = undefined;
+            var stats_str: []const u8 = "";
+            if (step.cpu_ms != null or step.memory_bytes != null) {
+                var mem_buf: [32]u8 = undefined;
+                const m_str = if (step.memory_bytes) |mb| format_bytes(&mem_buf, mb) else "--";
+                if (step.cpu_pct) |pct| {
+                    stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d:.1}% / {d}ms, RAM: {s})", .{
+                        pct,
+                        step.cpu_ms orelse 0,
+                        m_str,
+                    }) catch "";
+                } else {
+                    stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d}ms, RAM: {s})", .{
+                        step.cpu_ms orelse 0,
+                        m_str,
+                    }) catch "";
+                }
+            }
+            self.print_truncated(term_size.cols, "[running] [{s}] {s}{s}", .{ step.remote.get_name(), step.pipeline.name, stats_str });
             lines_count += 1;
             const log_lines = self.print_log_tail(io, step.pipeline.name, per_task_logs, term_size.cols);
             lines_count += log_lines;

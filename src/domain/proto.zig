@@ -102,10 +102,15 @@ pub const task = struct {
             failed: u16,
             not_found,
         };
+        pub const TaskUsage = struct {
+            cpu_usec: u64 = 0,
+            memory_bytes: u64 = 0,
+        };
         pub const Res = union(enum) {
             footer: struct {
                 logs: ?Logs,
                 status: Status,
+                usage: ?TaskUsage = null,
             },
         };
     };

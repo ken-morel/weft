@@ -15,6 +15,11 @@ pub const Step = struct {
     pipeline: *const Weft.Pipeline,
     status: Status,
     err: ?[]const u8 = null,
+    cpu_ms: ?u64 = null,
+    cpu_pct: ?f32 = null,
+    memory_bytes: ?u64 = null,
+    prev_cpu_usec: ?u64 = null,
+    last_poll_time: ?std.Io.Timestamp = null,
 };
 pub const Artifact = struct {
     pub const Status = enum {
@@ -85,6 +90,23 @@ pub fn err(self: *@This(), remote_name: []const u8, pipeline_name: []const u8, e
     if (self.get(remote_name, pipeline_name)) |s| {
         s.status = .err;
         s.err = err_msg;
+    }
+}
+
+pub fn update_usage(self: *@This(), remote_name: []const u8, pipeline_name: []const u8, cpu_usec: u64, memory_bytes: u64, now: std.Io.Timestamp) void {
+    if (self.get(remote_name, pipeline_name)) |s| {
+        s.memory_bytes = memory_bytes;
+        s.cpu_ms = cpu_usec / 1000;
+        if (s.last_poll_time) |last_t| {
+            const dt_ns = now.nanoseconds - last_t.nanoseconds;
+            if (dt_ns > 50_000_000 and s.prev_cpu_usec != null) {
+                const dt_usec = @divTrunc(dt_ns, 1000);
+                const delta_usec = cpu_usec -| s.prev_cpu_usec.?;
+                s.cpu_pct = @as(f32, @floatFromInt(delta_usec)) * 100.0 / @as(f32, @floatFromInt(dt_usec));
+            }
+        }
+        s.prev_cpu_usec = cpu_usec;
+        s.last_poll_time = now;
     }
 }
 

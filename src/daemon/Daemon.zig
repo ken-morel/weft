@@ -9,6 +9,7 @@ const DaemonInstall = @import("DaemonInstall.zig");
 const Server = @import("Server.zig");
 const SharedPressor = @import("SharedPressor.zig");
 const StatsServer = @import("StatsServer.zig");
+const spawn = @import("../domain/spawn.zig").spawn;
 const Task = @import("Task.zig");
 const Worker = @import("Worker.zig");
 
@@ -116,7 +117,6 @@ pub fn run_system_server(self: *@This()) !void {
     var req_arena: std.heap.ArenaAllocator = .init(self.alloc);
     defer req_arena.deinit();
     run: switch (@as(Run, .accept)) {
-        // accept
         .accept => {
             conn = try srv.accept(self.io);
             reader = conn.reader(self.io, &buff);
@@ -142,7 +142,6 @@ pub fn run_system_server(self: *@This()) !void {
                 },
             }
         },
-        // replies
         .invalid_request => |msg| {
             self.term.err("  invalid request: {s}", .{msg});
             conn.close(self.io);
@@ -157,8 +156,12 @@ pub fn run_system_server(self: *@This()) !void {
 
 pub fn run(self: *@This()) !void {
     self.term.debug("max workers: {d}", .{self.config.max_workers});
-    _ = std.Io.async(self.io, run_client_server, .{self});
-    _ = std.Io.async(self.io, StatsServer.run, .{&self.stats_server});
+
+    const client_thread = try std.Thread.spawn(.{}, run_client_server, .{self});
+    client_thread.detach();
+
+    const stats_thread = try std.Thread.spawn(.{}, StatsServer.run, .{&self.stats_server});
+    stats_thread.detach();
 
     try self.run_system_server();
 }
@@ -208,6 +211,5 @@ pub fn _finalize_task(self: *@This(), task: Task, status: u16) !void {
         try outputs.append(self.alloc, try self.alloc.dupe(u8, entry.basename));
 
     for (outputs.items) |name|
-        //TODO: maybe chown the artifacts to root
         try outputs_dir.rename(name, artifacts_dir, name, self.io);
 }

@@ -1,15 +1,15 @@
 const std = @import("std");
 
+const DaemonInstall = @import("../daemon/DaemonInstall.zig");
+const proto = @import("../domain/proto.zig");
+const spawn = @import("../domain/spawn.zig").spawn;
+const Term = @import("../domain/Term.zig");
+const Monitor = @import("../util/Monitor.zig");
+const zoto = @import("../util/zoto.zig");
+const Connection = @import("../wire/Connection.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Remote = @import("Remote.zig");
-const DaemonInstall = @import("../daemon/DaemonInstall.zig");
-const Monitor = @import("../util/Monitor.zig");
-const Term = @import("../domain/Term.zig");
-const proto = @import("../domain/proto.zig");
-const zoto = @import("../util/zoto.zig");
-const Connection = @import("../wire/Connection.zig");
-const spawn = @import("../domain/spawn.zig").spawn;
 
 const Status = enum {
     connecting,
@@ -31,6 +31,33 @@ const Sample = struct {
     disk_w_rate: f32,
 };
 
+const ServiceInfo = struct {
+    workspace: [64]u8,
+    workspace_len: usize,
+    deployment: [8]u8,
+    service: [64]u8,
+    service_len: usize,
+    pipeline: [64]u8,
+    pipeline_len: usize,
+    cpu_pct: f32,
+    cpu_ms: u64,
+    cpu_usec: u64,
+    mem_bytes: u64,
+};
+
+const LatestInfo = struct {
+    ram_used: u64,
+    ram_total: u64,
+    ram_avail: u64,
+    cpu_cores: usize,
+    cpu_freq: u64,
+    cpu_model: [64]u8,
+    cpu_model_len: usize,
+    services_count: usize,
+    services: [16]ServiceInfo,
+    services_len: usize,
+};
+
 const RemoteEntry = struct {
     remote: Remote,
     status: Status = .connecting,
@@ -40,20 +67,18 @@ const RemoteEntry = struct {
     last_disk_r: u64 = 0,
     last_disk_w: u64 = 0,
     last_time: ?std.Io.Timestamp = null,
-    latest_stats: ?Monitor.Stats = null,
+    latest_info: ?LatestInfo = null,
 };
 
 const MonitorState = struct {
     entries: []RemoteEntry,
+    task_filter: ?[]const u8 = null,
     lock: std.Io.Mutex = .init,
     should_exit: bool = false,
 
     pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
-        for (self.entries) |*entry| {
+        for (self.entries) |*entry|
             entry.history.deinit(alloc);
-            if (entry.latest_stats) |stat|
-                stat.free(alloc);
-        }
         alloc.free(self.entries);
     }
 
@@ -114,12 +139,6 @@ const MonitorState = struct {
             }
         }
 
-        entry.last_time = stat.time;
-        entry.last_rx = cur_rx;
-        entry.last_tx = cur_tx;
-        entry.last_disk_r = cur_disk_r;
-        entry.last_disk_w = cur_disk_w;
-
         const sample: Sample = .{
             .time = stat.time,
             .cpu_pct = cpu_pct,
@@ -138,9 +157,81 @@ const MonitorState = struct {
             _ = entry.history.orderedRemove(0);
         entry.history.append(alloc, sample) catch {};
 
-        if (entry.latest_stats) |old_stat|
-            old_stat.free(alloc);
-        entry.latest_stats = stat;
+        var info: LatestInfo = .{
+            .ram_used = stat.ram.used,
+            .ram_total = stat.ram.total,
+            .ram_avail = stat.ram.available,
+            .cpu_cores = stat.cpu.cores.len,
+            .cpu_freq = stat.cpu.freq,
+            .cpu_model = undefined,
+            .cpu_model_len = 0,
+            .services_count = stat.services.len,
+            .services = undefined,
+            .services_len = 0,
+        };
+        const model_len = @min(stat.cpu.model.len, info.cpu_model.len);
+        @memcpy(info.cpu_model[0..model_len], stat.cpu.model[0..model_len]);
+        info.cpu_model_len = model_len;
+
+        const max_svcs = @min(stat.services.len, 16);
+        for (stat.services[0..max_svcs], 0..) |svc, i| {
+            const dep_str = svc.task.id.deployment.to_string();
+            var svc_cpu_pct: f32 = 0.0;
+            if (entry.latest_info) |prev_info| {
+                if (entry.last_time) |last_t| {
+                    const dt_ns = stat.time.nanoseconds - last_t.nanoseconds;
+                    if (dt_ns > 100_000_000) {
+                        for (prev_info.services[0..prev_info.services_len]) |prev_s| {
+                            if (std.mem.eql(u8, prev_s.workspace[0..prev_s.workspace_len], svc.task.id.workspace) and
+                                std.mem.eql(u8, prev_s.service[0..prev_s.service_len], svc.task.id.service) and
+                                std.mem.eql(u8, prev_s.pipeline[0..prev_s.pipeline_len], svc.task.id.pipeline) and
+                                std.mem.eql(u8, &prev_s.deployment, &dep_str))
+                            {
+                                const dt_usec = @divTrunc(dt_ns, 1000);
+                                const delta_usec = svc.cpu_usage_usec -| prev_s.cpu_usec;
+                                svc_cpu_pct = @as(f32, @floatFromInt(delta_usec)) * 100.0 / @as(f32, @floatFromInt(dt_usec));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            var s_info: ServiceInfo = .{
+                .workspace = undefined,
+                .workspace_len = 0,
+                .deployment = dep_str,
+                .service = undefined,
+                .service_len = 0,
+                .pipeline = undefined,
+                .pipeline_len = 0,
+                .cpu_pct = svc_cpu_pct,
+                .cpu_ms = svc.cpu_usage_usec / 1000,
+                .cpu_usec = svc.cpu_usage_usec,
+                .mem_bytes = svc.memory_bytes,
+            };
+            const ws_len = @min(svc.task.id.workspace.len, s_info.workspace.len);
+            @memcpy(s_info.workspace[0..ws_len], svc.task.id.workspace[0..ws_len]);
+            s_info.workspace_len = ws_len;
+
+            const svc_len = @min(svc.task.id.service.len, s_info.service.len);
+            @memcpy(s_info.service[0..svc_len], svc.task.id.service[0..svc_len]);
+            s_info.service_len = svc_len;
+
+            const pip_len = @min(svc.task.id.pipeline.len, s_info.pipeline.len);
+            @memcpy(s_info.pipeline[0..pip_len], svc.task.id.pipeline[0..pip_len]);
+            s_info.pipeline_len = pip_len;
+
+            info.services[i] = s_info;
+        }
+        info.services_len = max_svcs;
+        entry.latest_info = info;
+
+        entry.last_time = stat.time;
+        entry.last_rx = cur_rx;
+        entry.last_tx = cur_tx;
+        entry.last_disk_r = cur_disk_r;
+        entry.last_disk_w = cur_disk_w;
     }
 };
 
@@ -159,15 +250,41 @@ fn format_bar_number(buf: []u8, value: f32, prev: ?f32, color: bool) []const u8 
 
     const num_colored = @min(6, @as(usize, @intFromFloat((clamped / 100.0) * 6.0 + 0.5)));
     const delta = if (prev) |p| value - p else 0.0;
+    const abs_delta = @abs(delta);
 
-    const bg_code: []const u8 = if (delta > 25.0 or clamped > 90.0)
-        "\x1b[41m\x1b[37m\x1b[1m"
-    else if (delta > 12.0 or clamped > 75.0)
-        "\x1b[43m\x1b[30m\x1b[1m"
-    else if (delta > 4.0)
-        "\x1b[46m\x1b[30m\x1b[1m"
+    const bg_code: []const u8 = if (clamped >= 90.0 or abs_delta >= 40.0)
+        "\x1b[48;5;196m\x1b[38;5;231m\x1b[1m"
+    else if (abs_delta >= 25.0)
+        if (delta > 0)
+            "\x1b[48;5;202m\x1b[38;5;231m\x1b[1m"
+        else
+            "\x1b[48;5;125m\x1b[38;5;231m\x1b[1m"
+    else if (abs_delta >= 15.0)
+        if (delta > 0)
+            "\x1b[48;5;208m\x1b[38;5;16m\x1b[1m"
+        else
+            "\x1b[48;5;162m\x1b[38;5;231m\x1b[1m"
+    else if (abs_delta >= 8.0)
+        if (delta > 0)
+            "\x1b[48;5;220m\x1b[38;5;16m\x1b[1m"
+        else
+            "\x1b[48;5;98m\x1b[38;5;231m\x1b[1m"
+    else if (abs_delta >= 4.0)
+        if (delta > 0)
+            "\x1b[48;5;45m\x1b[38;5;16m\x1b[1m"
+        else
+            "\x1b[48;5;33m\x1b[38;5;231m\x1b[1m"
+    else if (abs_delta >= 1.5)
+        if (delta > 0)
+            "\x1b[48;5;36m\x1b[38;5;16m\x1b[1m"
+        else
+            "\x1b[48;5;31m\x1b[38;5;231m\x1b[1m"
+    else if (clamped >= 75.0)
+        "\x1b[48;5;166m\x1b[38;5;231m\x1b[1m"
+    else if (clamped >= 50.0)
+        "\x1b[48;5;106m\x1b[38;5;16m\x1b[1m"
     else
-        "\x1b[42m\x1b[30m\x1b[1m";
+        "\x1b[48;5;28m\x1b[38;5;231m\x1b[1m";
 
     var writer: std.Io.Writer = .fixed(buf);
     if (num_colored > 0) {
@@ -271,10 +388,20 @@ fn monitor_remote_worker(
 
         while (!state.should_exit) {
             while (rx_len > 0) {
+                var arena: std.heap.ArenaAllocator = .init(alloc);
+                defer arena.deinit();
+
                 var slice: []const u8 = rx_buf[0..rx_len];
-                const stat = zoto.deserialize(alloc, &slice, Monitor.Stats, .{ .header = true }) catch |err| {
+                const stat = zoto.deserialize(arena.allocator(), &slice, Monitor.Stats, .{ .header = true }) catch |err| {
                     if (err == error.BufferTooSmall)
                         break;
+                    if (std.mem.indexOf(u8, rx_buf[1..rx_len], "ZOTO")) |next_pos| {
+                        const skip = next_pos + 1;
+                        std.mem.copyForwards(u8, rx_buf[0 .. rx_len - skip], rx_buf[skip..rx_len]);
+                        rx_len -= skip;
+                        continue;
+                    }
+                    rx_len = 0;
                     break;
                 };
 
@@ -288,6 +415,15 @@ fn monitor_remote_worker(
             const dest = rx_buf[rx_len..];
             if (dest.len == 0) {
                 rx_len = 0;
+                continue;
+            }
+
+            const buffered_data = client.rw.@"0".interface.buffered();
+            if (buffered_data.len > 0) {
+                const copy_len = @min(dest.len, buffered_data.len);
+                @memcpy(dest[0..copy_len], buffered_data[0..copy_len]);
+                client.rw.@"0".interface.toss(copy_len);
+                rx_len += copy_len;
                 continue;
             }
 
@@ -343,36 +479,11 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
             .disconnected => "\x1b[31mdisconnected (retrying...)\x1b[0m",
         };
 
-        var cur_cpu_buf: [128]u8 = undefined;
-        var cur_ram_buf: [128]u8 = undefined;
-        var cur_swap_buf: [128]u8 = undefined;
-
-        const cur_sample = if (entry.history.items.len > 0)
-            entry.history.items[entry.history.items.len - 1]
-        else
-            null;
-
-        const cpu_display = if (cur_sample) |s|
-            format_bar_number(&cur_cpu_buf, s.cpu_pct, s.prev_cpu, term.color)
-        else
-            "--.--%";
-        const ram_display = if (cur_sample) |s|
-            format_bar_number(&cur_ram_buf, s.ram_pct, s.prev_ram, term.color)
-        else
-            "--.--%";
-        const swap_display = if (cur_sample) |s|
-            format_bar_number(&cur_swap_buf, s.swap_pct, s.prev_swap, term.color)
-        else
-            "--.--%";
-
-        term.println("\x1b[1m── [ {s} ({s}:{d}) ]\x1b[0m  status: {s}  CPU: {s}  RAM: {s}  SWAP: {s}", .{
+        term.println("\x1b[1m── [ {s} ({s}:{d}) ]\x1b[0m  status: {s}", .{
             name,
             addr_str,
             port,
             status_str,
-            cpu_display,
-            ram_display,
-            swap_display,
         });
         lines += 1;
 
@@ -380,13 +491,14 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
         lines += 1;
 
         const h_len = entry.history.items.len;
-        const start_idx = if (h_len > history_limit) h_len - history_limit else 0;
-
         if (h_len == 0) {
             term.println("   \x1b[2m(waiting for statistics...)\x1b[0m", .{});
             lines += 1;
         } else {
-            for (entry.history.items[start_idx..h_len]) |item| {
+            const count = @min(h_len, history_limit);
+            var i: usize = 0;
+            while (i < count) : (i += 1) {
+                const item = entry.history.items[h_len - 1 - i];
                 var time_buf: [16]u8 = undefined;
                 var cpu_buf: [128]u8 = undefined;
                 var ram_buf: [128]u8 = undefined;
@@ -419,25 +531,53 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
             }
         }
 
-        if (entry.latest_stats) |stat| {
+        if (entry.latest_info) |info| {
             var mem_used_buf: [32]u8 = undefined;
             var mem_tot_buf: [32]u8 = undefined;
             var mem_avail_buf: [32]u8 = undefined;
-            const u_str = format_bytes(&mem_used_buf, stat.ram.used);
-            const tot_str = format_bytes(&mem_tot_buf, stat.ram.total);
-            const av_str = format_bytes(&mem_avail_buf, stat.ram.available);
+            const u_str = format_bytes(&mem_used_buf, info.ram_used);
+            const tot_str = format_bytes(&mem_tot_buf, info.ram_total);
+            const av_str = format_bytes(&mem_avail_buf, info.ram_avail);
 
-            if (stat.services.len > 0) {
-                term.println("   \x1b[2mRAM: {s}/{s} (avail: {s}) | Tasks ({d}):\x1b[0m", .{ u_str, tot_str, av_str, stat.services.len });
+            if (info.services_count > 0) {
+                term.println("   \x1b[2mRAM: {s}/{s} (avail: {s}) | Tasks ({d}):\x1b[0m", .{ u_str, tot_str, av_str, info.services_count });
                 lines += 1;
-                for (stat.services[0..@min(stat.services.len, 3)]) |svc| {
+                for (info.services[0..info.services_len]) |svc| {
+                    if (state.task_filter) |filter| {
+                        var matches = false;
+                        if (std.mem.eql(u8, svc.pipeline[0..svc.pipeline_len], filter) or
+                            std.mem.eql(u8, svc.service[0..svc.service_len], filter) or
+                            std.mem.eql(u8, svc.workspace[0..svc.workspace_len], filter) or
+                            std.mem.eql(u8, &svc.deployment, filter))
+                        {
+                            matches = true;
+                        } else {
+                            var full_name_buf: [128]u8 = undefined;
+                            const full_name = std.fmt.bufPrint(&full_name_buf, "{s}.{s}", .{
+                                svc.service[0..svc.service_len],
+                                svc.pipeline[0..svc.pipeline_len],
+                            }) catch "";
+                            if (std.mem.eql(u8, full_name, filter))
+                                matches = true;
+                        }
+                        if (!matches)
+                            continue;
+                    }
                     var svc_mem_buf: [32]u8 = undefined;
-                    const sm_str = format_bytes(&svc_mem_buf, svc.memory_bytes);
-                    term.println("     \x1b[36m•\x1b[0m {s} (CPU: {d}ms, RAM: {s})", .{
-                        svc.task.id.pipeline,
-                        svc.cpu_usage_usec / 1000,
+                    const sm_str = format_bytes(&svc_mem_buf, svc.mem_bytes);
+                    term.println("     \x1b[36m•\x1b[0m {s} {s} {s}.{s} (CPU: {d:.1}% ({d}ms), RAM: {s})", .{
+                        svc.workspace[0..svc.workspace_len],
+                        &svc.deployment,
+                        svc.service[0..svc.service_len],
+                        svc.pipeline[0..svc.pipeline_len],
+                        svc.cpu_pct,
+                        svc.cpu_ms,
                         sm_str,
                     });
+                    lines += 1;
+                }
+                if (info.services_count > info.services_len and state.task_filter == null) {
+                    term.println("     \x1b[2m+ {d} more tasks running...\x1b[0m", .{ info.services_count - info.services_len });
                     lines += 1;
                 }
             } else {
@@ -445,9 +585,9 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
                     u_str,
                     tot_str,
                     av_str,
-                    stat.cpu.model,
-                    stat.cpu.cores.len,
-                    stat.cpu.freq,
+                    info.cpu_model[0..info.cpu_model_len],
+                    info.cpu_cores,
+                    info.cpu_freq,
                 });
                 lines += 1;
             }
@@ -465,38 +605,49 @@ pub fn run(
     io: std.Io,
     term: *Term,
     installation: ClientInstall,
-    maybe_group: ?[]const u8,
+    maybe_target: ?[]const u8,
 ) !void {
     const all_remotes = try installation.get_remotes(alloc, io, term);
     var target_remotes: std.ArrayList(Remote) = .empty;
     defer target_remotes.deinit(alloc);
+    var task_filter: ?[]const u8 = null;
 
-    for (all_remotes) |rem| {
-        if (maybe_group) |group| {
-            var matches = false;
-            if (std.mem.eql(u8, rem.get_name(), group)) {
-                matches = true;
+    if (maybe_target) |target| {
+        for (all_remotes) |rem| {
+            if (std.mem.eql(u8, rem.get_name(), target)) {
+                try target_remotes.append(alloc, rem);
             } else {
                 for (rem.groups) |g| {
-                    if (std.mem.eql(u8, g, group)) {
-                        matches = true;
+                    if (std.mem.eql(u8, g, target)) {
+                        try target_remotes.append(alloc, rem);
                         break;
                     }
                 }
             }
-            if (matches)
-                try target_remotes.append(alloc, rem);
-        } else {
-            try target_remotes.append(alloc, rem);
         }
+
+        if (target_remotes.items.len == 0) {
+            for (all_remotes) |rem| {
+                const r_name = rem.get_name();
+                if (std.mem.startsWith(u8, target, r_name) and target.len > r_name.len and target[r_name.len] == '.') {
+                    try target_remotes.append(alloc, rem);
+                    task_filter = target[r_name.len + 1 ..];
+                    break;
+                }
+            }
+        }
+
+        if (target_remotes.items.len == 0) {
+            task_filter = target;
+            for (all_remotes) |rem|
+                try target_remotes.append(alloc, rem);
+        }
+    } else {
+        for (all_remotes) |rem|
+            try target_remotes.append(alloc, rem);
     }
 
     if (target_remotes.items.len == 0) {
-        if (maybe_group) |group| {
-            term.err("no remotes found matching group or name '{s}'", .{group});
-            return error.RemoteNotFound;
-        }
-
         const config = DaemonInstall.read_config(io, alloc, term) catch null;
         if (config) |cfg| {
             try target_remotes.append(alloc, .{
@@ -522,6 +673,7 @@ pub fn run(
 
     var state: MonitorState = .{
         .entries = entries,
+        .task_filter = task_filter,
     };
     defer state.deinit(alloc);
 
@@ -568,11 +720,15 @@ test "format_bar_number with color" {
     var buf: [128]u8 = undefined;
     const s_stable = format_bar_number(&buf, 29.56, 30.0, true);
     try std.testing.expect(s_stable.len > 6);
-    try std.testing.expect(std.mem.indexOf(u8, s_stable, "\x1b[42m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s_stable, "\x1b[48;5;28m") != null);
 
     const s_spike = format_bar_number(&buf, 85.0, 10.0, true);
     try std.testing.expect(s_spike.len > 6);
-    try std.testing.expect(std.mem.indexOf(u8, s_spike, "\x1b[41m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s_spike, "\x1b[48;5;196m") != null);
+
+    const s_drop = format_bar_number(&buf, 20.0, 50.0, true);
+    try std.testing.expect(s_drop.len > 6);
+    try std.testing.expect(std.mem.indexOf(u8, s_drop, "\x1b[48;5;125m") != null);
 }
 
 test "format_rate and format_bytes" {
@@ -586,4 +742,3 @@ test "format_rate and format_bytes" {
     const b1 = format_bytes(&buf, 1024 * 1024 * 500);
     try std.testing.expect(std.mem.indexOf(u8, b1, "MB") != null);
 }
-
