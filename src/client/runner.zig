@@ -549,7 +549,7 @@ pub fn spawn_step(
         const script_path = script_path: {
             const script_with_dot = try std.mem.join(alloc, "", &.{ pipeline.name, "." });
             defer alloc.free(script_with_dot);
-            const script_dir = project.dir.createDirPathOpen(io, "weft", .{}) catch |err| {
+            const script_dir = project.dir.createDirPathOpen(io, "weft", .{ .open_options = .{ .iterate = true } }) catch |err| {
                 if (err == error.FileNotFound)
                     term.err("weft folder not found, cannot run pipeline {s}", .{pipeline.name});
                 return err;

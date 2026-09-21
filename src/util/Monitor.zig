@@ -631,7 +631,8 @@ fn fetch_disk_io(alloc: std.mem.Allocator, io: std.Io) ![]const DiskIo {
 
         var sys_block_buf: [128]u8 = undefined;
         const sys_block_path = std.fmt.bufPrint(&sys_block_buf, "/sys/block/{s}", .{dev_name}) catch continue;
-        _ = std.Io.Dir.cwd().openDir(io, sys_block_path, .{}) catch continue;
+        var block_dir = std.Io.Dir.cwd().openDir(io, sys_block_path, .{}) catch continue;
+        block_dir.close(io);
 
         const reads_completed = parse_next_u64(&it);
         _ = it.next();

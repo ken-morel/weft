@@ -1,19 +1,19 @@
 const std = @import("std");
 
 const ClientInstall = @import("client/ClientInstall.zig");
-const cmd_remote = @import("client/cmd_remote.zig");
-const cmd_do = @import("client/do.zig");
 const cmd_follow = @import("client/cmd_follow.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
+const cmd_remote = @import("client/cmd_remote.zig");
 const Deployment = @import("client/Deployment.zig");
+const cmd_do = @import("client/do.zig");
 const Project = @import("client/Project.zig");
 const Step = @import("client/Step.zig");
 const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
 const Task = @import("daemon/Task.zig");
-pub const Monitor = @import("util/Monitor.zig");
 const Term = @import("domain/Term.zig");
+pub const Monitor = @import("util/Monitor.zig");
 
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
@@ -132,7 +132,7 @@ pub fn main(init: std.process.Init) !void {
             break :cmd;
         } else if (std.mem.eql(u8, cmd, "do")) {
             if (args.len < first + 2) {
-                term.err("usage: weft do [remote.]pipeline [[remote.]pipeline ...]", .{});
+                term.err("usage: weft do [remote].pipeline [[remote].pipeline ...]", .{});
                 return error.Usage;
             }
             const target_args = args[first + 1 ..];
@@ -145,8 +145,13 @@ pub fn main(init: std.process.Init) !void {
             defer targets.deinit(alloc);
 
             for (target_args) |arg| {
-                const target = Step.parse(arg) catch |err| {
-                    term.err("invalid target '{s}': {any}", .{ arg, err });
+                const step = if (arg.len > 0 and arg[0] == '.')
+                    try std.mem.join(init.arena.allocator(), "", &.{ "local", arg })
+                else
+                    @as([]const u8, arg);
+
+                const target = Step.parse(step) catch |err| {
+                    term.err("invalid target '{s}': {any}. A step must have the form '[remote].{{pipeline}}', ('.{{pipeline}}' implies remote is 'local')", .{ arg, err });
                     return err;
                 };
                 try targets.append(alloc, target);

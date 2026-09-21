@@ -75,6 +75,7 @@ pub fn run_client_server(self: *@This()) !void {
                 if (err == error.Canceled)
                     return;
                 self.term.err("accept error: {any}", .{err});
+                std.Io.sleep(self.io, .fromMilliseconds(100), .awake) catch {};
                 continue :req;
             };
         self.term.info("new connection", .{});
