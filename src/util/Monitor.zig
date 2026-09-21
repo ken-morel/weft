@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const Deployment = @import("../client/Deployment.zig");
-const proto = @import("../domain/proto.zig");
 const Task = @import("../daemon/Task.zig");
+const proto = @import("../domain/proto.zig");
 
 pub const CpuCore = struct {
     id: u16,
@@ -164,176 +164,176 @@ pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
     self.prev_core_ticks.deinit(alloc);
 }
 
-    pub fn fetch(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats {
-        const time: std.Io.Timestamp = std.Io.Clock.now(.real, io);
+pub fn fetch(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats {
+    const time: std.Io.Timestamp = std.Io.Clock.now(.real, io);
 
-        var cur_total_ticks: ?CoreTicks = null;
-        var cur_core_ticks: std.ArrayListUnmanaged(CoreTicks) = .empty;
-        defer cur_core_ticks.deinit(alloc);
+    var cur_total_ticks: ?CoreTicks = null;
+    var cur_core_ticks: std.ArrayListUnmanaged(CoreTicks) = .empty;
+    defer cur_core_ticks.deinit(alloc);
 
-        const cpu = try self.fetch_cpu(alloc, io, &cur_total_ticks, &cur_core_ticks);
-        const ram = fetch_ram(io) catch Ram{
+    const cpu = try self.fetch_cpu(alloc, io, &cur_total_ticks, &cur_core_ticks);
+    const ram = fetch_ram(io) catch Ram{
+        .total = 0,
+        .used = 0,
+        .free = 0,
+        .available = 0,
+        .buffers = 0,
+        .cached = 0,
+    };
+    var swap_zram = fetch_swap_and_zram(alloc, io) catch SwapAndZram{
+        .swap = Swap{
             .total = 0,
             .used = 0,
             .free = 0,
-            .available = 0,
-            .buffers = 0,
-            .cached = 0,
-        };
-        var swap_zram = fetch_swap_and_zram(alloc, io) catch SwapAndZram{
-            .swap = Swap{
-                .total = 0,
-                .used = 0,
-                .free = 0,
-                .in_bytes = 0,
-                .out_bytes = 0,
-            },
-            .zram = Zram{
-                .total = 0,
-                .used = 0,
-                .compressed = 0,
-                .devices = &.{},
-            },
-        };
-        _ = &swap_zram;
+            .in_bytes = 0,
+            .out_bytes = 0,
+        },
+        .zram = Zram{
+            .total = 0,
+            .used = 0,
+            .compressed = 0,
+            .devices = &.{},
+        },
+    };
+    _ = &swap_zram;
 
-        const disks = fetch_disks(alloc, io) catch &.{};
-        const disk_io = fetch_disk_io(alloc, io) catch &.{};
-        const net = fetch_net(alloc, io) catch &.{};
-        const services = fetch_services(alloc, io) catch &.{};
+    const disks = fetch_disks(alloc, io) catch &.{};
+    const disk_io = fetch_disk_io(alloc, io) catch &.{};
+    const net = fetch_net(alloc, io) catch &.{};
+    const services = fetch_services(alloc, io) catch &.{};
 
-        if (cur_total_ticks) |tt|
-            self.prev_total_ticks = tt;
+    if (cur_total_ticks) |tt|
+        self.prev_total_ticks = tt;
 
-        if (cur_core_ticks.items.len > 0) {
-            self.prev_core_ticks.clearRetainingCapacity();
-            try self.prev_core_ticks.appendSlice(alloc, cur_core_ticks.items);
-        }
-
-        return .{
-            .time = time,
-            .cpu = cpu,
-            .ram = ram,
-            .swap = swap_zram.swap,
-            .zram = swap_zram.zram,
-            .disks = disks,
-            .disk_io = disk_io,
-            .net = net,
-            .services = services,
-        };
+    if (cur_core_ticks.items.len > 0) {
+        self.prev_core_ticks.clearRetainingCapacity();
+        try self.prev_core_ticks.appendSlice(alloc, cur_core_ticks.items);
     }
 
-    fn fetch_cpu(
-        self: *@This(),
-        alloc: std.mem.Allocator,
-        io: std.Io,
-        out_total: *?CoreTicks,
-        out_cores: *std.ArrayListUnmanaged(CoreTicks),
-    ) !Cpu {
-        var stat_buf: [32768]u8 = undefined;
-        const stat_content = read_file(io, "/proc/stat", &stat_buf) orelse "";
+    return .{
+        .time = time,
+        .cpu = cpu,
+        .ram = ram,
+        .swap = swap_zram.swap,
+        .zram = swap_zram.zram,
+        .disks = disks,
+        .disk_io = disk_io,
+        .net = net,
+        .services = services,
+    };
+}
 
-        var model_buf: [256]u8 = undefined;
-        var model_slice: []const u8 = "Unknown";
-        var mhz_map = std.AutoHashMapUnmanaged(u16, u32).empty;
-        defer mhz_map.deinit(alloc);
+fn fetch_cpu(
+    self: *@This(),
+    alloc: std.mem.Allocator,
+    io: std.Io,
+    out_total: *?CoreTicks,
+    out_cores: *std.ArrayListUnmanaged(CoreTicks),
+) !Cpu {
+    var stat_buf: [32768]u8 = undefined;
+    const stat_content = read_file(io, "/proc/stat", &stat_buf) orelse "";
 
-        var cpuinfo_buf: [32768]u8 = undefined;
-        if (read_file(io, "/proc/cpuinfo", &cpuinfo_buf)) |cpuinfo_content| {
-            var current_proc: ?u16 = null;
-            var lines = std.mem.splitScalar(u8, cpuinfo_content, '\n');
-            while (lines.next()) |line| {
-                const trimmed = std.mem.trim(u8, line, " \t\r");
-                if (std.mem.startsWith(u8, trimmed, "model name")) {
-                    if (std.mem.indexOfScalar(u8, trimmed, ':')) |sep| {
-                        const val = std.mem.trim(u8, trimmed[sep + 1 ..], " \t");
-                        if (val.len > 0 and std.mem.eql(u8, model_slice, "Unknown")) {
-                            const copy_len = @min(val.len, model_buf.len);
-                            @memcpy(model_buf[0..copy_len], val[0..copy_len]);
-                            model_slice = model_buf[0..copy_len];
-                        }
-                    }
-                } else if (std.mem.startsWith(u8, trimmed, "processor")) {
-                    if (std.mem.indexOfScalar(u8, trimmed, ':')) |sep| {
-                        const val = std.mem.trim(u8, trimmed[sep + 1 ..], " \t");
-                        current_proc = std.fmt.parseInt(u16, val, 10) catch null;
-                    }
-                } else if (std.mem.startsWith(u8, trimmed, "cpu MHz")) {
-                    if (std.mem.indexOfScalar(u8, trimmed, ':')) |sep| {
-                        const val = std.mem.trim(u8, trimmed[sep + 1 ..], " \t");
-                        const mhz_float = std.fmt.parseFloat(f64, val) catch 0;
-                        if (current_proc) |p|
-                            try mhz_map.put(alloc, p, @intFromFloat(mhz_float));
-                    }
-                }
-            }
-        }
+    var model_buf: [256]u8 = undefined;
+    var model_slice: []const u8 = "Unknown";
+    var mhz_map = std.AutoHashMapUnmanaged(u16, u32).empty;
+    defer mhz_map.deinit(alloc);
 
-        var lines = std.mem.splitScalar(u8, stat_content, '\n');
-        var core_list = std.ArrayListUnmanaged(CpuCore).empty;
-        errdefer core_list.deinit(alloc);
-
-        var total_ticks: ?CoreTicks = null;
-
+    var cpuinfo_buf: [32768]u8 = undefined;
+    if (read_file(io, "/proc/cpuinfo", &cpuinfo_buf)) |cpuinfo_content| {
+        var current_proc: ?u16 = null;
+        var lines = std.mem.splitScalar(u8, cpuinfo_content, '\n');
         while (lines.next()) |line| {
             const trimmed = std.mem.trim(u8, line, " \t\r");
-            if (trimmed.len == 0)
-                continue;
-
-            if (std.mem.startsWith(u8, trimmed, "cpu ")) {
-                total_ticks = parse_cpu_ticks(trimmed[4..], 0);
-            } else if (std.mem.startsWith(u8, trimmed, "cpu") and trimmed.len > 3 and std.ascii.isDigit(trimmed[3])) {
-                var it = std.mem.tokenizeScalar(u8, trimmed[3..], ' ');
-                const core_id_str = it.next() orelse continue;
-                const core_id = std.fmt.parseInt(u16, core_id_str, 10) catch continue;
-                const rest = std.mem.trimStart(u8, trimmed[3 + core_id_str.len ..], " ");
-                const ticks = parse_cpu_ticks(rest, core_id);
-                try out_cores.append(alloc, ticks);
-
-                var prev_ticks: ?CoreTicks = null;
-                for (self.prev_core_ticks.items) |pc| {
-                    if (pc.core_id == core_id) {
-                        prev_ticks = pc;
-                        break;
+            if (std.mem.startsWith(u8, trimmed, "model name")) {
+                if (std.mem.indexOfScalar(u8, trimmed, ':')) |sep| {
+                    const val = std.mem.trim(u8, trimmed[sep + 1 ..], " \t");
+                    if (val.len > 0 and std.mem.eql(u8, model_slice, "Unknown")) {
+                        const copy_len = @min(val.len, model_buf.len);
+                        @memcpy(model_buf[0..copy_len], val[0..copy_len]);
+                        model_slice = model_buf[0..copy_len];
                     }
                 }
-
-                const usage_pct = ticks.calc_usage(prev_ticks);
-                const freq = fetch_core_freq(io, core_id) orelse mhz_map.get(core_id) orelse 0;
-
-                try core_list.append(alloc, .{
-                    .id = core_id,
-                    .freq = freq,
-                    .usage = @floatCast(@as(f32, @floatFromInt(usage_pct))),
-                });
+            } else if (std.mem.startsWith(u8, trimmed, "processor")) {
+                if (std.mem.indexOfScalar(u8, trimmed, ':')) |sep| {
+                    const val = std.mem.trim(u8, trimmed[sep + 1 ..], " \t");
+                    current_proc = std.fmt.parseInt(u16, val, 10) catch null;
+                }
+            } else if (std.mem.startsWith(u8, trimmed, "cpu MHz")) {
+                if (std.mem.indexOfScalar(u8, trimmed, ':')) |sep| {
+                    const val = std.mem.trim(u8, trimmed[sep + 1 ..], " \t");
+                    const mhz_float = std.fmt.parseFloat(f64, val) catch 0;
+                    if (current_proc) |p|
+                        try mhz_map.put(alloc, p, @intFromFloat(mhz_float));
+                }
             }
         }
-
-        out_total.* = total_ticks;
-
-        const total_usage = if (total_ticks) |tt|
-            tt.calc_usage(self.prev_total_ticks)
-        else
-            0;
-
-        var freq_sum: u64 = 0;
-        for (core_list.items) |c|
-            freq_sum += c.freq;
-
-        const avg_freq: u32 = if (core_list.items.len > 0)
-            @intCast(freq_sum / core_list.items.len)
-        else
-            0;
-
-        const model_duped = try alloc.dupe(u8, model_slice);
-
-        return .{
-            .model = model_duped,
-            .usage = total_usage,
-            .freq = avg_freq,
-            .cores = try core_list.toOwnedSlice(alloc),
-        };
     }
+
+    var lines = std.mem.splitScalar(u8, stat_content, '\n');
+    var core_list = std.ArrayListUnmanaged(CpuCore).empty;
+    errdefer core_list.deinit(alloc);
+
+    var total_ticks: ?CoreTicks = null;
+
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0)
+            continue;
+
+        if (std.mem.startsWith(u8, trimmed, "cpu ")) {
+            total_ticks = parse_cpu_ticks(trimmed[4..], 0);
+        } else if (std.mem.startsWith(u8, trimmed, "cpu") and trimmed.len > 3 and std.ascii.isDigit(trimmed[3])) {
+            var it = std.mem.tokenizeScalar(u8, trimmed[3..], ' ');
+            const core_id_str = it.next() orelse continue;
+            const core_id = std.fmt.parseInt(u16, core_id_str, 10) catch continue;
+            const rest = std.mem.trimStart(u8, trimmed[3 + core_id_str.len ..], " ");
+            const ticks = parse_cpu_ticks(rest, core_id);
+            try out_cores.append(alloc, ticks);
+
+            var prev_ticks: ?CoreTicks = null;
+            for (self.prev_core_ticks.items) |pc| {
+                if (pc.core_id == core_id) {
+                    prev_ticks = pc;
+                    break;
+                }
+            }
+
+            const usage_pct = ticks.calc_usage(prev_ticks);
+            const freq = fetch_core_freq(io, core_id) orelse mhz_map.get(core_id) orelse 0;
+
+            try core_list.append(alloc, .{
+                .id = core_id,
+                .freq = freq,
+                .usage = @floatCast(@as(f32, @floatFromInt(usage_pct))),
+            });
+        }
+    }
+
+    out_total.* = total_ticks;
+
+    const total_usage = if (total_ticks) |tt|
+        tt.calc_usage(self.prev_total_ticks)
+    else
+        0;
+
+    var freq_sum: u64 = 0;
+    for (core_list.items) |c|
+        freq_sum += c.freq;
+
+    const avg_freq: u32 = if (core_list.items.len > 0)
+        @intCast(freq_sum / core_list.items.len)
+    else
+        0;
+
+    const model_duped = try alloc.dupe(u8, model_slice);
+
+    return .{
+        .model = model_duped,
+        .usage = total_usage,
+        .freq = avg_freq,
+        .cores = try core_list.toOwnedSlice(alloc),
+    };
+}
 
 fn parse_cpu_ticks(line: []const u8, core_id: u16) CoreTicks {
     var it = std.mem.tokenizeScalar(u8, line, ' ');

@@ -32,16 +32,20 @@ pub fn init(alloc: std.mem.Allocator, daemon: *Daemon) !@This() {
 }
 
 pub fn run(self: *@This(), permits: *std.Io.Semaphore, stream: std.Io.net.Stream) void {
+    defer {
+        _ = self.allocator.reset(.{ .retain_with_limit = worker_heap_mem });
+        self.running = false;
+        permits.post(self.daemon.io);
+    }
     self._run(stream) catch |err| {
+        if (err == error.ReAssigned)
+            return;
         self.daemon.term.err("worker error: {any}", .{err});
         if (@errorReturnTrace()) |trace|
             std.debug.dumpErrorReturnTrace(trace);
     };
 
     stream.close(self.daemon.io);
-    _ = self.allocator.reset(.{ .retain_with_limit = worker_heap_mem });
-    self.running = false;
-    permits.post(self.daemon.io);
 }
 
 fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
@@ -116,7 +120,11 @@ fn _run(self: *@This(), stream: std.Io.net.Stream) !void {
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
         },
-        else => {},
+        .system_stats => {
+            const req = try conn.recv_object(self.allocator.allocator(), proto.system.stats.Req);
+            try self.daemon.stats_server.add_listener(stream, req.from);
+            return error.ReAssigned;
+        },
     }
 }
 

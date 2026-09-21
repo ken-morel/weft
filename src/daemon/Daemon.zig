@@ -8,9 +8,9 @@ const Connection = @import("../wire/Connection.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const Server = @import("Server.zig");
 const SharedPressor = @import("SharedPressor.zig");
+const StatsServer = @import("StatsServer.zig");
 const Task = @import("Task.zig");
 const Worker = @import("Worker.zig");
-const Monitor = @import("../util/Monitor.zig");
 
 io: std.Io,
 alloc: std.mem.Allocator,
@@ -19,10 +19,12 @@ server: Server,
 config: DaemonInstall.Config,
 term: *Term,
 pressor: SharedPressor,
+stats_server: StatsServer,
 
 pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
     self.pressor.deinit(self.alloc);
+    self.stats_server.deinit();
     std.zon.parse.free(self.alloc, self.config);
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
@@ -41,17 +43,8 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
         .server = server,
         .term = term,
         .pressor = try .init(alloc, io),
+        .stats_server = try .init(alloc, io, term),
     };
-}
-
-pub fn run_system_monitor(self: *@This()) !void {
-    var mon = Monitor{};
-    defer mon.deinit(self.alloc);
-    while (true) {
-        const stats = try mon.fetch(self.alloc, self.io);
-        defer stats.free(self.alloc);
-        try std.Io.sleep(self.io, .fromSeconds(2), .awake);
-    }
 }
 
 pub fn run_client_server(self: *@This()) !void {
@@ -92,8 +85,6 @@ pub fn run_client_server(self: *@This()) !void {
         );
     }
 }
-
-
 
 pub fn run_system_server(self: *@This()) !void {
     var group: std.Io.Group = .init;
@@ -167,7 +158,7 @@ pub fn run_system_server(self: *@This()) !void {
 pub fn run(self: *@This()) !void {
     self.term.debug("max workers: {d}", .{self.config.max_workers});
     _ = std.Io.async(self.io, run_client_server, .{self});
-    _ = std.Io.async(self.io, run_system_monitor, .{self});
+    _ = std.Io.async(self.io, StatsServer.run, .{&self.stats_server});
 
     try self.run_system_server();
 }

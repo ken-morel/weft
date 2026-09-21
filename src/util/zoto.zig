@@ -348,7 +348,7 @@ fn readSlice(src: *[]const u8, len: usize) ![]const u8 {
 }
 
 fn readInt(src: *[]const u8, comptime IntT: type) !IntT {
-    const size = @sizeOf(IntT);
+    const size = @divExact(@typeInfo(IntT).int.bits, 8);
     if (src.len < size)
         return error.BufferTooSmall;
     const val = std.mem.readInt(IntT, src.*[0..size], .little);
