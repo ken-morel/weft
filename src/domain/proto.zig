@@ -51,26 +51,21 @@ pub const artifact = struct {
 pub const task = struct {
     pub const Id = struct {
         workspace: []const u8,
-        service: []const u8,
         deployment: Deployment.Id,
         pipeline: []const u8,
         pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
             const workspace = try alloc.dupe(u8, self.workspace);
             errdefer alloc.free(workspace);
-            const service = try alloc.dupe(u8, self.service);
-            errdefer alloc.free(service);
             const pipeline = try alloc.dupe(u8, self.pipeline);
             errdefer alloc.free(pipeline);
             return .{
                 .workspace = workspace,
-                .service = service,
                 .deployment = self.deployment,
                 .pipeline = pipeline,
             };
         }
         pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
             alloc.free(self.workspace);
-            alloc.free(self.service);
             alloc.free(self.pipeline);
         }
     };

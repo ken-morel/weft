@@ -6,7 +6,7 @@ pub const Step = @import("Step.zig");
 
 id: Id,
 
-service: Weft,
+config: Weft,
 artifacts: []Artifact = &.{},
 running: []Step = &.{},
 targets: []Step = &.{},
@@ -124,7 +124,7 @@ const resolve_pipeline_max_depth: u16 = 100;
 pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !StepStatus {
     if (depth >= resolve_pipeline_max_depth)
         return error.CyclicPipeline;
-    if (self.service.get_pipeline(pipeline_name)) |pipeline| {
+    if (self.config.get_pipeline(pipeline_name)) |pipeline| {
         for (pipeline.outputs) |output|
             if (self.get_artifact(output.name)) |_|
                 return .done;
@@ -139,7 +139,7 @@ pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !S
         var needs: ?[]const u8 = null;
 
         for (pipeline.inputs) |input| {
-            other_pipeline: for (self.service.pipelines) |other_pipeline| {
+            other_pipeline: for (self.config.pipelines) |other_pipeline| {
                 blk: {
                     for (other_pipeline.outputs) |output|
                         if (std.mem.eql(u8, output.name, input.name))
@@ -174,11 +174,11 @@ pub fn completed(self: @This()) bool {
     return self.next_target() == null;
 }
 
-pub fn create(io: std.Io, service: Weft, targets: []Step) !@This() {
+pub fn create(io: std.Io, config: Weft, targets: []Step) !@This() {
     const id = try Id.now(io);
     return .{
         .id = id,
-        .service = service,
+        .config = config,
         .artifacts = &.{},
         .running = &.{},
         .targets = targets,

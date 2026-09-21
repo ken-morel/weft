@@ -58,7 +58,6 @@ pub const Pipeline = struct {
     env: []struct { []const u8, []const u8 } = &.{},
 };
 
-name: []const u8,
 workspace: []const u8,
 
 databases: []const struct {} = &.{},

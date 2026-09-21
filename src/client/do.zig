@@ -27,7 +27,7 @@ pub fn run(
     if (maybe_continue_id) |id| {
         deployment = try project.load_deployment(alloc, io, id);
         if (project.get_config(alloc, io)) |config| {
-            deployment.service = config;
+            deployment.config = config;
         } else |_| {}
         if (targets.len > 0) {
             const owned_targets = try alloc.dupe(Step, targets);

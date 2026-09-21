@@ -31,8 +31,7 @@ fn follow_step(
 ) !void {
     _ = term;
     const task_id: proto.task.Id = .{
-        .workspace = deployment.service.workspace,
-        .service = deployment.service.name,
+        .workspace = deployment.config.workspace,
         .deployment = deployment.id,
         .pipeline = pipeline.name,
     };
@@ -221,7 +220,7 @@ pub fn run(
             }
         }
         if (!found) {
-            if (deployment.service.get_pipeline(filter)) |_| {
+            if (deployment.config.get_pipeline(filter)) |_| {
                 try steps_list.append(alloc, .{ .remote = "local", .pipeline = filter });
             } else {
                 term.err("pipeline '{s}' not found in deployment", .{filter});
@@ -250,7 +249,7 @@ pub fn run(
             return error.InvalidRemote;
         };
 
-        const pipeline = deployment.service.get_pipeline(step.pipeline) orelse {
+        const pipeline = deployment.config.get_pipeline(step.pipeline) orelse {
             term.err("pipeline '{s}' not found", .{step.pipeline});
             return error.InvalidPipeline;
         };

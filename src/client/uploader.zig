@@ -109,8 +109,7 @@ pub fn send_required_artifacts(
             .{ alloc, io, term, proto.task.Id{
                 .deployment = deployment.id,
                 .pipeline = input.name,
-                .service = deployment.service.name,
-                .workspace = deployment.service.workspace,
+                .workspace = deployment.config.workspace,
             }, &project, &deployment, remotes, remote, &failed },
         );
     }

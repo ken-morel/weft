@@ -219,7 +219,6 @@ pub fn get_artifact_path(
     return try std.fs.path.join(alloc, &.{
         "/var/lib/weft/artifacts/",
         art.workspace,
-        art.service,
         &uuid,
         art.pipeline,
     });

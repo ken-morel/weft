@@ -31,12 +31,10 @@ const Sample = struct {
     disk_w_rate: f32,
 };
 
-const ServiceInfo = struct {
+const TaskInfo = struct {
     workspace: [64]u8,
     workspace_len: usize,
     deployment: [8]u8,
-    service: [64]u8,
-    service_len: usize,
     pipeline: [64]u8,
     pipeline_len: usize,
     cpu_pct: f32,
@@ -53,9 +51,9 @@ const LatestInfo = struct {
     cpu_freq: u64,
     cpu_model: [64]u8,
     cpu_model_len: usize,
-    services_count: usize,
-    services: [16]ServiceInfo,
-    services_len: usize,
+    tasks_count: usize,
+    tasks: [16]TaskInfo,
+    tasks_len: usize,
 };
 
 const RemoteEntry = struct {
@@ -165,31 +163,30 @@ const MonitorState = struct {
             .cpu_freq = stat.cpu.freq,
             .cpu_model = undefined,
             .cpu_model_len = 0,
-            .services_count = stat.services.len,
-            .services = undefined,
-            .services_len = 0,
+            .tasks_count = stat.services.len,
+            .tasks = undefined,
+            .tasks_len = 0,
         };
         const model_len = @min(stat.cpu.model.len, info.cpu_model.len);
         @memcpy(info.cpu_model[0..model_len], stat.cpu.model[0..model_len]);
         info.cpu_model_len = model_len;
 
-        const max_svcs = @min(stat.services.len, 16);
-        for (stat.services[0..max_svcs], 0..) |svc, i| {
+        const max_tasks = @min(stat.services.len, 16);
+        for (stat.services[0..max_tasks], 0..) |svc, i| {
             const dep_str = svc.task.id.deployment.to_string();
-            var svc_cpu_pct: f32 = 0.0;
+            var task_cpu_pct: f32 = 0.0;
             if (entry.latest_info) |prev_info| {
                 if (entry.last_time) |last_t| {
                     const dt_ns = stat.time.nanoseconds - last_t.nanoseconds;
                     if (dt_ns > 100_000_000) {
-                        for (prev_info.services[0..prev_info.services_len]) |prev_s| {
+                        for (prev_info.tasks[0..prev_info.tasks_len]) |prev_s| {
                             if (std.mem.eql(u8, prev_s.workspace[0..prev_s.workspace_len], svc.task.id.workspace) and
-                                std.mem.eql(u8, prev_s.service[0..prev_s.service_len], svc.task.id.service) and
                                 std.mem.eql(u8, prev_s.pipeline[0..prev_s.pipeline_len], svc.task.id.pipeline) and
                                 std.mem.eql(u8, &prev_s.deployment, &dep_str))
                             {
                                 const dt_usec = @divTrunc(dt_ns, 1000);
                                 const delta_usec = svc.cpu_usage_usec -| prev_s.cpu_usec;
-                                svc_cpu_pct = @as(f32, @floatFromInt(delta_usec)) * 100.0 / @as(f32, @floatFromInt(dt_usec));
+                                task_cpu_pct = @as(f32, @floatFromInt(delta_usec)) * 100.0 / @as(f32, @floatFromInt(dt_usec));
                                 break;
                             }
                         }
@@ -197,34 +194,28 @@ const MonitorState = struct {
                 }
             }
 
-            var s_info: ServiceInfo = .{
+            var t_info: TaskInfo = .{
                 .workspace = undefined,
                 .workspace_len = 0,
                 .deployment = dep_str,
-                .service = undefined,
-                .service_len = 0,
                 .pipeline = undefined,
                 .pipeline_len = 0,
-                .cpu_pct = svc_cpu_pct,
+                .cpu_pct = task_cpu_pct,
                 .cpu_ms = svc.cpu_usage_usec / 1000,
                 .cpu_usec = svc.cpu_usage_usec,
                 .mem_bytes = svc.memory_bytes,
             };
-            const ws_len = @min(svc.task.id.workspace.len, s_info.workspace.len);
-            @memcpy(s_info.workspace[0..ws_len], svc.task.id.workspace[0..ws_len]);
-            s_info.workspace_len = ws_len;
+            const ws_len = @min(svc.task.id.workspace.len, t_info.workspace.len);
+            @memcpy(t_info.workspace[0..ws_len], svc.task.id.workspace[0..ws_len]);
+            t_info.workspace_len = ws_len;
 
-            const svc_len = @min(svc.task.id.service.len, s_info.service.len);
-            @memcpy(s_info.service[0..svc_len], svc.task.id.service[0..svc_len]);
-            s_info.service_len = svc_len;
+            const pip_len = @min(svc.task.id.pipeline.len, t_info.pipeline.len);
+            @memcpy(t_info.pipeline[0..pip_len], svc.task.id.pipeline[0..pip_len]);
+            t_info.pipeline_len = pip_len;
 
-            const pip_len = @min(svc.task.id.pipeline.len, s_info.pipeline.len);
-            @memcpy(s_info.pipeline[0..pip_len], svc.task.id.pipeline[0..pip_len]);
-            s_info.pipeline_len = pip_len;
-
-            info.services[i] = s_info;
+            info.tasks[i] = t_info;
         }
-        info.services_len = max_svcs;
+        info.tasks_len = max_tasks;
         entry.latest_info = info;
 
         entry.last_time = stat.time;
@@ -517,45 +508,35 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
             const tot_str = format_bytes(&mem_tot_buf, info.ram_total);
             const av_str = format_bytes(&mem_avail_buf, info.ram_avail);
 
-            if (info.services_count > 0) {
-                term.println("   \x1b[2mRAM: {s}/{s} (avail: {s}) | Tasks ({d}):\x1b[0m", .{ u_str, tot_str, av_str, info.services_count });
+            if (info.tasks_count > 0) {
+                term.println("   \x1b[2mRAM: {s}/{s} (avail: {s}) | Tasks ({d}):\x1b[0m", .{ u_str, tot_str, av_str, info.tasks_count });
                 lines += 1;
-                for (info.services[0..info.services_len]) |svc| {
+                for (info.tasks[0..info.tasks_len]) |task| {
                     if (state.task_filter) |filter| {
                         var matches = false;
-                        if (std.mem.eql(u8, svc.pipeline[0..svc.pipeline_len], filter) or
-                            std.mem.eql(u8, svc.service[0..svc.service_len], filter) or
-                            std.mem.eql(u8, svc.workspace[0..svc.workspace_len], filter) or
-                            std.mem.eql(u8, &svc.deployment, filter))
+                        if (std.mem.eql(u8, task.pipeline[0..task.pipeline_len], filter) or
+                            std.mem.eql(u8, task.workspace[0..task.workspace_len], filter) or
+                            std.mem.eql(u8, &task.deployment, filter))
                         {
                             matches = true;
-                        } else {
-                            var full_name_buf: [128]u8 = undefined;
-                            const full_name = std.fmt.bufPrint(&full_name_buf, "{s}.{s}", .{
-                                svc.service[0..svc.service_len],
-                                svc.pipeline[0..svc.pipeline_len],
-                            }) catch "";
-                            if (std.mem.eql(u8, full_name, filter))
-                                matches = true;
                         }
                         if (!matches)
                             continue;
                     }
-                    var svc_mem_buf: [32]u8 = undefined;
-                    const sm_str = format_bytes(&svc_mem_buf, svc.mem_bytes);
-                    term.println("     \x1b[36m•\x1b[0m {s} {s} {s}.{s} (CPU: {d:.1}% ({d}ms), RAM: {s})", .{
-                        svc.workspace[0..svc.workspace_len],
-                        &svc.deployment,
-                        svc.service[0..svc.service_len],
-                        svc.pipeline[0..svc.pipeline_len],
-                        svc.cpu_pct,
-                        svc.cpu_ms,
+                    var task_mem_buf: [32]u8 = undefined;
+                    const sm_str = format_bytes(&task_mem_buf, task.mem_bytes);
+                    term.println("     \x1b[36m•\x1b[0m {s} {s} {s} (CPU: {d:.1}% ({d}ms), RAM: {s})", .{
+                        task.workspace[0..task.workspace_len],
+                        &task.deployment,
+                        task.pipeline[0..task.pipeline_len],
+                        task.cpu_pct,
+                        task.cpu_ms,
                         sm_str,
                     });
                     lines += 1;
                 }
-                if (info.services_count > info.services_len and state.task_filter == null) {
-                    term.println("     \x1b[2m+ {d} more tasks running...\x1b[0m", .{ info.services_count - info.services_len });
+                if (info.tasks_count > info.tasks_len and state.task_filter == null) {
+                    term.println("     \x1b[2m+ {d} more tasks running...\x1b[0m", .{ info.tasks_count - info.tasks_len });
                     lines += 1;
                 }
             } else {

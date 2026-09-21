@@ -51,8 +51,7 @@ pub const Fetcher = struct {
         const task_id: proto.task.Id = .{
             .deployment = self.deployment.id,
             .pipeline = artifact,
-            .service = self.deployment.service.name,
-            .workspace = self.deployment.service.workspace,
+            .workspace = self.deployment.config.workspace,
         };
 
         const buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
@@ -185,8 +184,7 @@ pub const Fetcher = struct {
         const task_id: proto.task.Id = .{
             .deployment = self.deployment.id,
             .pipeline = artifact,
-            .service = self.deployment.service.name,
-            .workspace = self.deployment.service.workspace,
+            .workspace = self.deployment.config.workspace,
         };
 
         try conn.send_object(send_buffer, proto.Request, .artifact_push);
@@ -296,8 +294,7 @@ pub const Fetcher = struct {
         const task_id: proto.task.Id = .{
             .deployment = self.deployment.id,
             .pipeline = artifact,
-            .service = self.deployment.service.name,
-            .workspace = self.deployment.service.workspace,
+            .workspace = self.deployment.config.workspace,
         };
 
         try client.conn.send_object(conn_buffer, proto.Request, .artifact_pull);
@@ -420,7 +417,7 @@ pub fn run_deployment(
                         break :remote remote;
                 } else return error.InvalidRemote;
 
-                const pipeline = deployment.service.get_pipeline(step.pipeline) orelse
+                const pipeline = deployment.config.get_pipeline(step.pipeline) orelse
                     return error.InvalidPipeline;
 
                 _ = try state.add(remote, pipeline);
@@ -467,7 +464,7 @@ pub fn spawn_step(
     var merged_env: std.StringHashMapUnmanaged([]const u8) = .empty;
     defer merged_env.deinit(alloc);
 
-    for (deployment.service.env) |entry|
+    for (deployment.config.env) |entry|
         try merged_env.put(alloc, entry.@"0", entry.@"1");
 
     for (pipeline.required_env) |key| {
@@ -514,8 +511,7 @@ pub fn spawn_step(
     const task_id: proto.task.Id = .{
         .deployment = deployment.id,
         .pipeline = pipeline.name,
-        .service = deployment.service.name,
-        .workspace = deployment.service.workspace,
+        .workspace = deployment.config.workspace,
     };
 
     {

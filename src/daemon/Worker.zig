@@ -136,7 +136,6 @@ fn handle_artifact_has(self: *@This(), conn: *Connection) proto.Res(proto.artifa
     const artifact_dir_path = try paths.artifact(
         alloc,
         id.workspace,
-        id.service,
         &deployment,
         id.pipeline,
     );
@@ -162,9 +161,8 @@ fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artif
     const id = &req.header.id;
     const deployment = id.deployment.to_string();
 
-    self.daemon.term.info("artifact pull: {s}/{s}/{s}/{s}", .{
+    self.daemon.term.info("artifact pull: {s}/{s}/{s}", .{
         id.workspace,
-        id.service,
         &id.deployment.to_string(),
         id.pipeline,
     });
@@ -172,7 +170,6 @@ fn handle_artifact_pull(self: *@This(), conn: *Connection) proto.Res(proto.artif
     const artifact_dir_path = try paths.artifact(
         alloc,
         id.workspace,
-        id.service,
         &deployment,
         id.pipeline,
     );
@@ -236,9 +233,8 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
     const id = &req.id;
     const deployment = id.deployment.to_string();
 
-    self.daemon.term.info("artifact push: {s}/{s}/{s}/{s}", .{
+    self.daemon.term.info("artifact push: {s}/{s}/{s}", .{
         id.workspace,
-        id.service,
         &id.deployment.to_string(),
         id.pipeline,
     });
@@ -246,7 +242,6 @@ fn handle_artifact_push(self: *@This(), conn: *Connection) proto.Res(proto.artif
     const artifact_dir_path = try paths.artifact(
         alloc,
         id.workspace,
-        id.service,
         &deployment,
         id.pipeline,
     );
@@ -335,9 +330,8 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
 
     const deployment = req.task.deployment.to_string();
 
-    term.info("task spawn: {s}/{s}/{s}/{s}", .{
+    term.info("task spawn: {s}/{s}/{s}", .{
         req.task.workspace,
-        req.task.service,
         &deployment,
         req.task.pipeline,
     });
@@ -348,12 +342,10 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
         []const u8,
         req.pipeline.inputs.len,
     );
-    // --- verify inputs
     for (req.pipeline.inputs, 0..) |input, i| {
         const path = try paths.artifact(
             alloc,
             req.task.workspace,
-            req.task.service,
             &deployment,
             input.name,
         );
@@ -370,7 +362,6 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
         input_dirs[i] = path;
     }
 
-    // --- setup run
     const run_dir_path = try task.run_dir_path(alloc);
 
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, run_dir_path);
@@ -379,7 +370,6 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     const cwd_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "cwd" });
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, cwd_dir_path);
 
-    // --- setup script
     const script_path = try std.fs.path.join(alloc, &.{ run_dir_path, "bin" });
     const script_file = try std.Io.Dir.cwd().createFile(self.daemon.io, script_path, .{
         .permissions = .executable_file,
@@ -400,8 +390,6 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     script_file.close(io);
     term.debug("wrote script: {s}", .{script_path});
 
-    // --- setup env and state
-
     const home_dir_path = try paths.home(alloc, req.task.workspace);
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, home_dir_path);
 
@@ -410,7 +398,6 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 1);
     try state_dirs.append(alloc, paths.state_dir(cwd_dir_path));
     try state_dirs.append(alloc, paths.state_dir(home_dir_path));
-    // --- setup pipeline outputs
 
     for (req.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
@@ -424,10 +411,8 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     const input_dir = try paths.artifacts(
         alloc,
         req.task.workspace,
-        req.task.service,
         &deployment,
     );
-    // setup pipeline keep
     var bind_paths: std.ArrayList([]const u8) = .empty;
     for (req.pipeline.keep) |keep| {
         const cache_path = try task.keep_path(alloc, keep.@"0");
