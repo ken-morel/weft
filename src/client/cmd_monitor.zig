@@ -250,41 +250,19 @@ fn format_bar_number(buf: []u8, value: f32, prev: ?f32, color: bool) []const u8 
 
     const num_colored = @min(6, @as(usize, @intFromFloat((clamped / 100.0) * 6.0 + 0.5)));
     const delta = if (prev) |p| value - p else 0.0;
-    const abs_delta = @abs(delta);
 
-    const bg_code: []const u8 = if (clamped >= 90.0 or abs_delta >= 40.0)
-        "\x1b[48;5;196m\x1b[38;5;231m\x1b[1m"
-    else if (abs_delta >= 25.0)
-        if (delta > 0)
-            "\x1b[48;5;202m\x1b[38;5;231m\x1b[1m"
-        else
-            "\x1b[48;5;125m\x1b[38;5;231m\x1b[1m"
-    else if (abs_delta >= 15.0)
-        if (delta > 0)
-            "\x1b[48;5;208m\x1b[38;5;16m\x1b[1m"
-        else
-            "\x1b[48;5;162m\x1b[38;5;231m\x1b[1m"
-    else if (abs_delta >= 8.0)
-        if (delta > 0)
-            "\x1b[48;5;220m\x1b[38;5;16m\x1b[1m"
-        else
-            "\x1b[48;5;98m\x1b[38;5;231m\x1b[1m"
-    else if (abs_delta >= 4.0)
-        if (delta > 0)
-            "\x1b[48;5;45m\x1b[38;5;16m\x1b[1m"
-        else
-            "\x1b[48;5;33m\x1b[38;5;231m\x1b[1m"
-    else if (abs_delta >= 1.5)
-        if (delta > 0)
-            "\x1b[48;5;36m\x1b[38;5;16m\x1b[1m"
-        else
-            "\x1b[48;5;31m\x1b[38;5;231m\x1b[1m"
-    else if (clamped >= 75.0)
-        "\x1b[48;5;166m\x1b[38;5;231m\x1b[1m"
-    else if (clamped >= 50.0)
-        "\x1b[48;5;106m\x1b[38;5;16m\x1b[1m"
+    const bg_code: []const u8 = if (clamped >= 85.0 or delta >= 50.0)
+        "\x1b[41m\x1b[37m\x1b[1m"
+    else if (clamped >= 70.0 or delta >= 25.0)
+        "\x1b[48;5;208m\x1b[30m\x1b[1m"
+    else if (clamped >= 50.0 or delta >= 10.0)
+        "\x1b[43m\x1b[30m\x1b[1m"
+    else if (delta <= -25.0)
+        "\x1b[48;5;24m\x1b[37m\x1b[1m"
+    else if (delta <= -10.0)
+        "\x1b[48;5;30m\x1b[37m\x1b[1m"
     else
-        "\x1b[48;5;28m\x1b[38;5;231m\x1b[1m";
+        "\x1b[42m\x1b[30m\x1b[1m";
 
     var writer: std.Io.Writer = .fixed(buf);
     if (num_colored > 0) {
@@ -720,15 +698,15 @@ test "format_bar_number with color" {
     var buf: [128]u8 = undefined;
     const s_stable = format_bar_number(&buf, 29.56, 30.0, true);
     try std.testing.expect(s_stable.len > 6);
-    try std.testing.expect(std.mem.indexOf(u8, s_stable, "\x1b[48;5;28m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s_stable, "\x1b[42m") != null);
 
     const s_spike = format_bar_number(&buf, 85.0, 10.0, true);
     try std.testing.expect(s_spike.len > 6);
-    try std.testing.expect(std.mem.indexOf(u8, s_spike, "\x1b[48;5;196m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s_spike, "\x1b[41m") != null);
 
     const s_drop = format_bar_number(&buf, 20.0, 50.0, true);
     try std.testing.expect(s_drop.len > 6);
-    try std.testing.expect(std.mem.indexOf(u8, s_drop, "\x1b[48;5;125m") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s_drop, "\x1b[48;5;24m") != null);
 }
 
 test "format_rate and format_bytes" {
