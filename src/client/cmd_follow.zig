@@ -1,19 +1,20 @@
 const std = @import("std");
 
+const proto = @import("../domain/proto.zig");
+const spawn = @import("../domain/spawn.zig").spawn;
+const Term = @import("../domain/Term.zig");
+const Weft = @import("../domain/Weft.zig");
+const Connection = @import("../wire/Connection.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
+const Fetcher = @import("Fetcher.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
-const Step = @import("Step.zig");
-const Term = @import("../domain/Term.zig");
-const Weft = @import("../domain/Weft.zig");
-const Connection = @import("../wire/Connection.zig");
-const proto = @import("../domain/proto.zig");
-const spawn = @import("../domain/spawn.zig").spawn;
 const runner = @import("runner.zig");
+const Step = @import("Step.zig");
 
 fn follow_step(
     alloc: std.mem.Allocator,
@@ -25,7 +26,7 @@ fn follow_step(
     deployment: *Deployment,
     remote: *const Remote,
     pipeline: *const Weft.Pipeline,
-    fetcher: *runner.Fetcher,
+    fetcher: *Fetcher,
     step: Deployment.Step,
     group: *std.Io.Group,
 ) !void {
@@ -101,10 +102,13 @@ fn follow_step(
                 defer deployment_lock.unlock(io);
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
-                if (pipeline.outputs.len == 0)
-                    try deployment.add_artifact(alloc, step.remote, step.pipeline, "");
-                for (pipeline.outputs) |output| {
-                    try deployment.add_artifact(alloc, step.remote, step.pipeline, output);
+
+                for (pipeline.outputs()) |output| {
+                    try deployment.add_artifact(alloc, .{
+                        .remote = step.remote,
+                        .pipeline = step.pipeline,
+                        .name = output,
+                    });
                     try fetcher.spawn_fetch(io, group, output);
                 }
 
@@ -194,7 +198,7 @@ pub fn run(
     defer state.deinit();
     var depl: std.Io.RwLock = .init;
 
-    var fetcher: runner.Fetcher = .{
+    var fetcher: Fetcher = .{
         .alloc = alloc,
         .deployment = &deployment,
         .depl = &depl,
@@ -292,6 +296,6 @@ pub fn run(
     }
 
     try group.await(io);
-    try view.finish(io);
+    try view.update(io);
     term.success("follow completed", .{});
 }

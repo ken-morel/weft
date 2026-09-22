@@ -341,9 +341,9 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     const input_dirs = input_dirs: {
         var input_dirs = try alloc.alloc(
             []const u8,
-            req.pipeline.inputs.len,
+            req.pipeline.inputs().len,
         );
-        for (req.pipeline.inputs, 0..) |input, i| {
+        for (req.pipeline.inputs(), 0..) |input, i| {
             const path = try paths.artifact(
                 alloc,
                 req.task.workspace,
@@ -406,12 +406,12 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
 
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
-    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 2);
+    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs().len + 2);
     try state_dirs.append(alloc, paths.state_dir(cwd_dir_path));
     if (is_default_runner)
         try state_dirs.append(alloc, paths.state_dir(home_dir_path));
 
-    for (req.pipeline.outputs) |output| {
+    for (req.pipeline.outputs()) |output| {
         const path = try std.fs.path.join(alloc, &.{
             output_dir_path,
             output,

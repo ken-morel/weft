@@ -30,8 +30,8 @@ pub const Pipeline = struct {
     };
 
     name: []const u8,
-    inputs: []const Input = &.{},
-    outputs: []const Output = &.{},
+    in: []const Input = &.{},
+    out: ?[]const Output = null,
     run: Run = .default,
 
     max_ram: ?u64 = null,
@@ -56,9 +56,17 @@ pub const Pipeline = struct {
     ports: []const struct {} = &.{},
     runtimes: []const struct {} = &.{},
     env: []struct { []const u8, []const u8 } = &.{},
+
+    pub fn inputs(self: @This()) []const []const u8 {
+        return self.in;
+    }
+    pub fn outputs(self: @This()) []const []const u8 {
+        return self.out orelse &.{self.name};
+    }
 };
 
 workspace: []const u8,
+sources: ?[]const struct { []const u8, []const u8 } = null,
 
 databases: []const struct {} = &.{},
 ports: []const struct {} = &.{},
@@ -74,4 +82,14 @@ pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
         if (std.mem.eql(u8, pipeline.name, name))
             return pipeline;
     return null;
+}
+pub fn get_sources(self: @This()) []const struct { []const u8, []const u8 } {
+    return if (self.sources) |s|
+        s
+    else
+        &.{.{ "src", "." }};
+}
+
+pub fn is_source_artifact(p: []const u8) bool {
+    return std.mem.startsWith(u8, p, "src.") or std.mem.eql(u8, p, "src");
 }

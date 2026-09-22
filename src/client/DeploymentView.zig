@@ -89,7 +89,7 @@ fn print_log_tail(self: *@This(), io: std.Io, pipeline_name: []const u8, max_lin
         var line = std.mem.trimEnd(u8, lines[i], "\r");
         if (line.len > col_limit)
             line = line[0..col_limit];
-        self.term.println("{s}{s}", .{ prefix, line });
+        println(self.term, "{s}{s}", .{ prefix, line });
         printed += 1;
     }
     return printed;
@@ -114,14 +114,17 @@ fn print_truncated(self: *@This(), cols: u16, comptime fmt: []const u8, args: an
         @min(text.len, @as(usize, cols))
     else
         text.len;
-    self.term.println("{s}", .{text[0..limit]});
+    println(self.term, "{s}", .{text[0..limit]});
+}
+fn println(term: *Term, comptime fmt: []const u8, args: anytype) void {
+    term.clear_line();
+    term.println(fmt, args);
 }
 
 pub fn update(self: *@This(), io: std.Io) !void {
     if (self.term.color)
         if (self.rendered_lines > 0) {
             self.term.move_up(self.rendered_lines);
-            self.term.clear_to_end();
             self.rendered_lines = 0;
         };
     const term_size = self.term.get_size();
@@ -132,11 +135,11 @@ pub fn update(self: *@This(), io: std.Io) !void {
             continue;
 
         if (step.status == .completed) {
-            self.term.println("{s}.{s} done", .{ step.remote.get_name(), step.pipeline.name });
+            println(self.term, "{s}.{s} done", .{ step.remote.get_name(), step.pipeline.name });
             try self.mark_finalized(key);
         } else if (step.status == .err) {
-            self.term.println("error: [{s}] {s}: {s}", .{ step.remote.get_name(), step.pipeline.name, step.err orelse "failed" });
-            _ = try self.print_log_tail(io, step.pipeline.name, 10, term_size.cols);
+            println(self.term, "error: {s}.{s}: {s}", .{ step.remote.get_name(), step.pipeline.name, step.err orelse "failed" });
+            _ = try self.print_log_tail(io, step.pipeline.name, 50, term_size.cols);
             try self.mark_finalized(key);
         }
     }
@@ -171,7 +174,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
     for (self.state.steps.items) |step| {
         if (step.status == .preparing) {
-            self.print_truncated(term_size.cols, "? [{s}] {s}", .{ step.remote.get_name(), step.pipeline.name });
+            self.print_truncated(term_size.cols, "? {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
             lines_count += 1;
         } else if (step.status == .running) {
             var stats_buf: [128]u8 = undefined;
@@ -192,7 +195,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
                     }) catch "";
                 }
             }
-            self.print_truncated(term_size.cols, "[running] [{s}] {s}{s}", .{ step.remote.get_name(), step.pipeline.name, stats_str });
+            self.print_truncated(term_size.cols, "! {s}.{s}{s}", .{ step.remote.get_name(), step.pipeline.name, stats_str });
             lines_count += 1;
             const log_lines = try self.print_log_tail(io, step.pipeline.name, per_task_logs, term_size.cols);
             lines_count += log_lines;
@@ -202,44 +205,16 @@ pub fn update(self: *@This(), io: std.Io) !void {
     for (self.state.artifacts.items) |art| {
         if (art.status == .pulling) {
             const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
-            self.print_truncated(term_size.cols, "<< [{s}] {s} ({d}%)", .{ art.remote.get_name(), art.name, pct });
+            self.print_truncated(term_size.cols, "<< {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
             lines_count += 1;
         } else if (art.status == .pushing) {
             const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
-            self.print_truncated(term_size.cols, ">> [{s}] {s} ({d}%)", .{ art.remote.get_name(), art.name, pct });
+            self.print_truncated(term_size.cols, ">> {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
             lines_count += 1;
         }
     }
 
     self.rendered_lines = lines_count;
-    try self.term.flush();
-}
-
-pub fn finish(self: *@This(), io: std.Io) !void {
-    if (self.term.color and self.rendered_lines > 0) {
-        self.term.move_up(self.rendered_lines);
-        self.term.clear_to_end();
-        self.rendered_lines = 0;
-    }
-
-    for (self.state.steps.items) |step| {
-        const key = try std.fmt.allocPrint(self.alloc, "{s}:{s}", .{ step.remote.get_name(), step.pipeline.name });
-        defer self.alloc.free(key);
-        if (self.is_finalized(key))
-            continue;
-
-        if (step.status == .completed) {
-            self.term.println("ok: [{s}] {s}", .{ step.remote.get_name(), step.pipeline.name });
-            try self.mark_finalized(key);
-        } else if (step.status == .err) {
-            self.term.println("error: [{s}] {s}: {s}", .{ step.remote.get_name(), step.pipeline.name, step.err orelse "failed" });
-            const term_size = self.term.get_size();
-            _ = try self.print_log_tail(io, step.pipeline.name, 20, term_size.cols);
-            try self.mark_finalized(key);
-        } else {
-            self.term.println("cancelled: [{s}] {s}", .{ step.remote.get_name(), step.pipeline.name });
-            try self.mark_finalized(key);
-        }
-    }
+    self.term.clear_to_end();
     try self.term.flush();
 }

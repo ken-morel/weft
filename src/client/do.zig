@@ -17,16 +17,16 @@ pub fn run(
     project: Project,
     inst: ClientInstall,
     targets: []const Step,
-    maybe_continue_id: ?Deployment.Id,
+    continue_id: ?Deployment.Id,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var alloc = arena.allocator();
 
     var deployment: Deployment = undefined;
-    if (maybe_continue_id) |id| {
+    if (continue_id) |id| {
         deployment = try project.load_deployment(alloc, io, id);
-        if (project.get_config(alloc, io)) |config| {
+        if (project.get_config(alloc, term, io)) |config| {
             deployment.config = config;
         } else |_| {}
         if (targets.len > 0) {
@@ -36,7 +36,7 @@ pub fn run(
         term.info("continuing deployment {s}", .{&deployment.id.to_string()});
     } else {
         const owned_targets = try alloc.dupe(Step, targets);
-        const config = try project.get_config(alloc, io);
+        const config = try project.get_config(alloc, term, io);
         deployment = try Deployment.create(io, config, owned_targets);
         try deployment.save(alloc, io, project);
         term.info(
@@ -45,13 +45,14 @@ pub fn run(
         );
     }
 
-    const artifact_dir_path = try project.artifact_dir_path(alloc, io, deployment.id, "src");
-    defer alloc.free(artifact_dir_path);
-    std.Io.Dir.cwd().access(io, artifact_dir_path, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            try src.create_src_artifact(allocator, io, term, inst, project, deployment.id);
-        } else return err;
-    };
+    try src.create_sources(
+        alloc,
+        io,
+        term,
+        inst,
+        project,
+        &deployment,
+    );
 
     try runner.run_deployment(
         alloc,

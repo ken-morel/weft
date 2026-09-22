@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Project = @import("Project.zig");
 pub const Step = @import("Step.zig");
@@ -8,6 +9,7 @@ id: Id,
 
 config: Weft,
 artifacts: []Artifact = &.{},
+sources: [][]const u8 = &.{},
 running: []Step = &.{},
 targets: []Step = &.{},
 
@@ -92,13 +94,13 @@ pub fn next_target(self: @This()) ?*const Step {
     return null;
 }
 
-pub fn next_step(self: @This()) !?Step {
+pub fn next_step(self: @This(), term: ?*Term) !?Step {
     target: for (self.targets) |*target| {
         for (self.artifacts) |artifact|
             if (std.mem.eql(u8, artifact.pipeline, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
                 continue :target;
 
-        return switch (try self.resolve_pipeline(target.pipeline, 0)) {
+        return switch (try self.resolve_pipeline(term, target.pipeline, 0)) {
             .waits, .running => continue :target,
             .needs => |n| .{
                 .remote = target.remote,
@@ -121,14 +123,14 @@ pub const StepStatus = union(enum) {
 
 const resolve_pipeline_max_depth: u16 = 100;
 
-pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !StepStatus {
+pub fn resolve_pipeline(self: @This(), term: ?*Term, pipeline_name: []const u8, depth: u16) !StepStatus {
     if (depth >= resolve_pipeline_max_depth)
         return error.CyclicPipeline;
     if (self.config.get_pipeline(pipeline_name)) |pipeline| {
-        for (pipeline.outputs) |output|
+        for (pipeline.outputs()) |output|
             if (self.get_artifact(output)) |_|
                 return .done;
-        if (pipeline.outputs.len == 0)
+        if (pipeline.outputs().len == 0)
             for (self.artifacts) |art|
                 if (std.mem.eql(u8, art.pipeline, pipeline_name))
                     return .done;
@@ -138,21 +140,32 @@ pub fn resolve_pipeline(self: @This(), pipeline_name: []const u8, depth: u16) !S
         var waiting: ?[]const u8 = null;
         var needs: ?[]const u8 = null;
 
-        for (pipeline.inputs) |input| {
+        input: for (pipeline.inputs()) |input| {
+            if (Weft.is_source_artifact(input))
+                continue :input;
             other_pipeline: for (self.config.pipelines) |other_pipeline| {
                 blk: {
-                    for (other_pipeline.outputs) |output|
+                    for (other_pipeline.outputs()) |output| {
                         if (std.mem.eql(u8, output, input))
                             break :blk;
-                    continue :other_pipeline;
+                    } else continue :other_pipeline;
                 }
-                switch (try self.resolve_pipeline(other_pipeline.name, depth + 1)) {
-                    .done => continue,
+                break :other_pipeline switch (try self.resolve_pipeline(
+                    term,
+                    other_pipeline.name,
+                    depth + 1,
+                )) {
+                    .done => continue :input,
                     .running => waiting = other_pipeline.name,
                     .waits => |task| waiting = task,
                     .needs => |task| needs = task,
                     .runnable => needs = other_pipeline.name,
-                }
+                };
+            } else {
+                if (term) |t|
+                    t.err("Pipeline {s} has input {s} not provided by any other pipeline", .{ pipeline_name, input });
+
+                return error.InvalidInput;
             }
         }
         if (needs) |task|
@@ -208,13 +221,13 @@ pub fn remove_running(self: *@This(), alloc: std.mem.Allocator, remote: []const 
     }
 }
 
-pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, pipeline: ?[]const u8, name: []const u8) !void {
+pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, art: Artifact) !void {
     self.artifacts = try alloc.realloc(self.artifacts, self.artifacts.len + 1);
-    self.artifacts[self.artifacts.len - 1] = .{
-        .remote = remote,
-        .pipeline = pipeline orelse "",
-        .name = name,
-    };
+    self.artifacts[self.artifacts.len - 1] = art;
+}
+pub fn add_source(self: *@This(), alloc: std.mem.Allocator, src: []const u8) !void {
+    self.sources = try alloc.realloc(self.sources, self.sources.len + 1);
+    self.sources[self.sources.len - 1] = try alloc.dupe(u8, src);
 }
 
 pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) !void {

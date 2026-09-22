@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Deployment = @import("Deployment.zig");
 
@@ -11,7 +12,7 @@ pub inline fn open(dir: std.Io.Dir) !@This() {
     };
 }
 
-pub fn get_config(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
+pub fn get_config(self: @This(), alloc: std.mem.Allocator, term: ?*Term, io: std.Io) !Weft {
     @setEvalBranchQuota(100_000);
     const content = self.dir.readFileAllocOptions(
         io,
@@ -25,7 +26,13 @@ pub fn get_config(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
             return error.ConfigNotFound
         else
             return err;
-    return try std.zon.parse.fromSliceAlloc(Weft, alloc, content, null, .{});
+    var diag: std.zon.parse.Diagnostics = .{};
+    defer diag.deinit(alloc);
+    return std.zon.parse.fromSliceAlloc(Weft, alloc, content, &diag, .{}) catch |err| {
+        if (term) |t|
+            diag.format(t.writer()) catch {};
+        return err;
+    };
 }
 
 pub inline fn open_weft_dir(self: @This(), io: std.Io) !std.Io.Dir {
