@@ -115,62 +115,51 @@ pub const Size = struct {
 };
 
 pub fn get_size(self: *@This()) Size {
-    var ws: std.posix.winsize = .{
-        .row = 0,
-        .col = 0,
-        .xpixel = 0,
-        .ypixel = 0,
-    };
-    const res = self.io.operate(.{ .device_io_control = .{
-        .file = self.rw_io.@"1",
-        .code = std.posix.T.IOCGWINSZ,
-        .arg = &ws,
-    } }) catch null;
+    if (self.color) {
+        var ws: std.posix.winsize = .{
+            .row = 0,
+            .col = 0,
+            .xpixel = 0,
+            .ypixel = 0,
+        };
+        const res = self.io.operate(.{ .device_io_control = .{
+            .file = self.rw_io.@"1",
+            .code = std.posix.T.IOCGWINSZ,
+            .arg = &ws,
+        } }) catch null;
 
-    if (res) |r|
-        if (r.device_io_control >= 0 and ws.row > 0 and ws.col > 0)
-            return .{ .rows = ws.row, .cols = ws.col };
-
+        if (res) |r|
+            if (r.device_io_control >= 0 and ws.row > 0 and ws.col > 0)
+                return .{ .rows = ws.row, .cols = ws.col };
+    }
     return .{ .rows = 24, .cols = 80 };
 }
 
-pub inline fn is_tty(self: @This()) bool {
-    return self.color;
-}
-
 pub fn move_up(self: *@This(), n: u16) void {
-    if (!self.color or n == 0)
+    if (n == 0)
         return;
     self.writer().print("\x1b[{d}A", .{n}) catch {};
 }
 
 pub fn move_down(self: *@This(), n: u16) void {
-    if (!self.color or n == 0)
+    if (n == 0)
         return;
     self.writer().print("\x1b[{d}B", .{n}) catch {};
 }
 
 pub fn clear_to_end(self: *@This()) void {
-    if (!self.color)
-        return;
     self.writer().writeAll("\x1b[J") catch {};
 }
 
 pub fn clear_line(self: *@This()) void {
-    if (!self.color)
-        return;
     self.writer().writeAll("\x1b[2K\r") catch {};
 }
 
 pub fn hide_cursor(self: *@This()) void {
-    if (!self.color)
-        return;
     self.writer().writeAll("\x1b[?25l") catch {};
 }
 
 pub fn show_cursor(self: *@This()) void {
-    if (!self.color)
-        return;
     self.writer().writeAll("\x1b[?25h") catch {};
 }
 
@@ -188,7 +177,6 @@ pub inline fn read_line(self: *@This(), buf: []u8) ![]u8 {
 }
 
 pub fn style(self: *@This(), s: Style) void {
-    if (!self.color) return;
     self.write(s.code()) catch {};
 }
 
@@ -196,14 +184,14 @@ pub fn styled(self: *@This(), s: Style, txt: []const u8) void {
     if (!self.color) {
         self.write(txt) catch {};
         return;
+    } else {
+        self.write(s.code()) catch {};
+        self.write(txt) catch {};
+        self.write(Style.reset.code()) catch {};
     }
-    self.write(s.code()) catch {};
-    self.write(txt) catch {};
-    self.write(Style.reset.code()) catch {};
 }
 
 fn write_timestamp(self: *@This(), w: *std.Io.Writer) !void {
-    if (!self.timestamps) return;
     const io = self.io;
     const ts = std.Io.Clock.now(.real, io);
     const es = std.time.epoch.EpochSeconds{ .secs = @intCast(@max(0, ts.toSeconds())) };
@@ -233,7 +221,8 @@ pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, arg
     if (@intFromEnum(level) > @intFromEnum(self.log_level))
         return;
     const w = self.writer();
-    self.write_timestamp(w) catch {};
+    if (self.timestamps)
+        self.write_timestamp(w) catch {};
     if (self.color)
         w.writeAll(comptime tag(level, true)) catch {}
     else
@@ -281,7 +270,8 @@ pub fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) void {
 pub fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
     const w = self.writer();
-    self.write_timestamp(w) catch {};
+    if (self.timestamps)
+        self.write_timestamp(w) catch {};
     if (self.color) {
         w.writeAll(Style.bold.code()) catch {};
         w.writeAll(">> ") catch {};
@@ -295,7 +285,8 @@ pub fn success(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(Level.info) > @intFromEnum(self.log_level))
         return;
     const w = self.writer();
-    self.write_timestamp(w) catch {};
+    if (self.timestamps)
+        self.write_timestamp(w) catch {};
     if (self.color) {
         w.writeAll(Style.bold.code()) catch {};
         w.writeAll(Style.green.code()) catch {};

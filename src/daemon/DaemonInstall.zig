@@ -10,10 +10,13 @@ const Term = @import("../domain/Term.zig");
 const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
 
 pub const Config = struct {
+    const Runner = struct {
+        user: ?[]const u8 = null,
+    };
     secret: []const u8,
     port: u16 = 9338,
     max_workers: u32 = 8,
-    runner_user: []const u8 = "weft-runner",
+    runner: Runner = .{},
 
     pub fn get_secret(self: @This()) ![32]u8 {
         var secret: [32]u8 = undefined;
@@ -112,15 +115,17 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[
         const runner_user = if (maybe_user) |u|
             u
         else if (current_config) |c|
-            c.runner_user
+            c.runner.user
         else
-            "weft-runner";
+            null;
 
         const config = Config{
             .secret = secret_hex,
             .port = if (current_config) |c| c.port else 9338,
             .max_workers = if (current_config) |c| c.max_workers else 8,
-            .runner_user = runner_user,
+            .runner = .{
+                .user = runner_user,
+            },
         };
 
         var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{

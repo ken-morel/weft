@@ -410,13 +410,16 @@ fn monitor_remote_worker(
     }
 }
 
+fn println(term: *Term, comptime fmt: []const u8, args: anytype) void {
+    term.clear_line();
+    term.println(fmt, args);
+}
 fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
-    if (!term.is_tty())
+    if (!term.color)
         return;
 
     if (prev_lines.* > 0) {
         term.move_up(prev_lines.*);
-        term.clear_to_end();
         prev_lines.* = 0;
     }
 
@@ -443,25 +446,67 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
         const port = entry.remote.address.@"1";
 
         const status_str: []const u8 = switch (entry.status) {
-            .connected => "\x1b[32mconnected\x1b[0m",
+            .connected => "",
             .connecting => "\x1b[33mconnecting...\x1b[0m",
-            .disconnected => "\x1b[31mdisconnected (retrying...)\x1b[0m",
+            .disconnected => "\x1b[31mdisconnected\x1b[0m",
         };
 
-        term.println("\x1b[1m── [ {s} ({s}:{d}) ]\x1b[0m  status: {s}", .{
+        println(term, "\x1b[1m{s}@{s}:{d}\x1b[0m {s}", .{
             name,
             addr_str,
             port,
             status_str,
         });
         lines += 1;
+        if (entry.latest_info) |info| {
+            var mem_tot_buf: [32]u8 = undefined;
+            const tot_str = format_bytes(&mem_tot_buf, info.ram_total);
 
-        term.println("\x1b[2m   TIME       CPU %     RAM %    SWAP %     NET RX     NET TX    DISK R     DISK W\x1b[0m", .{});
+            println(term, "\x1b[2m ram: {s} | cpu: {s} {d}@{d}MHz | {d} tasks\x1b[0m", .{
+                tot_str,
+                info.cpu_model[0..info.cpu_model_len],
+                info.cpu_cores,
+                info.cpu_freq,
+                info.tasks_count,
+            });
+            lines += 1;
+
+            for (info.tasks[0..info.tasks_len]) |task| {
+                if (state.task_filter) |filter| {
+                    var matches = false;
+                    if (std.mem.eql(u8, task.pipeline[0..task.pipeline_len], filter) or
+                        std.mem.eql(u8, task.workspace[0..task.workspace_len], filter) or
+                        std.mem.eql(u8, &task.deployment, filter))
+                    {
+                        matches = true;
+                    }
+                    if (!matches)
+                        continue;
+                }
+                var task_mem_buf: [32]u8 = undefined;
+                const sm_str = format_bytes(&task_mem_buf, task.mem_bytes);
+                println(term, "     \x1b[36m•\x1b[0m {s} {s} {s} (CPU: {d:.1}% ({d}ms), RAM: {s})", .{
+                    task.workspace[0..task.workspace_len],
+                    &task.deployment,
+                    task.pipeline[0..task.pipeline_len],
+                    task.cpu_pct,
+                    task.cpu_ms,
+                    sm_str,
+                });
+                lines += 1;
+            }
+            if (info.tasks_count > info.tasks_len and state.task_filter == null) {
+                println(term, "     \x1b[2m+ {d} more tasks running...\x1b[0m", .{info.tasks_count - info.tasks_len});
+                lines += 1;
+            }
+        }
+
+        println(term, "\x1b[2m   TIME       CPU %     RAM %    SWAP %     NET RX     NET TX    DISK R     DISK W\x1b[0m", .{});
         lines += 1;
 
         const h_len = entry.history.items.len;
         if (h_len == 0) {
-            term.println("   \x1b[2m(waiting for statistics...)\x1b[0m", .{});
+            println(term, "   \x1b[2m(waiting for statistics...)\x1b[0m", .{});
             lines += 1;
         } else {
             const count = @min(h_len, history_limit);
@@ -486,7 +531,7 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
                 const dr_str = format_rate(&dr_buf, item.disk_r_rate);
                 const dw_str = format_rate(&dw_buf, item.disk_w_rate);
 
-                term.println("   {s}   {s}   {s}   {s}   {s} {s} {s} {s}", .{
+                println(term, "   {s}   {s}   {s}   {s}   {s} {s} {s} {s}", .{
                     t_str,
                     c_str,
                     r_str,
@@ -500,62 +545,12 @@ fn render_view(term: *Term, state: *MonitorState, prev_lines: *u16) !void {
             }
         }
 
-        if (entry.latest_info) |info| {
-            var mem_used_buf: [32]u8 = undefined;
-            var mem_tot_buf: [32]u8 = undefined;
-            var mem_avail_buf: [32]u8 = undefined;
-            const u_str = format_bytes(&mem_used_buf, info.ram_used);
-            const tot_str = format_bytes(&mem_tot_buf, info.ram_total);
-            const av_str = format_bytes(&mem_avail_buf, info.ram_avail);
-
-            if (info.tasks_count > 0) {
-                term.println("   \x1b[2mRAM: {s}/{s} (avail: {s}) | Tasks ({d}):\x1b[0m", .{ u_str, tot_str, av_str, info.tasks_count });
-                lines += 1;
-                for (info.tasks[0..info.tasks_len]) |task| {
-                    if (state.task_filter) |filter| {
-                        var matches = false;
-                        if (std.mem.eql(u8, task.pipeline[0..task.pipeline_len], filter) or
-                            std.mem.eql(u8, task.workspace[0..task.workspace_len], filter) or
-                            std.mem.eql(u8, &task.deployment, filter))
-                        {
-                            matches = true;
-                        }
-                        if (!matches)
-                            continue;
-                    }
-                    var task_mem_buf: [32]u8 = undefined;
-                    const sm_str = format_bytes(&task_mem_buf, task.mem_bytes);
-                    term.println("     \x1b[36m•\x1b[0m {s} {s} {s} (CPU: {d:.1}% ({d}ms), RAM: {s})", .{
-                        task.workspace[0..task.workspace_len],
-                        &task.deployment,
-                        task.pipeline[0..task.pipeline_len],
-                        task.cpu_pct,
-                        task.cpu_ms,
-                        sm_str,
-                    });
-                    lines += 1;
-                }
-                if (info.tasks_count > info.tasks_len and state.task_filter == null) {
-                    term.println("     \x1b[2m+ {d} more tasks running...\x1b[0m", .{ info.tasks_count - info.tasks_len });
-                    lines += 1;
-                }
-            } else {
-                term.println("   \x1b[2mRAM: {s}/{s} (avail: {s}) | CPU: {s} ({d} cores @ {d}MHz)\x1b[0m", .{
-                    u_str,
-                    tot_str,
-                    av_str,
-                    info.cpu_model[0..info.cpu_model_len],
-                    info.cpu_cores,
-                    info.cpu_freq,
-                });
-                lines += 1;
-            }
-        }
-        term.println("", .{});
+        println(term, "", .{});
         lines += 1;
     }
 
     prev_lines.* = lines;
+    term.clear_to_end();
     try term.flush();
 }
 

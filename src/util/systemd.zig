@@ -335,7 +335,7 @@ pub fn is_active(io: std.Io, unit: []const u8) !bool {
             .argv = &.{ "systemctl", "is-active", "--quiet", unit },
             .stdin = .ignore,
             .stdout = .ignore,
-            .stderr = .ignore,
+            .stderr = .inherit,
         },
     );
     const term = try child.wait(io);

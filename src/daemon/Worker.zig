@@ -338,29 +338,32 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
 
     const task: Task = .{ .id = req.task };
 
-    var input_dirs = try alloc.alloc(
-        []const u8,
-        req.pipeline.inputs.len,
-    );
-    for (req.pipeline.inputs, 0..) |input, i| {
-        const path = try paths.artifact(
-            alloc,
-            req.task.workspace,
-            &deployment,
-            input,
+    const input_dirs = input_dirs: {
+        var input_dirs = try alloc.alloc(
+            []const u8,
+            req.pipeline.inputs.len,
         );
-        std.Io.Dir.cwd().access(
-            self.daemon.io,
-            path,
-            .{},
-        ) catch |err|
-            if (err == error.FileNotFound) {
-                term.err("missing input artifact: {s}", .{path});
-                return error.MissingInputArtifact;
-            };
-        term.debug("input artifact: {s}", .{path});
-        input_dirs[i] = path;
-    }
+        for (req.pipeline.inputs, 0..) |input, i| {
+            const path = try paths.artifact(
+                alloc,
+                req.task.workspace,
+                &deployment,
+                input,
+            );
+            std.Io.Dir.cwd().access(
+                self.daemon.io,
+                path,
+                .{},
+            ) catch |err|
+                if (err == error.FileNotFound) {
+                    term.err("missing input artifact: {s}", .{path});
+                    return error.MissingInputArtifact;
+                };
+            term.debug("input artifact: {s}", .{path});
+            input_dirs[i] = path;
+        }
+        break :input_dirs input_dirs;
+    };
 
     const run_dir_path = try task.run_dir_path(alloc);
 
@@ -390,26 +393,23 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     script_file.close(io);
     term.debug("wrote script: {s}", .{script_path});
 
-    const runner_user = self.daemon.config.runner_user;
+    const runner_user = self.daemon.config.runner.user orelse "weft-runner";
     const is_default_runner = std.mem.eql(u8, runner_user, "weft-runner");
 
     const home_dir_path = if (is_default_runner)
         try paths.home(alloc, req.task.workspace)
     else
         try std.fmt.allocPrint(alloc, "/home/{s}", .{runner_user});
-    defer if (!is_default_runner) alloc.free(home_dir_path);
 
-    if (is_default_runner) {
+    if (is_default_runner)
         try std.Io.Dir.cwd().createDirPath(self.daemon.io, home_dir_path);
-    }
 
     const output_dir_path = try std.fs.path.join(alloc, &.{ run_dir_path, "out" });
 
     var state_dirs: std.ArrayList([]const u8) = try .initCapacity(alloc, req.pipeline.outputs.len + 2);
     try state_dirs.append(alloc, paths.state_dir(cwd_dir_path));
-    if (is_default_runner) {
+    if (is_default_runner)
         try state_dirs.append(alloc, paths.state_dir(home_dir_path));
-    }
 
     for (req.pipeline.outputs) |output| {
         const path = try std.fs.path.join(alloc, &.{
@@ -420,12 +420,8 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
         try state_dirs.append(alloc, paths.state_dir(path));
     }
     const unit_name = try task.unit_name(alloc);
-    const input_dir = try paths.artifacts(
-        alloc,
-        req.task.workspace,
-        &deployment,
-    );
     var bind_paths: std.ArrayList([]const u8) = .empty;
+
     for (req.pipeline.keep) |keep| {
         const cache_path = try task.keep_path(alloc, keep.@"0");
         const mount_path = try std.fs.path.join(alloc, &.{ cwd_dir_path, keep.@"1" });
@@ -441,21 +437,26 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
     }
 
     const archive_dir_path = try task.archive(alloc);
-    defer alloc.free(archive_dir_path);
     try std.Io.Dir.cwd().createDirPath(self.daemon.io, archive_dir_path);
     const log_path = try std.fs.path.join(alloc, &.{ archive_dir_path, "log.txt" });
 
-    // --- bind environment variables
-    var env: std.ArrayList([]const u8) = .empty;
+    const env = bind_env: {
+        var env: std.ArrayList([]const u8) = .empty;
+        const input_dir = try paths.artifacts(
+            alloc,
+            req.task.workspace,
+            &deployment,
+        );
+        try env.append(alloc, try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}));
+        try env.append(alloc, try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}));
+        try env.append(alloc, try std.mem.join(alloc, "=", &.{ "HOME", home_dir_path }));
+        try env.append(alloc, try std.mem.join(alloc, "=", &.{ "USER", runner_user }));
+        try env.append(alloc, try std.mem.join(alloc, "=", &.{ "LOGNAME", runner_user }));
 
-    try env.append(alloc, try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}));
-    try env.append(alloc, try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}));
-    try env.append(alloc, try std.mem.join(alloc, "=", &.{ "HOME", home_dir_path }));
-    try env.append(alloc, try std.mem.join(alloc, "=", &.{ "USER", runner_user }));
-    try env.append(alloc, try std.mem.join(alloc, "=", &.{ "LOGNAME", runner_user }));
-
-    for (req.pipeline.env) |pair|
-        try env.append(alloc, try std.mem.join(alloc, "=", &.{ pair.@"0", pair.@"1" }));
+        for (req.pipeline.env) |pair|
+            try env.append(alloc, try std.mem.join(alloc, "=", &.{ pair.@"0", pair.@"1" }));
+        break :bind_env env;
+    };
 
     switch (req.pipeline.second_instance) {
         .ignore => {},
@@ -639,8 +640,9 @@ fn fetch_task_usage(alloc: std.mem.Allocator, io: std.Io, task: Task) ?proto.tas
             return null;
     defer cgroup_dir.close(io);
 
-    var unit_dir_name_buf: [256]u8 = undefined;
-    const unit_dir_name = std.fmt.bufPrint(&unit_dir_name_buf, "{s}.service", .{unit}) catch return null;
+    //NOTE: systemd limits these to 256 or so characters
+    const unit_dir_name = std.fmt.allocPrint(alloc, "{s}.service", .{unit}) catch return null;
+    defer alloc.free(unit_dir_name);
 
     var svc_dir = cgroup_dir.openDir(io, unit_dir_name, .{}) catch |err|
         if (err == error.FileNotFound)
