@@ -28,6 +28,10 @@ pub fn from_unit_name(name: []const u8) ?@This() {
     } };
 }
 
+pub fn argz_parse(_: std.mem.Allocator, _: ?std.Io, val: []const u8) anyerror!@This() {
+    return from_unit_name(val) orelse error.InvalidTask;
+}
+
 pub fn kill(self: @This(), alloc: std.mem.Allocator, io: std.Io) !void {
     const unit = try self.unit_name(alloc);
     defer alloc.free(unit);

@@ -1,8 +1,8 @@
 const std = @import("std");
 
+const Term = @import("../domain/Term.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Remote = @import("Remote.zig");
-const Term = @import("../domain/Term.zig");
 
 const TargetInfo = struct {
     ssh_dest: []const u8,
@@ -94,7 +94,8 @@ pub fn install(
     installation: ClientInstall,
     name: []const u8,
     ssh_target: []const u8,
-    maybe_host: ?[]const u8,
+    weft_host: ?[]const u8,
+    weft_port: ?u16,
     extra_args: []const []const u8,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -103,10 +104,12 @@ pub fn install(
 
     const target = try parse_target(arena_alloc, ssh_target);
 
-    const host = if (maybe_host) |h|
+    const host = if (weft_host) |h|
         h
     else
         try resolve_host(arena_alloc, io, target.ssh_dest, target.port, target.host);
+
+    const port = weft_port orelse 9338;
 
     const exe_path = try std.process.executablePathAlloc(io, arena_alloc);
 
@@ -140,7 +143,7 @@ pub fn install(
 
     const remote_script = try std.fmt.allocPrint(
         arena_alloc,
-        "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft && {s} && /usr/local/bin/weft daemon show-token",
+        "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft && {s} && /usr/local/bin/weft daemon token",
         .{install_cmd_str},
     );
 
@@ -171,23 +174,29 @@ pub fn install(
         if (std.mem.eql(u8, rem.get_name(), name)) {
             try remotes_list.append(arena_alloc, .{
                 .name = try arena_alloc.dupe(u8, name),
-                .address = rem.address,
+                .address = if (weft_host != null or weft_port != null)
+                    .{ try arena_alloc.dupe(u8, host), port }
+                else
+                    rem.address,
                 .token = try arena_alloc.dupe(u8, token),
                 .groups = rem.groups,
             });
             updated = true;
-        } else
-            try remotes_list.append(arena_alloc, rem);
+        } else try remotes_list.append(arena_alloc, rem);
     }
 
     if (!updated)
         try remotes_list.append(arena_alloc, .{
             .name = try arena_alloc.dupe(u8, name),
-            .address = .{ try arena_alloc.dupe(u8, host), 9338 },
+            .address = .{ try arena_alloc.dupe(u8, host), port },
             .token = try arena_alloc.dupe(u8, token),
             .groups = &.{},
         });
 
     try installation.save_remotes(io, remotes_list.items);
-    term.success("registered remote '{s}' at {s}:{d}", .{ name, if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"0" else host, if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"1" else 9338 });
+    term.success("registered remote '{s}' at {s}:{d}", .{
+        name,
+        if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"0" else host,
+        if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"1" else port,
+    });
 }

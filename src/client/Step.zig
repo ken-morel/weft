@@ -19,6 +19,17 @@ pub fn parse(txt: []const u8) !@This() {
     };
 }
 
+pub fn argz_parse(_: std.mem.Allocator, _: ?std.Io, val: []const u8) anyerror!@This() {
+    if (val.len > 0 and val[0] == '.') {
+        if (val.len == 1) return error.InvalidStep;
+        return .{
+            .remote = "local",
+            .pipeline = val[1..],
+        };
+    }
+    return try parse(val);
+}
+
 pub fn eq(a: @This(), b: @This()) bool {
     if (!std.mem.eql(u8, a.pipeline, b.pipeline))
         return false

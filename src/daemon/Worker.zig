@@ -524,7 +524,7 @@ fn handle_task_spawn(self: *@This(), conn: *Connection) proto.Res(proto.task.spa
                     .poststart = try std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
                     .poststop = try std.fmt.allocPrint(
                         alloc,
-                        "+/usr/local/bin/weft _daemon completed {s} $EXIT_STATUS",
+                        "+/usr/local/bin/weft daemon ipc completed {s} $EXIT_STATUS",
                         .{unit_name},
                     ),
                 },
