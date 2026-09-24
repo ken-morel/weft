@@ -16,9 +16,9 @@ pub fn get_config(self: @This(), alloc: std.mem.Allocator, term: ?*Term, io: std
     @setEvalBranchQuota(100_000);
     const content = self.dir.readFileAllocOptions(
         io,
-        "weft.zon",
+        "weft/weft.zon",
         alloc,
-        .limited(64 << 10),
+        .unlimited,
         .of(u8),
         0,
     ) catch |err|

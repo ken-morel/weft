@@ -108,11 +108,7 @@ const Argz = union(enum) {
             name: []const u8,
         },
     },
-    help: struct {
-        pub const doc = "Show help";
-        pub const doc_command = "Document a specific command";
-        command: [][]const u8,
-    },
+    help: argz.Help,
     nop: struct {
         pub const hidden = true;
     },
@@ -155,13 +151,13 @@ pub fn main(init: std.process.Init) !void {
     const first = parse_term_options(args, &term);
 
     if (args.len <= first or (args.len > first and (std.mem.eql(u8, args[first], "--help") or std.mem.eql(u8, args[first], "-h")))) {
-        term.print("{s}", .{argz.doc("weft", Argz)});
+        argz.help("weft", Argz, .{ .command = &.{} }, &term);
         return;
     }
 
     const parsed_cmd = argz.parse(Argz, arena_alloc, init.io, args[first..]) catch |err| {
         if (err == error.ExpectedCommand or err == error.InvalidCommand) {
-            term.print("{s}", .{argz.doc("weft", Argz)});
+            argz.help("weft", Argz, .{ .command = &.{} }, &term);
             return;
         }
         term.err("failed to parse arguments: {any}", .{err});
@@ -281,9 +277,7 @@ pub fn main(init: std.process.Init) !void {
             },
         },
         .help => |cmd| {
-            const command = cmd.command;
-            _ = command;
-            unreachable; // TODO: Define a method in argz to handle help, possibly a pluggable struct and handler function
+            argz.help("weft", Argz, cmd, &term);
         },
         .nop => {},
     }

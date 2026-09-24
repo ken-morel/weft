@@ -1,4 +1,5 @@
 const std = @import("std");
+pub const Color = std.Io.Terminal.Color;
 
 pub const Level = enum(u8) {
     quiet = 0,
@@ -12,15 +13,13 @@ pub const Level = enum(u8) {
     }
 
     pub fn parse(str: []const u8) ?Level {
-        inline for (@typeInfo(Level).@"enum".fields) |f| {
+        inline for (@typeInfo(Level).@"enum".fields) |f|
             if (std.mem.eql(u8, str, f.name))
                 return @enumFromInt(f.value);
-        }
+
         return null;
     }
 };
-
-pub const Color = std.Io.Terminal.Color;
 
 stdin_file: std.Io.File,
 stdout_file: std.Io.File,
@@ -261,8 +260,10 @@ pub const task_palette = [_]Color{
 };
 
 pub fn task_color(name: []const u8) Color {
-    const h = std.hash.Fnv1a_32.hash(name);
-    return task_palette[h % task_palette.len];
+    var idx: u8 = 0;
+    for (name) |c|
+        idx *%= c;
+    return task_palette[idx % task_palette.len];
 }
 
 pub fn write_task_log(self: *@This(), color: Color, prefix: []const u8, line: []const u8) void {
@@ -296,38 +297,40 @@ pub fn write_event(self: *@This(), tag_color: Color, tag_text: []const u8, compt
 pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(level) > @intFromEnum(self.log_level))
         return;
-    const tag_info: struct { Color, []const u8 } = switch (level) {
+    const color, const prefix = switch (level) {
         .quiet => return,
         .err => .{ .red, "error: " },
         .warn => .{ .yellow, "warn: " },
         .info => .{ .green, "info: " },
         .debug => .{ .dim, "debug: " },
     };
-    self.write_tag(tag_info.@"0", tag_info.@"1", fmt, args);
+    self.write_tag(color, prefix, fmt, args);
 }
 
-pub fn err(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+pub inline fn err(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     self.logf(.err, fmt, args);
 }
 
-pub fn warn(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+pub inline fn warn(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     self.logf(.warn, fmt, args);
 }
 
-pub fn info(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+pub inline fn info(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     self.logf(.info, fmt, args);
 }
 
-pub fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+pub inline fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     self.logf(.debug, fmt, args);
 }
 
-pub fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
+pub inline fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level))
+        return;
     self.write_tag(.bold, ">> ", fmt, args);
 }
 
-pub fn success(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
+pub inline fn success(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level))
+        return;
     self.write_tag(.green, "ok: ", fmt, args);
 }

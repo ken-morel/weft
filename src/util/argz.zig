@@ -115,7 +115,79 @@ pub const Args = struct {
     }
 };
 
+pub const Help = struct {
+    pub const doc = "Show help";
+    pub const doc_command = "Document a specific command";
+
+    command: []const []const u8 = &.{},
+};
+
+fn make_help(comptime HelpType: type, cmd_slice: [][]const u8) HelpType {
+    if (HelpType == void) return {};
+    var h: HelpType = undefined;
+    inline for (@typeInfo(HelpType).@"struct".fields) |f| {
+        if (std.mem.eql(u8, f.name, "command") or std.mem.eql(u8, f.name, "commands") or std.mem.eql(u8, f.name, "item") or std.mem.eql(u8, f.name, "items")) {
+            @field(h, f.name) = cmd_slice;
+        } else if (f.defaultValue()) |def| {
+            @field(h, f.name) = def;
+        } else if (f.type == []const []const u8 or f.type == [][]const u8) {
+            @field(h, f.name) = cmd_slice;
+        } else {
+            @field(h, f.name) = undefined;
+        }
+    }
+    return h;
+}
+
+fn check_help(args: []const []const u8, alloc: std.mem.Allocator) !?[][]const u8 {
+    var has_help = false;
+    for (args, 0..) |raw, i| {
+        if (std.mem.eql(u8, raw, "--help") or std.mem.eql(u8, raw, "-h") or
+            (std.mem.eql(u8, raw, "help") and (i == 0 or !Args.is_flag(args[i - 1]))))
+        {
+            has_help = true;
+            break;
+        }
+    }
+    if (!has_help) return null;
+
+    var cmd_count: usize = 0;
+    for (args, 0..) |raw, i| {
+        if (Args.is_flag(raw)) continue;
+        if (i > 0 and Args.is_flag(args[i - 1]) and !Args.is_neg_flag(args[i - 1]) and
+            !std.mem.eql(u8, args[i - 1], "--help") and !std.mem.eql(u8, args[i - 1], "-h"))
+        {
+            continue;
+        }
+        if (std.mem.eql(u8, raw, "help")) continue;
+        cmd_count += 1;
+    }
+
+    const cmds = try alloc.alloc([]const u8, cmd_count);
+    var idx: usize = 0;
+    for (args, 0..) |raw, i| {
+        if (Args.is_flag(raw)) continue;
+        if (i > 0 and Args.is_flag(args[i - 1]) and !Args.is_neg_flag(args[i - 1]) and
+            !std.mem.eql(u8, args[i - 1], "--help") and !std.mem.eql(u8, args[i - 1], "-h"))
+        {
+            continue;
+        }
+        if (std.mem.eql(u8, raw, "help")) continue;
+        if (idx < cmd_count) {
+            cmds[idx] = raw;
+            idx += 1;
+        }
+    }
+    return cmds;
+}
+
 pub inline fn parse(comptime A: type, alloc: std.mem.Allocator, io: ?std.Io, args: []const []const u8) anyerror!A {
+    if (@typeInfo(A) == .@"union" and @hasField(A, "help")) {
+        if (try check_help(args, alloc)) |cmd_slice| {
+            const HelpType = @FieldType(A, "help");
+            return @unionInit(A, "help", make_help(HelpType, cmd_slice));
+        }
+    }
     return switch (@typeInfo(A)) {
         inline .@"union" => try subcmd(A, alloc, io, args),
         else => try cmdargs(A, alloc, io, args),
@@ -160,8 +232,6 @@ fn cmdargs(comptime A: type, alloc: std.mem.Allocator, io: ?std.Io, raw_args: []
 
     fields: inline for (S.fields) |field|
         @field(obj, field.name) = value: {
-            // three cases. Scalar, array, slice.
-            // flags take precedence, then positional args
             switch (@typeInfo(field.type)) {
                 inline .array => |Ar| {
                     var arr: field.type = undefined;
@@ -360,6 +430,13 @@ pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
                 out = out ++ description ++ "\n\n";
 
             const args_doc = docs.arguments(T);
+            if (name.len > 0) {
+                if (args_doc.len > 0) {
+                    out = out ++ "Usage:\n  " ++ name ++ " [options]\n\n";
+                } else {
+                    out = out ++ "Usage:\n  " ++ name ++ "\n";
+                }
+            }
             if (args_doc.len > 0) {
                 out = out ++ "Arguments:\n" ++ args_doc;
             }
@@ -453,3 +530,33 @@ const docs = struct {
         };
     }
 };
+
+pub fn doc_command(comptime prog_name: []const u8, comptime T: type, path: []const []const u8) []const u8 {
+    if (path.len == 0) return doc(prog_name, T);
+    switch (@typeInfo(T)) {
+        .@"union" => |U| {
+            inline for (U.fields) |field|
+                if (flag_matches(field.name, path[0]))
+                    return doc_command(
+                        if (prog_name.len > 0) prog_name ++ " " ++ field.name else field.name,
+                        field.type,
+                        path[1..],
+                    );
+
+            return doc(prog_name, T);
+        },
+        else => return doc(prog_name, T),
+    }
+}
+
+pub fn help(comptime prog_name: []const u8, comptime Root: type, cmd: anytype, term: anytype) void {
+    const help_str = doc_command(
+        prog_name,
+        Root,
+        if (@hasField(@TypeOf(cmd), "command")) cmd.command else &.{},
+    );
+    if (comptime std.meta.hasMethod(@TypeOf(term), "print"))
+        term.print("{s}", .{help_str})
+    else
+        term.writeAll(help_str) catch {};
+}

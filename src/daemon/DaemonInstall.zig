@@ -64,7 +64,7 @@ pub fn init(io: std.Io) !@This() {
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
     const uuid = (try Deployment.Id.now(io)).to_string();
 
-    self.temp_dir.createDirPath(io, sub) catch {};
+    try self.temp_dir.createDirPath(io, sub);
     var sub_dir = try self.temp_dir.createDirPathOpen(io, sub, .{});
     defer sub_dir.close(io);
 

@@ -33,15 +33,15 @@ pub fn deinit(self: *@This()) void {
         self.rendered_lines = 0;
     }
     var step_iter = self.step_history.iterator();
-    while (step_iter.next()) |entry| {
+    while (step_iter.next()) |entry|
         self.alloc.free(entry.key_ptr.*);
-    }
+
     self.step_history.deinit(self.alloc);
 
     var art_iter = self.artifact_history.iterator();
-    while (art_iter.next()) |entry| {
+    while (art_iter.next()) |entry|
         self.alloc.free(entry.key_ptr.*);
-    }
+
     self.artifact_history.deinit(self.alloc);
 }
 
@@ -58,26 +58,10 @@ pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) void 
         const clean_line = std.mem.trimEnd(u8, line, "\r");
         self.term.write_task_log(color, prefix, clean_line);
     }
-    if (self.term.is_tty) {
+    if (self.term.is_tty)
         self.term.clear_to_end();
-    }
+
     self.term.flush() catch {};
-}
-
-pub fn print_log_lines(term: *Term, lock: ?*std.Io.Mutex, io: std.Io, prefix: []const u8, content: []const u8) void {
-    if (lock) |m| {
-        m.lockUncancelable(io);
-    }
-    defer if (lock) |m| {
-        m.unlock(io);
-    };
-
-    const color = Term.task_color(prefix);
-    var lines = std.mem.splitScalar(u8, std.mem.trim(u8, content, "\r\n"), '\n');
-    while (lines.next()) |line| {
-        const clean_line = std.mem.trimEnd(u8, line, "\r");
-        term.write_task_log(color, prefix, clean_line);
-    }
 }
 
 pub fn update(self: *@This(), io: std.Io) !void {
@@ -90,7 +74,6 @@ pub fn update(self: *@This(), io: std.Io) !void {
         self.rendered_lines = 0;
     }
 
-    // 1. Process and print permanent step state transition events
     for (self.state.steps.items) |step| {
         const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
         defer self.alloc.free(key);
@@ -98,14 +81,14 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
         if (self.step_history.get(key)) |prev_status| {
             if (prev_status != step.status) {
-                if (step.status == .running and prev_status == .preparing) {
-                    self.term.write_event(color, "{", " {s}", .{key});
-                } else if (step.status == .completed) {
-                    self.term.write_event(.green, "}", " {s}", .{key});
-                } else if (step.status == .err) {
+                if (step.status == .running and prev_status == .preparing)
+                    self.term.write_event(color, "{", " {s}", .{key})
+                else if (step.status == .completed)
+                    self.term.write_event(.green, "}", " {s}", .{key})
+                else if (step.status == .err)
                     self.term.write_event(.red, "}", " {s} ({s})", .{ key, step.err orelse "<unknown error>" });
-                }
-                _ = self.step_history.put(self.alloc, try self.alloc.dupe(u8, key), step.status) catch {};
+
+                try self.step_history.put(self.alloc, try self.alloc.dupe(u8, key), step.status);
             }
         } else {
             if (step.status == .running) {
@@ -121,7 +104,6 @@ pub fn update(self: *@This(), io: std.Io) !void {
         }
     }
 
-    // 2. Process and print permanent artifact state transition events
     for (self.state.artifacts.items) |art| {
         const key = try std.fmt.allocPrint(self.alloc, "{s}@{s}", .{ art.name, art.remote.get_name() });
         defer self.alloc.free(key);
@@ -145,13 +127,11 @@ pub fn update(self: *@This(), io: std.Io) !void {
         }
     }
 
-    // If non-interactive / non-TTY, skip the pinned bottom bar completely
     if (!self.term.is_tty) {
         try self.term.flush();
         return;
     }
 
-    // 3. Render the interactive pinned bottom deck
     var lines_count: u16 = 0;
 
     var has_active_items = false;

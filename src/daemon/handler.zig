@@ -529,11 +529,10 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         },
     );
     const term = try child.wait(daemon.io);
-    daemon.term.err("Systemd task launch failed: {any}", .{term});
-    if (term.exited != 0)
-        return error.SpawnFailed
-    else
-        return .{};
+    if (term.exited != 0) {
+        daemon.term.err("Systemd task launch failed: {any}", .{term});
+        return error.SpawnFailed;
+    } else return .{};
 }
 
 const max_log_pack_size = 32 << 10;

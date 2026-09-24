@@ -2,46 +2,48 @@ const std = @import("std");
 
 const Task = @import("../daemon/Task.zig");
 
-pub const Cpu = struct {
-    model: []const u8,
-    usage: u8,
-    freq: u32,
-    cores: u16,
-};
-
-pub const Ram = struct {
-    total: u64,
-    used: u64,
-    avail: u64,
-};
-
-pub const Swap = struct {
-    total: u64,
-    used: u64,
-};
-
-pub const Disk = struct {
-    total: u64,
-    used: u64,
-    read_bytes: u64,
-    write_bytes: u64,
-};
-
-pub const Net = struct {
-    rx_bytes: u64,
-    tx_bytes: u64,
-    tcp_conns: u32,
-};
-
-pub const Service = struct {
-    task: Task,
-    cpu_usage_usec: u64,
-    memory_bytes: u64,
-    memory_peak_bytes: u64,
-    pids: u32,
-};
+prev_ticks: ?CpuTicks = null,
 
 pub const Stats = struct {
+    pub const Cpu = struct {
+        model: []const u8,
+        usage: u8,
+        freq: u32,
+        cores: u16,
+    };
+
+    pub const Ram = struct {
+        total: u64,
+        used: u64,
+        avail: u64,
+    };
+
+    pub const Swap = struct {
+        total: u64,
+        used: u64,
+    };
+
+    pub const Disk = struct {
+        total: u64,
+        used: u64,
+        read_bytes: u64,
+        write_bytes: u64,
+    };
+
+    pub const Net = struct {
+        rx_bytes: u64,
+        tx_bytes: u64,
+        tcp_conns: u32,
+    };
+
+    pub const Service = struct {
+        task: Task,
+        cpu_usage_usec: u64,
+        memory_bytes: u64,
+        memory_peak_bytes: u64,
+        pids: u32,
+    };
+
     time: std.Io.Timestamp,
     cpu: Cpu,
     ram: Ram,
@@ -91,8 +93,6 @@ const CpuTicks = struct {
     }
 };
 
-prev_ticks: ?CpuTicks = null,
-
 pub const Monitor = @This();
 
 pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
@@ -122,7 +122,7 @@ pub fn fetch(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats {
     };
 }
 
-fn fetch_cpu(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Cpu {
+fn fetch_cpu(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats.Cpu {
     var stat_buf: [4096]u8 = undefined;
     const stat_content = read_file(io, "/proc/stat", &stat_buf) orelse "";
 
@@ -191,7 +191,7 @@ fn fetch_cpu(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Cpu {
     };
 }
 
-fn fetch_ram_swap(io: std.Io) struct { ram: Ram, swap: Swap } {
+fn fetch_ram_swap(io: std.Io) struct { ram: Stats.Ram, swap: Stats.Swap } {
     var buf: [4096]u8 = undefined;
     const content = read_file(io, "/proc/meminfo", &buf) orelse "";
 
@@ -234,7 +234,7 @@ fn fetch_ram_swap(io: std.Io) struct { ram: Ram, swap: Swap } {
     };
 }
 
-fn fetch_disk(io: std.Io) Disk {
+fn fetch_disk(io: std.Io) Stats.Disk {
     const Statfs = extern struct {
         f_type: isize,
         f_bsize: isize,
@@ -293,7 +293,7 @@ fn fetch_disk(io: std.Io) Disk {
     };
 }
 
-fn fetch_net(io: std.Io) Net {
+fn fetch_net(io: std.Io) Stats.Net {
     var buf: [8192]u8 = undefined;
     const content = read_file(io, "/proc/net/dev", &buf) orelse return .{ .rx_bytes = 0, .tx_bytes = 0, .tcp_conns = 0 };
 
@@ -386,7 +386,7 @@ fn fetch_load(io: std.Io) struct { load: [3]f32, threads: [2]u32 } {
     };
 }
 
-fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Service {
+fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
     var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/system.slice", .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
             std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup", .{ .iterate = true }) catch return &.{}
@@ -394,7 +394,7 @@ fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Service {
             return &.{};
     defer cgroup_dir.close(io);
 
-    var list = std.ArrayListUnmanaged(Service).empty;
+    var list = std.ArrayListUnmanaged(Stats.Service).empty;
     errdefer list.deinit(alloc);
 
     var iter = cgroup_dir.iterate();
@@ -476,23 +476,4 @@ fn read_file(io: std.Io, path: []const u8, buf: []u8) ?[]const u8 {
     defer file.close(io);
     const n = file.readPositionalAll(io, buf, 0) catch return null;
     return buf[0..n];
-}
-
-var global_monitor: Monitor = .{};
-
-pub fn fetch_stats(alloc: std.mem.Allocator, io: std.Io) !Stats {
-    return global_monitor.fetch(alloc, io);
-}
-
-test "fetch_stats" {
-    var mon = Monitor{};
-    defer mon.deinit(std.testing.allocator);
-
-    const s1 = try mon.fetch(std.testing.allocator, std.testing.io);
-    defer s1.free(std.testing.allocator);
-
-    try std.testing.expect(s1.cpu.cores > 0);
-    try std.testing.expect(s1.ram.total > 0);
-    try std.testing.expect(s1.disk.total > 0);
-    try std.testing.expect(s1.threads[1] > 0);
 }

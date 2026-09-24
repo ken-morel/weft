@@ -1,13 +1,13 @@
 const std = @import("std");
 
+const proto = @import("../domain/proto.zig");
+const Term = @import("../domain/Term.zig");
+const Monitor = @import("../util/Monitor.zig");
+const format_bytes = @import("../util/sizes.zig").format_bytes;
+const zoto = @import("../util/zoto.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
-const format_bytes = @import("../util/sizes.zig").format_bytes;
-const Monitor = @import("../util/Monitor.zig");
-const proto = @import("../domain/proto.zig");
 const Remote = @import("Remote.zig");
-const Term = @import("../domain/Term.zig");
-const zoto = @import("../util/zoto.zig");
 
 fn format_time_only(buf: *[8]u8, ns: i128) []const u8 {
     const epoch_seconds: u64 = if (ns > 0) @intCast(@divTrunc(ns, std.time.ns_per_s)) else 0;
@@ -75,7 +75,7 @@ fn render_cell(term: *Term, cell: *const [10]u8, filled: u8, color: Term.Color) 
 
 fn render_header(term: *Term, date_str: []const u8) void {
     if (term.is_tty) term.clear_line();
-    term.styled(.dim, "─── {s} ──────────────────────────────────────────────────────────────────────────────────────────────────\n", .{date_str});
+    term.styled(.dim, "─── {s} ──────────────────────────────────────────────────────────\n", .{date_str});
     if (term.is_tty) term.clear_line();
     term.styled(.bold, "   TIME   ", .{});
     term.print("  ", .{});
@@ -97,6 +97,22 @@ fn render_header(term: *Term, date_str: []const u8) void {
     term.println("", .{});
 }
 
+fn connect(alloc: std.mem.Allocator, io: std.Io, term: *Term, remote: Remote) !*Client {
+    var client = Client.connect(alloc, io, try remote.get_address(), &try remote.get_token()) catch |err| {
+        term.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.get_name(), err });
+        return err;
+    };
+    errdefer client.destroy(alloc, io);
+
+    const req_buf = try alloc.alloc(u8, 256);
+    defer alloc.free(req_buf);
+
+    try client.conn.send_object(req_buf, proto.Request, .system_stats);
+    try client.conn.send_object(req_buf, proto.system.stats.Req, .{
+        .from = .{ .nanoseconds = 0 },
+    });
+    return client;
+}
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -125,19 +141,9 @@ pub fn run(
 
     term.info("connecting to remote '{s}' at {s}:{d}...", .{ target_remote.get_name(), target_remote.address.@"0", target_remote.address.@"1" });
 
-    var client = Client.connect(alloc, io, try target_remote.get_address(), &try target_remote.get_token()) catch |err| {
-        term.err("failed to connect to daemon on remote '{s}': {any}", .{ target_remote.get_name(), err });
-        return err;
-    };
-    defer client.destroy(alloc, io);
-
-    const req_buf = try alloc.alloc(u8, 256);
-    defer alloc.free(req_buf);
-
-    try client.conn.send_object(req_buf, proto.Request, .system_stats);
-    try client.conn.send_object(req_buf, proto.system.stats.Req, .{
-        .from = .{ .nanoseconds = 0 },
-    });
+    var maybe_client: ?*Client = try connect(alloc, io, term, target_remote.*);
+    defer if (maybe_client) |c|
+        c.destroy(alloc, io);
 
     term.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.get_name()});
 
@@ -149,14 +155,12 @@ pub fn run(
 
     var read_pos: usize = 0;
     var rendered_lines: u16 = 0;
-    defer {
-        if (term.is_tty and rendered_lines > 0) {
-            term.move_up(rendered_lines);
-            term.clear_to_end();
-            term.flush() catch {};
-            rendered_lines = 0;
-        }
-    }
+    defer if (term.is_tty and rendered_lines > 0) {
+        term.move_up(rendered_lines);
+        term.clear_to_end();
+        term.flush() catch {};
+        rendered_lines = 0;
+    };
 
     var lines_since_header: usize = 0;
     var is_first_sample: bool = true;
@@ -176,12 +180,22 @@ pub fn run(
     var prev_tx_rate: ?u64 = null;
 
     while (true) {
-        var iov = [_][]u8{stream_buf[read_pos..]};
-        const n = client.conn.reader.readVec(&iov) catch |err| {
-            if (err == error.EndOfStream) break;
-            return err;
+        const client = if (maybe_client) |c| c else {
+            try std.Io.sleep(io, .fromSeconds(10), .real);
+            maybe_client = connect(alloc, io, term, target_remote.*) catch null;
+            continue;
         };
-        if (n == 0) break;
+        var iac = [_][]u8{stream_buf[read_pos..]};
+        const n = client.conn.reader.readVec(&iac) catch |err| {
+            if (err == error.EndOfStream) {
+                alloc.destroy(client);
+                maybe_client = null;
+                continue;
+            }
+            break;
+        };
+        if (n == 0)
+            break;
         read_pos += n;
 
         var slice: []const u8 = stream_buf[0..read_pos];
@@ -190,6 +204,7 @@ pub fn run(
             const stats = zoto.deserialize(frame_arena.allocator(), &parse_slice, Monitor.Stats, .{ .header = true, .hash = true }) catch |err| {
                 if (err == error.BufferTooSmall or err == error.EndOfStream) break;
                 term.err("failed to decode stats packet: {any}", .{err});
+                try std.Io.sleep(io, .fromSeconds(2), .real);
                 return err;
             };
 
@@ -539,7 +554,8 @@ pub fn run(
 
                         term.clear_line();
                         if (svc.pids > 0) {
-                            term.styled_ln(color, "! {s}  (pids: {d}, RAM: {s}, Peak: {s}, CPU: {d}ms)", .{
+                            term.styled_ln(color, "! {s} {s}  (pids: {d}, RAM: {s}, Peak: {s}, CPU: {d}ms)", .{
+                                &svc.task.id.deployment.to_string(),
                                 task_key,
                                 svc.pids,
                                 mem_str,
@@ -547,7 +563,8 @@ pub fn run(
                                 cpu_ms,
                             });
                         } else {
-                            term.styled_ln(color, "! {s}  (RAM: {s}, Peak: {s}, CPU: {d}ms)", .{
+                            term.styled_ln(color, "! {s} {s}  (RAM: {s}, Peak: {s}, CPU: {d}ms)", .{
+                                &svc.task.id.deployment.to_string(),
                                 task_key,
                                 mem_str,
                                 peak_str,
@@ -582,9 +599,9 @@ pub fn run(
             _ = frame_arena.reset(.retain_capacity);
         }
 
-        if (slice.len > 0) {
+        if (slice.len > 0)
             std.mem.copyForwards(u8, stream_buf[0..slice.len], slice);
-        }
+
         read_pos = slice.len;
     }
 }
