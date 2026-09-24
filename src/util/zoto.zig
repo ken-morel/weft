@@ -63,6 +63,7 @@ pub fn hashType(comptime T: type) u64 {
         },
 
         .array => |a| {
+            h = (h ^ 0xBE5F) *% prime;
             h = (h ^ a.len) *% prime;
             h = (h ^ hashType(a.child)) *% prime;
         },

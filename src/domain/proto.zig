@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Deployment = @import("../client/Deployment.zig");
 const Weft = @import("../domain/Weft.zig");
+const zoto = @import("../util/zoto.zig");
 
 pub fn Res(comptime T: type) type {
     return anyerror!T;
@@ -136,3 +137,5 @@ pub const DaemonMsg = union(enum) {
     };
     task_completed: TaskCompleted,
 };
+
+pub const hash = zoto.hashType(@This());
