@@ -2,19 +2,19 @@ const std = @import("std");
 
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
+const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
+const handler = @import("handler.zig");
 const Server = @import("Server.zig");
 const SharedPressor = @import("SharedPressor.zig");
 const StatsServer = @import("StatsServer.zig");
-const spawn = @import("../domain/spawn.zig").spawn;
 const Task = @import("Task.zig");
-const Worker = @import("Worker.zig");
 
 io: std.Io,
-alloc: std.mem.Allocator,
+gpa: std.mem.Allocator,
 install: DaemonInstall,
 server: Server,
 config: DaemonInstall.Config,
@@ -24,20 +24,21 @@ stats_server: StatsServer,
 
 pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
-    self.pressor.deinit(self.alloc);
+    self.pressor.deinit(self.gpa);
     self.stats_server.deinit();
-    std.zon.parse.free(self.alloc, self.config);
+    std.zon.parse.free(self.gpa, self.config);
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
     const config = try install.get_config(io, alloc, term);
 
-    const server = try Server.init(
+    var server = try Server.init(
         io,
         &try config.get_secret(),
         config.port,
     );
+    errdefer server.deinit(io);
     return .{
-        .alloc = alloc,
+        .gpa = alloc,
         .io = io,
         .install = install,
         .config = config,
@@ -54,21 +55,10 @@ pub fn run_client_server(self: *@This()) !void {
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
-    const workers = try self.alloc.alloc(Worker, self.config.max_workers);
     var permits: std.Io.Semaphore = .{ .permits = self.config.max_workers };
-    self.term.debug("spawned {d} workers", .{workers.len});
-
-    for (workers) |*worker|
-        worker.* = try .init(self.alloc, self);
 
     while (true) {
         try permits.wait(self.io);
-
-        const worker: *Worker = worker: for (workers) |*w| {
-            if (!w.running)
-                break :worker w;
-        } else unreachable;
-        worker.running = true;
 
         const stream: std.Io.net.Stream = req: while (true)
             break :req self.server.accept(self.io) catch |err| {
@@ -80,11 +70,7 @@ pub fn run_client_server(self: *@This()) !void {
             };
         self.term.info("new connection", .{});
 
-        group.async(
-            self.io,
-            Worker.run,
-            .{ worker, &permits, stream },
-        );
+        try spawn(self.io, &group, handler.handle, .{ self, &permits, stream });
     }
 }
 
@@ -116,7 +102,7 @@ pub fn run_system_server(self: *@This()) !void {
         invalid_request: []const u8,
     };
     self.term.info("listening on socket {s}", .{paths.weft_socket});
-    var req_arena: std.heap.ArenaAllocator = .init(self.alloc);
+    var req_arena: std.heap.ArenaAllocator = .init(self.gpa);
     defer req_arena.deinit();
     run: switch (@as(Run, .accept)) {
         .accept => {
@@ -139,7 +125,7 @@ pub fn run_system_server(self: *@This()) !void {
             self.term.info("daemon cmd: {any}", .{cmd});
             switch (cmd) {
                 .task_completed => |msg| {
-                    group.async(self.io, finalize_task, .{ self, Task{ .id = try msg.task.dupe(self.alloc) }, msg.status });
+                    try spawn(self.io, &group, finalize_task, .{ self, Task{ .id = try msg.task.dupe(self.gpa) }, msg.status });
                     continue :run .done;
                 },
             }
@@ -156,44 +142,27 @@ pub fn run_system_server(self: *@This()) !void {
     }
 }
 
-fn setup_signal_handlers() void {
-    var sa = std.mem.zeroes(std.posix.Sigaction);
-    sa.handler = .{ .handler = handle_signal };
-    std.posix.sigaction(std.posix.SIG.TERM, &sa, null);
-    std.posix.sigaction(std.posix.SIG.INT, &sa, null);
-}
+fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
+    std.debug.print("Someone wanted to push us with a {any}, but we're still exiting gracefuly...", .{sig});
 
-fn handle_signal(_: std.posix.SIG) callconv(.c) void {
-    _ = std.os.linux.unlink(paths.weft_socket);
     std.process.exit(0);
 }
 
 pub fn run(self: *@This()) !void {
-    self.term.debug("max workers: {d}", .{self.config.max_workers});
+    var group: std.Io.Group = .init;
 
-    setup_signal_handlers();
+    try spawn(self.io, &group, run_client_server, .{self});
+    try spawn(self.io, &group, StatsServer.run, .{&self.stats_server});
+    try spawn(self.io, &group, run_system_server, .{self});
 
-    const client_thread = try std.Thread.spawn(.{}, run_client_server, .{self});
-    client_thread.detach();
-
-    const stats_thread = try std.Thread.spawn(.{}, StatsServer.run, .{&self.stats_server});
-    stats_thread.detach();
-
-    try self.run_system_server();
+    try group.await(self.io);
 }
 
-pub fn finalize_task(self: *@This(), task: Task, status: u16) void {
-    _finalize_task(self, task, status) catch |err| {
-        self.term.err("finalize task error: {any}", .{err});
-        if (@errorReturnTrace()) |trace|
-            std.debug.dumpErrorReturnTrace(trace);
-    };
-    task.free_duped(self.alloc);
-}
-pub fn _finalize_task(self: *@This(), task: Task, status: u16) !void {
+pub fn finalize_task(self: *@This(), task: Task, status: u16) !void {
+    defer task.free_duped(self.gpa);
     const cwd = std.Io.Dir.cwd();
-    const run_dir_path = try task.run_dir_path(self.alloc);
-    defer self.alloc.free(run_dir_path);
+    const run_dir_path = try task.run_dir_path(self.gpa);
+    defer self.gpa.free(run_dir_path);
 
     const run_dir = cwd.openDir(self.io, run_dir_path, .{}) catch |err|
         return if (err == error.FileNotFound) error.TaskNotFound else err;
@@ -205,11 +174,11 @@ pub fn _finalize_task(self: *@This(), task: Task, status: u16) !void {
         return;
     }
 
-    const output_dirs_path = try std.fs.path.join(self.alloc, &.{ run_dir_path, "out" });
-    defer self.alloc.free(output_dirs_path);
+    const output_dirs_path = try std.fs.path.join(self.gpa, &.{ run_dir_path, "out" });
+    defer self.gpa.free(output_dirs_path);
 
-    const artifacts_dir_path = try task.artifacts_path(self.alloc);
-    defer self.alloc.free(artifacts_dir_path);
+    const artifacts_dir_path = try task.artifacts_path(self.gpa);
+    defer self.gpa.free(artifacts_dir_path);
     const artifacts_dir = try cwd.createDirPathOpen(self.io, artifacts_dir_path, .{});
     defer artifacts_dir.close(self.io);
 
@@ -219,16 +188,16 @@ pub fn _finalize_task(self: *@This(), task: Task, status: u16) !void {
     var outputs: std.ArrayList([]const u8) = .empty;
     defer {
         for (outputs.items) |name|
-            self.alloc.free(name);
-        outputs.deinit(self.alloc);
+            self.gpa.free(name);
+        outputs.deinit(self.gpa);
     }
     var walker = try std.Io.Dir.walkSelectively(
         outputs_dir,
-        self.alloc,
+        self.gpa,
     );
     defer walker.deinit();
     while (try walker.next(self.io)) |entry|
-        try outputs.append(self.alloc, try self.alloc.dupe(u8, entry.basename));
+        try outputs.append(self.gpa, try self.gpa.dupe(u8, entry.basename));
 
     for (outputs.items) |name|
         try outputs_dir.rename(name, artifacts_dir, name, self.io);

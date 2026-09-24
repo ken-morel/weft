@@ -9,13 +9,12 @@ const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 const runner = @import("runner.zig");
 
-pub fn create_sources(alloc: std.mem.Allocator, io: std.Io, term: *Term, inst: ClientInstall, project: Project, deployment: *Deployment) !void {
+pub fn create_sources(alloc: std.mem.Allocator, io: std.Io, _: *Term, inst: ClientInstall, project: Project, deployment: *Deployment) !void {
     const sources = deployment.config.get_sources();
 
     source: for (sources) |source| {
         const source_name = try std.mem.join(alloc, ".", &.{ "src", source.@"0" });
         defer alloc.free(source_name);
-        term.info("snapshoting source {s}", .{source_name});
         const source_dir_path = try project.artifact_dir_path(alloc, io, deployment.id, source_name);
         defer alloc.free(source_dir_path);
 
@@ -67,6 +66,5 @@ pub fn create_sources(alloc: std.mem.Allocator, io: std.Io, term: *Term, inst: C
             io,
         );
         try deployment.add_source(alloc, source.@"0");
-        term.success("source {s} stored at {s}", .{ source_name, source_dir_path });
     }
 }

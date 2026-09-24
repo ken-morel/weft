@@ -45,7 +45,6 @@ const service_template =
     \\WantedBy=multi-user.target
 ;
 
-//
 const sysusers_config_path = "/usr/lib/sysusers.d/weft.conf";
 const sysusers_config =
     \\ u weft-runner - "Weft pipeline runner" /var/lib/weft /usr/bin/nologin
@@ -74,7 +73,6 @@ pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
 
 pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[]const u8) !void {
     const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(io, "/var/lib/weft/workspaces");
     try cwd.createDirPath(io, "/var/lib/weft/run");
     try cwd.createDirPath(io, "/var/lib/weft/artifacts");
     term.debug("created /var/lib/weft directory tree", .{});
@@ -229,32 +227,4 @@ pub fn read_config(io: std.Io, alloc: std.mem.Allocator, term: ?*Term) !Config {
 pub fn get_config(self: @This(), io: std.Io, alloc: std.mem.Allocator, term: ?*Term) !Config {
     _ = self;
     return read_config(io, alloc, term);
-}
-
-pub fn get_artifact_path(
-    self: @This(),
-    alloc: std.mem.Allocator,
-    art: proto.artifact.Id,
-) ![]const u8 {
-    _ = self;
-    const uuid = art.deployment.to_string();
-    return try std.fs.path.join(alloc, &.{
-        "/var/lib/weft/artifacts/",
-        art.workspace,
-        &uuid,
-        art.pipeline,
-    });
-}
-pub fn open_artifact_dir(
-    self: @This(),
-    alloc: std.mem.Allocator,
-    io: std.Io,
-    art: proto.artifact.Id,
-) !std.Io.Dir {
-    const path = try self.get_artifact_path(alloc, art);
-    defer alloc.free(path);
-    try std.Io.Dir.cwd().createDirPath(io, path);
-    return try std.Io.Dir.cwd().createDirPathOpen(io, path, .{ .open_options = .{
-        .iterate = true,
-    } });
 }

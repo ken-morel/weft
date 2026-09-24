@@ -4,7 +4,7 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const dotenv_mod = @import("../util/dotenv.zig");
+const dotenv = @import("../util/dotenv.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
@@ -28,20 +28,18 @@ pub fn run_deployment(
     const remotes = try inst.get_remotes(alloc, io, term);
     defer alloc.free(remotes);
 
-    var dotenv = try dotenv_mod.load(alloc, io, project.dir);
-    defer dotenv.deinit(alloc);
+    var env = try dotenv.load(alloc, io, project.dir);
+    defer env.deinit(alloc);
 
     var state: DeploymentState = .init(alloc, &project);
     defer state.deinit();
-    var depl: std.Io.RwLock = .init;
+    var depl: std.Io.Mutex = .init;
 
     var fetcher: Fetcher = .{
         .alloc = alloc,
-        .deployment = deployment,
+        .dep = deployment,
         .depl = &depl,
         .project = &project,
-        .pulling = .empty,
-        .pushing = .empty,
         .remotes = remotes,
         .term = term,
         .state = &state,
@@ -63,7 +61,7 @@ pub fn run_deployment(
             if (deployment.completed() and fetcher.is_idle(io))
                 break;
 
-            if (state.has_error() and deployment.running.len == 0) {
+            if (state.has_error(&depl, io) and deployment.running.len == 0) {
                 try deployment.save(alloc, io, project);
                 term.err("Error during deployment", .{});
                 try std.Io.sleep(io, .fromSeconds(3), .awake);
@@ -80,19 +78,19 @@ pub fn run_deployment(
                 const pipeline = deployment.config.get_pipeline(step.pipeline) orelse
                     return error.InvalidPipeline;
 
-                _ = try state.add(remote, pipeline);
+                _ = try state.add(&depl, io, remote, pipeline);
                 try deployment.add_running(alloc, step);
-                spawn(
+                try spawn(
                     io,
                     &group,
                     spawn_step,
-                    .{ alloc, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, &dotenv, inst.env, &group },
+                    .{ alloc, io, &state, term, &view, project, &depl, deployment, remote, pipeline, &fetcher, step, &env, inst.env },
                 );
             }
 
             try view.update(io);
         }
-        try std.Io.sleep(io, .fromMilliseconds(250), .awake);
+        try std.Io.sleep(io, .fromMilliseconds(500), .awake);
     }
     try group.await(io);
     try view.update(io);
@@ -104,40 +102,40 @@ pub fn spawn_step(
     io: std.Io,
     state: *DeploymentState,
     term: *Term,
+    view: *DeploymentView,
     project: Project,
-    deployment_lock: *std.Io.RwLock,
-    deployment: *Deployment,
+    depl: *std.Io.Mutex,
+    dep: *Deployment,
     remote: *const Remote,
     pipeline: *const Weft.Pipeline,
     fetcher: *Fetcher,
     step: Deployment.Step,
-    dotenv: *const dotenv_mod.DotEnv,
+    env: *const dotenv.DotEnv,
     env_map: *const std.process.Environ.Map,
-    group: *std.Io.Group,
 ) !void {
-    errdefer if (deployment_lock.lock(io)) |_| {
-        deployment.remove_running(alloc, step.remote, step.pipeline);
-        deployment.add_failed(alloc, step) catch {};
-        state.err(step.remote, step.pipeline, "failed to spawn task");
-        deployment.save(alloc, io, project) catch {};
-        deployment_lock.unlock(io);
+    errdefer if (depl.lock(io)) |_| {
+        dep.remove_running(alloc, step.remote, step.pipeline);
+        dep.add_failed(alloc, step) catch {};
+        state.err(depl, io, step.remote, step.pipeline, "failed to spawn task");
+        dep.save(alloc, io, project) catch {};
+        depl.unlock(io);
     } else |_| {};
 
     const script_name = switch (pipeline.run) {
         .nothing => {
-            try deployment_lock.lock(io);
-            defer deployment_lock.unlock(io);
+            try depl.lock(io);
+            defer depl.unlock(io);
 
             for (pipeline.outputs()) |output| {
-                try deployment.add_artifact(alloc, .{
+                try dep.add_artifact(alloc, .{
                     .remote = step.remote,
                     .pipeline = step.pipeline,
                     .name = output,
                 });
-                try fetcher.spawn_fetch(io, group, output);
+                try fetcher.spawn_fetch(io, output);
             }
-            state.completed(step.remote, step.pipeline);
-            try deployment.save(alloc, io, project);
+            state.completed(depl, io, step.remote, step.pipeline);
+            try dep.save(alloc, io, project);
             return;
         },
         .default => pipeline.name,
@@ -148,30 +146,31 @@ pub fn spawn_step(
         var merged_env: std.StringHashMapUnmanaged([]const u8) = .empty;
         defer merged_env.deinit(alloc);
 
-        for (deployment.config.env) |entry|
+        for (dep.config.env) |entry|
             try merged_env.put(alloc, entry.@"0", entry.@"1");
-        for (deployment.config.required_env) |key| {
-            if (dotenv.get(key)) |val|
+        for (dep.config.required_env) |key| {
+            if (env.get(key)) |val|
                 try merged_env.put(alloc, key, val)
             else if (env_map.get(key)) |val|
                 try merged_env.put(alloc, key, val)
             else {
                 var found_in_workspace = false;
-                for (deployment.config.env) |entry| {
+                for (dep.config.env) |entry| {
                     if (std.mem.eql(u8, entry.@"0", key)) {
                         found_in_workspace = true;
                         break;
                     }
                 }
                 if (!found_in_workspace) {
-                    term.err("workspace requires environment variable '{s}', but it was not found in .env or environment", .{key});
+                    term.err("Required env var '{s}' not found in environment or .env file for pipeline {s}", .{ key, pipeline.name });
                     return error.MissingRequiredEnv;
                 }
             }
         }
-
+        for (pipeline.env) |entry|
+            try merged_env.put(alloc, entry.@"0", entry.@"1");
         for (pipeline.required_env) |key| {
-            if (dotenv.get(key)) |val|
+            if (env.get(key)) |val|
                 try merged_env.put(alloc, key, val)
             else if (env_map.get(key)) |val|
                 try merged_env.put(alloc, key, val)
@@ -184,40 +183,33 @@ pub fn spawn_step(
                     }
                 }
                 if (!found_in_pipeline) {
-                    term.err("pipeline '{s}' requires environment variable '{s}', but it was not found in .env or environment", .{ pipeline.name, key });
+                    term.err("Required env var '{s}' not found in environment or .env file for pipeline {s}", .{ key, pipeline.name });
                     return error.MissingRequiredEnv;
                 }
             }
         }
 
-        for (pipeline.env) |entry|
-            try merged_env.put(alloc, entry.@"0", entry.@"1");
-
-        const resolved_env = try alloc.alloc(struct { []const u8, []const u8 }, merged_env.count());
-        defer alloc.free(resolved_env);
-        var it = merged_env.iterator();
-        var idx: usize = 0;
-        while (it.next()) |entry| {
-            resolved_env[idx] = .{ entry.key_ptr.*, entry.value_ptr.* };
-            idx += 1;
-        }
-        break :resolved_env resolved_env;
+        var result: std.ArrayList(struct { []const u8, []const u8 }) = .empty;
+        var iter = merged_env.iterator();
+        while (iter.next()) |entry|
+            try result.append(alloc, .{ entry.key_ptr.*, entry.value_ptr.* });
+        break :resolved_env result;
     };
 
     var resolved_pipeline = pipeline.*;
-    resolved_pipeline.env = resolved_env;
-
-    var buffer = try alloc.alloc(u8, Connection.max_packet_size);
-    defer alloc.free(buffer);
+    resolved_pipeline.env = resolved_env.items;
 
     for (pipeline.inputs()) |input|
-        try fetcher.add(io, remote, input);
+        try fetcher.upload(io, remote, input);
 
     const task_id: proto.task.Id = .{
-        .deployment = deployment.id,
-        .pipeline = pipeline.name,
-        .workspace = deployment.config.workspace,
+        .deployment = dep.id,
+        .pipeline = step.pipeline,
+        .workspace = dep.config.workspace,
     };
+
+    const buffer = try alloc.alloc(u8, Connection.max_packet_size);
+    defer alloc.free(buffer);
 
     {
         const client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
@@ -276,35 +268,31 @@ pub fn spawn_step(
             buffer,
             proto.Res(proto.task.spawn.Res),
         ) catch |err| {
-            try deployment_lock.lock(io);
-            defer deployment_lock.unlock(io);
-            deployment.remove_running(alloc, step.remote, step.pipeline);
-            deployment.add_failed(alloc, step) catch {};
-            state.err(step.remote, step.pipeline, @errorName(err));
-            deployment.save(alloc, io, project) catch {};
+            try depl.lock(io);
+            defer depl.unlock(io);
+            dep.remove_running(alloc, step.remote, step.pipeline);
+            dep.add_failed(alloc, step) catch {};
+            state.err(depl, io, step.remote, step.pipeline, @errorName(err));
+            dep.save(alloc, io, project) catch {};
             return;
         } catch |err| {
-            try deployment_lock.lock(io);
-            defer deployment_lock.unlock(io);
-            deployment.remove_running(alloc, step.remote, step.pipeline);
-            deployment.add_failed(alloc, step) catch {};
+            try depl.lock(io);
+            defer depl.unlock(io);
+            dep.remove_running(alloc, step.remote, step.pipeline);
+            dep.add_failed(alloc, step) catch {};
             const msg = if (err == error.AlreadyRunning)
                 "task already running on remote"
             else
                 @errorName(err);
-            state.err(step.remote, step.pipeline, msg);
-            deployment.save(alloc, io, project) catch {};
+            state.err(depl, io, step.remote, step.pipeline, msg);
+            dep.save(alloc, io, project) catch {};
             return;
         };
     }
 
-    {
-        try deployment_lock.lock(io);
-        defer deployment_lock.unlock(io);
-        state.running(step.remote, step.pipeline);
-    }
+    state.running(depl, io, step.remote, step.pipeline);
 
-    const log_path = try project.task_log_path(alloc, io, deployment.id, step.pipeline);
+    const log_path = try project.task_log_path(alloc, io, dep.id, step.pipeline);
     defer alloc.free(log_path);
 
     const log_file = try std.Io.Dir.cwd().createFile(io, log_path, .{ .truncate = false });
@@ -332,6 +320,12 @@ pub fn spawn_step(
 
         if (footer.logs) |logs| {
             if (logs.data.len > 0) {
+                try depl.lock(io);
+                const prefix = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ step.remote, step.pipeline });
+                defer alloc.free(prefix);
+                view.print_logs(prefix, logs.data);
+                depl.unlock(io);
+
                 try log_file.writePositionalAll(io, logs.data, file_offset);
                 file_offset += logs.data.len;
             }
@@ -340,50 +334,48 @@ pub fn spawn_step(
         }
 
         if (footer.usage) |u| {
-            try deployment_lock.lock(io);
-            state.update_usage(step.remote, step.pipeline, u.cpu_usec, u.memory_bytes, std.Io.Clock.now(.real, io));
-            deployment_lock.unlock(io);
+            state.update_usage(depl, io, step.remote, step.pipeline, u.cpu_usec, u.memory_bytes, std.Io.Clock.now(.real, io));
         }
 
         switch (footer.status) {
             .running => continue,
             .success => {
-                try deployment_lock.lock(io);
-                defer deployment_lock.unlock(io);
+                try depl.lock(io);
+                defer depl.unlock(io);
 
-                deployment.remove_running(alloc, step.remote, step.pipeline);
+                dep.remove_running(alloc, step.remote, step.pipeline);
                 for (pipeline.outputs()) |output| {
-                    try deployment.add_artifact(alloc, .{
+                    try dep.add_artifact(alloc, .{
                         .remote = step.remote,
                         .pipeline = step.pipeline,
                         .name = output,
                     });
-                    try fetcher.spawn_fetch(io, group, output);
+                    try fetcher.spawn_fetch(io, output);
                 }
 
-                state.completed(step.remote, step.pipeline);
-                try deployment.save(alloc, io, project);
+                state.completed(depl, io, step.remote, step.pipeline);
+                try dep.save(alloc, io, project);
                 break;
             },
             .failed => |code| {
-                try deployment_lock.lock(io);
-                defer deployment_lock.unlock(io);
+                try depl.lock(io);
+                defer depl.unlock(io);
 
-                deployment.remove_running(alloc, step.remote, step.pipeline);
-                deployment.add_failed(alloc, step) catch {};
+                dep.remove_running(alloc, step.remote, step.pipeline);
+                dep.add_failed(alloc, step) catch {};
                 const err_msg = try std.fmt.allocPrint(alloc, "task failed with exit code {d}", .{code});
-                state.err(step.remote, step.pipeline, err_msg);
-                deployment.save(alloc, io, project) catch {};
+                state.err(depl, io, step.remote, step.pipeline, err_msg);
+                dep.save(alloc, io, project) catch {};
                 break;
             },
             .not_found => {
-                try deployment_lock.lock(io);
-                defer deployment_lock.unlock(io);
+                try depl.lock(io);
+                defer depl.unlock(io);
 
-                deployment.remove_running(alloc, step.remote, step.pipeline);
-                deployment.add_failed(alloc, step) catch {};
-                state.err(step.remote, step.pipeline, "task not found on remote");
-                deployment.save(alloc, io, project) catch {};
+                dep.remove_running(alloc, step.remote, step.pipeline);
+                dep.add_failed(alloc, step) catch {};
+                state.err(depl, io, step.remote, step.pipeline, "task not found on remote");
+                dep.save(alloc, io, project) catch {};
                 break;
             },
         }

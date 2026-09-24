@@ -21,14 +21,14 @@ fn follow_step(
     io: std.Io,
     state: *DeploymentState,
     term: *Term,
+    view: *DeploymentView,
     project: Project,
-    deployment_lock: *std.Io.RwLock,
+    deployment_lock: *std.Io.Mutex,
     deployment: *Deployment,
     remote: *const Remote,
     pipeline: *const Weft.Pipeline,
     fetcher: *Fetcher,
     step: Deployment.Step,
-    group: *std.Io.Group,
 ) !void {
     _ = term;
     const task_id: proto.task.Id = .{
@@ -50,11 +50,9 @@ fn follow_step(
     defer alloc.free(buffer);
 
     while (true) {
-        var client = Client.connect(alloc, io, try remote.get_address(), &try remote.get_token()) catch |err| {
-            try deployment_lock.lock(io);
-            defer deployment_lock.unlock(io);
-            const err_msg = try std.fmt.allocPrint(alloc, "connection failed: {any}", .{err});
-            state.err(step.remote, step.pipeline, err_msg);
+        var client = Client.connect(alloc, io, try remote.get_address(), &try remote.get_token()) catch |e| {
+            const err_msg = try std.fmt.allocPrint(alloc, "connection failed: {any}", .{e});
+            state.err(deployment_lock, io, step.remote, step.pipeline, err_msg);
             break;
         };
         defer client.destroy(alloc, io);
@@ -68,17 +66,21 @@ fn follow_step(
         }) catch break;
 
         const reply = client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res)) catch break;
-        const res = reply catch |err| {
-            try deployment_lock.lock(io);
-            defer deployment_lock.unlock(io);
-            const err_msg = try std.fmt.allocPrint(alloc, "poll error: {any}", .{err});
-            state.err(step.remote, step.pipeline, err_msg);
+        const res = reply catch |e| {
+            const err_msg = try std.fmt.allocPrint(alloc, "poll error: {any}", .{e});
+            state.err(deployment_lock, io, step.remote, step.pipeline, err_msg);
             break;
         };
         const footer = &res.footer;
 
         if (footer.logs) |logs| {
             if (logs.data.len > 0) {
+                try deployment_lock.lock(io);
+                const prefix = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ step.remote, step.pipeline });
+                defer alloc.free(prefix);
+                view.print_logs(prefix, logs.data);
+                deployment_lock.unlock(io);
+
                 try log_file.writePositionalAll(io, logs.data, file_offset);
                 file_offset += logs.data.len;
             }
@@ -87,9 +89,7 @@ fn follow_step(
         }
 
         if (footer.usage) |u| {
-            try deployment_lock.lock(io);
-            state.update_usage(step.remote, step.pipeline, u.cpu_usec, u.memory_bytes, std.Io.Clock.now(.real, io));
-            deployment_lock.unlock(io);
+            state.update_usage(deployment_lock, io, step.remote, step.pipeline, u.cpu_usec, u.memory_bytes, std.Io.Clock.now(.real, io));
         }
 
         switch (footer.status) {
@@ -109,10 +109,10 @@ fn follow_step(
                         .pipeline = step.pipeline,
                         .name = output,
                     });
-                    try fetcher.spawn_fetch(io, group, output);
+                    try fetcher.spawn_fetch(io, output);
                 }
 
-                state.completed(step.remote, step.pipeline);
+                state.completed(deployment_lock, io, step.remote, step.pipeline);
                 try deployment.save(alloc, io, project);
                 break;
             },
@@ -122,7 +122,7 @@ fn follow_step(
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 const err_msg = try std.fmt.allocPrint(alloc, "task failed with exit code {d}", .{code});
-                state.err(step.remote, step.pipeline, err_msg);
+                state.err(deployment_lock, io, step.remote, step.pipeline, err_msg);
                 break;
             },
             .not_found => {
@@ -130,7 +130,7 @@ fn follow_step(
                 defer deployment_lock.unlock(io);
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
-                state.err(step.remote, step.pipeline, "task not found on daemon");
+                state.err(deployment_lock, io, step.remote, step.pipeline, "task not found on daemon");
                 break;
             },
         }
@@ -159,23 +159,18 @@ pub fn run(
         };
     } else {
         const first_arg = args[0];
-        if (std.mem.indexOfScalar(u8, first_arg, '.')) |dot| {
-            if (dot == 0) {
-                dep_id = try project.latest_deployment_id(io) orelse {
-                    term.err("no deployments found in .weft", .{});
-                    return error.NoDeployments;
-                };
-            } else {
-                dep_id = project.find_deployment_id(io, first_arg[0..dot]) catch {
-                    term.err("deployment '{s}' not found or ambiguous", .{first_arg[0..dot]});
-                    return error.InvalidDeploymentId;
-                };
-            }
-            pipeline_filter = first_arg[dot + 1 ..];
-        } else if (project.find_deployment_id(io, first_arg)) |id| {
+        if (std.mem.startsWith(u8, first_arg, ".")) {
+            dep_id = try project.latest_deployment_id(io) orelse {
+                term.err("no deployments found in .weft", .{});
+                return error.NoDeployments;
+            };
+            pipeline_filter = first_arg[1..];
+        } else if (Deployment.Id.parse(first_arg)) |id| {
             dep_id = id;
-            if (args.len > 1)
-                pipeline_filter = args[1];
+            if (args.len > 1) {
+                const second = args[1];
+                pipeline_filter = if (std.mem.startsWith(u8, second, ".")) second[1..] else second;
+            }
         } else |_| {
             dep_id = try project.latest_deployment_id(io) orelse {
                 term.err("no deployments found in .weft", .{});
@@ -196,15 +191,13 @@ pub fn run(
 
     var state: DeploymentState = .init(alloc, &project);
     defer state.deinit();
-    var depl: std.Io.RwLock = .init;
+    var depl: std.Io.Mutex = .init;
 
     var fetcher: Fetcher = .{
         .alloc = alloc,
-        .deployment = &deployment,
+        .dep = &deployment,
         .depl = &depl,
         .project = &project,
-        .pulling = .empty,
-        .pushing = .empty,
         .remotes = remotes,
         .term = term,
         .state = &state,
@@ -244,6 +237,9 @@ pub fn run(
     var group: std.Io.Group = .init;
     errdefer group.cancel(io);
 
+    var view: DeploymentView = .init(alloc, term, &state, deployment.id);
+    defer view.deinit();
+
     for (steps_list.items) |step| {
         const remote: *const Remote = remote: for (remotes) |*rem| {
             if (std.mem.eql(u8, rem.get_name(), step.remote))
@@ -258,19 +254,16 @@ pub fn run(
             return error.InvalidPipeline;
         };
 
-        _ = try state.add(remote, pipeline);
-        state.running(step.remote, step.pipeline);
+        _ = try state.add(&depl, io, remote, pipeline);
+        state.running(&depl, io, step.remote, step.pipeline);
 
-        spawn(
+        try spawn(
             io,
             &group,
             follow_step,
-            .{ alloc, io, &state, term, project, &depl, &deployment, remote, pipeline, &fetcher, step, &group },
+            .{ alloc, io, &state, term, &view, project, &depl, &deployment, remote, pipeline, &fetcher, step },
         );
     }
-
-    var view: DeploymentView = .init(alloc, term, &state, deployment.id);
-    defer view.deinit();
 
     while (true) {
         {
@@ -279,7 +272,7 @@ pub fn run(
 
             var any_running = false;
             for (steps_list.items) |step| {
-                if (state.get(step.remote, step.pipeline)) |task_state| {
+                if (state.get(&depl, io, step.remote, step.pipeline)) |task_state| {
                     if (task_state.status == .running or task_state.status == .preparing) {
                         any_running = true;
                         break;

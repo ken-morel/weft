@@ -257,7 +257,7 @@ pub fn add_source(self: *@This(), alloc: std.mem.Allocator, src: []const u8) !vo
 }
 
 pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) !void {
-    var buffer: [1 << 10]u8 = undefined;
+    var buffer: [1 << 5]u8 = undefined;
 
     const filename = try std.fmt.allocPrint(alloc, "{s}.zon", .{&self.id.to_string()});
     defer alloc.free(filename);

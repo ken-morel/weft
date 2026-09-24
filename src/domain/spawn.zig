@@ -1,9 +1,9 @@
 const std = @import("std");
 
-pub fn spawn(io: std.Io, group: *std.Io.Group, comptime func: anytype, args: anytype) void {
+pub fn spawn(io: std.Io, group: *std.Io.Group, comptime func: anytype, args: anytype) std.Io.ConcurrentError!void {
     const S = struct {
         fn runner(a: @TypeOf(args)) std.Io.Cancelable!void {
-            @call(.auto, func, a) catch |err|
+            @as(anyerror!void, @call(.auto, func, a)) catch |err|
                 if (err == error.Canceled)
                     return error.Canceled
                 else {
@@ -13,5 +13,5 @@ pub fn spawn(io: std.Io, group: *std.Io.Group, comptime func: anytype, args: any
                 };
         }
     };
-    group.async(io, S.runner, .{args});
+    try group.concurrent(io, S.runner, .{args});
 }

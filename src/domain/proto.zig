@@ -8,6 +8,14 @@ pub fn Res(comptime T: type) type {
     return anyerror!T;
 }
 
+pub const file: u8 = 0xaa;
+pub const folder: u8 = 0xab;
+
+pub const end: u8 = 0xff;
+
+pub const data: u8 = 0xea;
+pub const compressed_data: u8 = 0xeb;
+
 pub const artifact = struct {
     pub const push = struct {
         pub const Req = union(enum) {
@@ -39,11 +47,6 @@ pub const artifact = struct {
         };
         pub const Res = union(enum) {
             files: u32,
-            folder: []const u8,
-            file: []const u8,
-            raw: []const u8,
-            compressed: []const u8,
-            end,
             footer: struct {},
         };
     };
@@ -138,4 +141,17 @@ pub const DaemonMsg = union(enum) {
     task_completed: TaskCompleted,
 };
 
+req: Request,
+daemon: DaemonMsg,
+push_req: artifact.push.Req,
+push_res: artifact.push.Res,
+pull_req: artifact.pull.Req,
+pull_res: artifact.pull.Res,
+has_req: artifact.has.Req,
+has_res: artifact.has.Res,
+spawn_req: task.spawn.Req,
+spawn_res: task.spawn.Res,
+poll_req: task.poll.Req,
+poll_res: task.poll.Res,
+stats_req: system.stats.Req,
 pub const hash = zoto.hashType(@This());

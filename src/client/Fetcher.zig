@@ -16,17 +16,16 @@ const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
 
-deployment: *Deployment,
+dep: *Deployment,
 remotes: []const Remote,
-lock: std.Io.Mutex = .init,
-pushing: std.StringHashMapUnmanaged(*std.Io.Mutex),
-pulling: std.StringHashMapUnmanaged(*std.Io.Mutex),
+pushing: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
+pulling: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 alloc: std.mem.Allocator,
 state: *DeploymentState,
 term: *Term,
 project: *const Project,
-depl: *std.Io.RwLock,
-active_fetches: u32 = 0,
+depl: *std.Io.Mutex,
+group: std.Io.Group = .init,
 
 pub fn deinit(self: *@This()) void {
     var pushing_iter = self.pushing.iterator();
@@ -48,9 +47,9 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
     defer client.destroy(self.alloc, io);
 
     const task_id: proto.task.Id = .{
-        .deployment = self.deployment.id,
+        .deployment = self.dep.id,
         .pipeline = artifact,
-        .workspace = self.deployment.config.workspace,
+        .workspace = self.dep.config.workspace,
     };
 
     const buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
@@ -59,14 +58,13 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
     try client.conn.send_object(buffer, proto.Request, .artifact_has);
     try client.conn.send_object(buffer, proto.artifact.has.Req, .{ .id = task_id });
 
-    const reply = try client.conn.recv_object(self.alloc, proto.Res(proto.artifact.has.Res));
-    const res = try reply;
-    return res.has;
+    const reply = try try client.conn.recv_object(self.alloc, proto.Res(proto.artifact.has.Res));
+    return reply.has;
 }
 
 pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
     if (Weft.is_source_artifact(artifact)) {
-        const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
+        const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
         defer self.alloc.free(artifact_path);
         return std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
@@ -77,9 +75,7 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
     }
 
     const m = m: {
-        try self.lock.lock(io);
         if (self.pulling.get(artifact)) |m| {
-            self.lock.unlock(io);
             try m.lock(io);
             break :m m;
         } else {
@@ -89,13 +85,12 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
             m.* = .init;
             m.lockUncancelable(io);
             try self.pulling.put(self.alloc, key, m);
-            self.lock.unlock(io);
             break :m m;
         }
     };
     defer m.unlock(io);
 
-    const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
+    const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
     defer self.alloc.free(artifact_path);
 
     std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {
@@ -108,9 +103,7 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
 
 pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
     if (try self.has_artifact(io, remote, artifact)) {
-        try self.depl.lock(io);
-        defer self.depl.unlock(io);
-        self.state.artifact_progress(artifact, remote, .ready, 1.0) catch {};
+        self.state.artifact_progress(self.depl, io, artifact, remote, .ready, 1.0) catch {};
         return;
     }
 
@@ -119,9 +112,7 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
     const push_id = try std.mem.join(self.alloc, ".", &.{ remote.get_name(), artifact });
     defer self.alloc.free(push_id);
     const m = m: {
-        try self.lock.lock(io);
         if (self.pushing.get(push_id)) |m| {
-            self.lock.unlock(io);
             try m.lock(io);
             break :m m;
         } else {
@@ -131,7 +122,6 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
             m.* = .init;
             m.lockUncancelable(io);
             try self.pushing.put(self.alloc, key, m);
-            self.lock.unlock(io);
             break :m m;
         }
     };
@@ -141,42 +131,9 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
     try self.push_artifact(io, remote, artifact);
 }
 
-pub inline fn add(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
-    return self.upload(io, remote, artifact);
-}
-
-pub fn spawn_fetch(self: *@This(), io: std.Io, group: *std.Io.Group, artifact: []const u8) !void {
-    {
-        try self.lock.lock(io);
-        defer self.lock.unlock(io);
-        self.active_fetches += 1;
-    }
-    const key = try self.alloc.dupe(u8, artifact);
-    errdefer {
-        self.lock.lockUncancelable(io);
-        self.active_fetches -= 1;
-        self.lock.unlock(io);
-        self.alloc.free(key);
-    }
-    spawn(io, group, run_fetch, .{ self, io, key });
-}
-
-pub fn is_idle(self: *@This(), io: std.Io) bool {
-    self.lock.lock(io) catch return true;
-    defer self.lock.unlock(io);
-    return self.active_fetches == 0;
-}
-
 pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
-    {
-        try self.depl.lock(io);
-        defer self.depl.unlock(io);
-        try self.state.artifact_progress(artifact, remote, .pushing, 0.0);
-    }
-    defer if (self.depl.lock(io)) |_| {
-        self.state.artifact_progress(artifact, remote, .ready, 1.0) catch {};
-        self.depl.unlock(io);
-    } else |_| {};
+    try self.state.artifact_progress(self.depl, io, artifact, remote, .pushing, 0.0);
+    defer self.state.artifact_progress(self.depl, io, artifact, remote, .ready, 1.0) catch {};
 
     const read_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
     defer self.alloc.free(read_buffer);
@@ -184,7 +141,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     defer self.alloc.free(send_buffer);
     const compressed_buffer = try self.alloc.alloc(u8, Pressor.chunk_size);
     defer self.alloc.free(compressed_buffer);
-    const artifact_dir_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
+    const artifact_dir_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
     defer self.alloc.free(artifact_dir_path);
 
     var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
@@ -192,9 +149,9 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
 
     const conn = &client.conn;
     const task_id: proto.task.Id = .{
-        .deployment = self.deployment.id,
+        .deployment = self.dep.id,
         .pipeline = artifact,
-        .workspace = self.deployment.config.workspace,
+        .workspace = self.dep.config.workspace,
     };
 
     try conn.send_object(send_buffer, proto.Request, .artifact_push);
@@ -242,11 +199,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
                 @as(f32, @floatFromInt(sent_files)) / @as(f32, @floatFromInt(total_files))
             else
                 1.0;
-            {
-                try self.depl.lock(io);
-                defer self.depl.unlock(io);
-                try self.state.artifact_progress(artifact, remote, .pushing, pct);
-            }
+            try self.state.artifact_progress(self.depl, io, artifact, remote, .pushing, pct);
         },
         .folder => |path| try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .folder = path }),
         .data => |data| {
@@ -272,9 +225,9 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
 
 pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     const remote: *const Remote = remote: {
-        try self.depl.lockShared(io);
-        defer self.depl.unlockShared(io);
-        for (self.deployment.artifacts) |*art| {
+        try self.depl.lock(io);
+        defer self.depl.unlock(io);
+        for (self.dep.artifacts) |*art| {
             if (std.mem.eql(u8, art.name, artifact))
                 for (self.remotes) |*rem|
                     if (std.mem.eql(u8, rem.get_name(), art.remote))
@@ -282,29 +235,22 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         } else return error.ArtifactNotFound;
     };
 
-    {
-        try self.depl.lock(io);
-        defer self.depl.unlock(io);
-        try self.state.artifact_progress(artifact, remote, .pulling, 0.0);
-    }
-    defer if (self.depl.lock(io)) |_| {
-        self.state.artifact_progress(artifact, remote, .ready, 1.0) catch {};
-        self.depl.unlock(io);
-    } else |_| {};
+    try self.state.artifact_progress(self.depl, io, artifact, remote, .pulling, 0.0);
+    defer self.state.artifact_progress(self.depl, io, artifact, remote, .ready, 1.0) catch {};
 
     var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
     defer client.destroy(self.alloc, io);
 
-    const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.deployment.id, artifact);
+    const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
     defer self.alloc.free(artifact_path);
 
     const conn_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
     defer self.alloc.free(conn_buffer);
 
     const task_id: proto.task.Id = .{
-        .deployment = self.deployment.id,
+        .deployment = self.dep.id,
         .pipeline = artifact,
-        .workspace = self.deployment.config.workspace,
+        .workspace = self.dep.config.workspace,
     };
 
     try client.conn.send_object(conn_buffer, proto.Request, .artifact_pull);
@@ -316,8 +262,6 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
 
     const dir = try std.Io.Dir.cwd().createDirPathOpen(io, artifact_path, .{});
 
-    var arena: std.heap.ArenaAllocator = .init(self.alloc);
-    defer arena.deinit();
     var packer: Packer = .unpacker(dir);
     defer packer.deinit(io);
     const pressor_buffer = try self.alloc.alloc(u8, Pressor.buffer_size);
@@ -329,43 +273,70 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     var total_files: u32 = 0;
     var received_files: u32 = 0;
 
-    while (true) : (_ = arena.reset(.retain_capacity)) {
-        const res = try client.conn.recv_object(arena.allocator(), proto.artifact.pull.Res);
-        switch (res) {
-            .files => |f| total_files = f,
-            .file => |path| {
+    const initial = try client.conn.recv_object_buf(conn_buffer, proto.artifact.pull.Res);
+    switch (initial) {
+        .files => |f| total_files = f,
+        .footer => {},
+    }
+
+    while (true) {
+        const data = try client.conn.recv_buf(conn_buffer);
+        if (data.len < 5 or !std.mem.eql(u8, data[0..4], "pack"))
+            return error.ExpectedPackHeader;
+
+        switch (data[4]) {
+            proto.file => {
+                const path = data[5..];
                 try packer.put(io, .{ .file = path });
                 received_files += 1;
                 const pct = if (total_files > 0)
                     @as(f32, @floatFromInt(received_files)) / @as(f32, @floatFromInt(total_files))
                 else
                     1.0;
-                {
-                    try self.depl.lock(io);
-                    defer self.depl.unlock(io);
-                    try self.state.artifact_progress(artifact, remote, .pulling, pct);
-                }
+                try self.state.artifact_progress(self.depl, io, artifact, remote, .pulling, pct);
             },
-            .folder => |path| try packer.put(io, .{ .folder = path }),
-            .raw => |data| try packer.put(io, .{ .data = data }),
-            .compressed => |comp| {
+            proto.folder => {
+                const path = data[5..];
+                try packer.put(io, .{ .folder = path });
+            },
+            proto.data => {
+                const bytes = data[5..];
+                try packer.put(io, .{ .data = bytes });
+            },
+            proto.compressed_data => {
+                const comp = data[5..];
                 var input: std.Io.Reader = .fixed(comp);
                 var output: std.Io.Writer = .fixed(decompress_buffer);
                 try pressor.decompress(&input, &output);
                 try packer.put(io, .{ .data = output.buffered() });
             },
-            .end => break,
-            .footer => break,
+            proto.end => break,
+            else => return error.InvalidPack,
         }
     }
+
+    _ = try try client.conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.pull.Res));
 }
-pub fn run_fetch(fetcher: *@This(), io: std.Io, artifact: []const u8) !void {
-    defer {
-        fetcher.lock.lockUncancelable(io);
-        fetcher.active_fetches -= 1;
-        fetcher.lock.unlock(io);
-        fetcher.alloc.free(artifact);
-    }
-    fetcher.fetch(io, artifact) catch |err|
-        fetcher.term.err("failed to fetch artifact {s}: {any}", .{ artifact, err });
+
+pub fn spawn_fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
+    const key = try self.alloc.dupe(u8, artifact);
+    errdefer self.alloc.free(key);
+
+    try spawn(io, &self.group, fetch_wrapper, .{ self, io, key });
+}
+
+fn fetch_wrapper(self: *@This(), io: std.Io, key: []const u8) !void {
+    defer self.alloc.free(key);
+    self.fetch(io, key) catch |e| {
+        self.term.err("failed to fetch artifact {s}: {any}", .{ key, e });
+    };
+}
+
+pub fn is_idle(self: *@This(), io: std.Io) bool {
+    _ = io;
+    for (self.state.artifacts.items) |art|
+        if (art.status == .pulling or art.status == .pushing)
+            return false;
+
+    return true;
 }

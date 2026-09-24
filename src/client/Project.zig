@@ -74,19 +74,12 @@ pub fn task_log_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deploy
     const deployment_dir_path = try deployment_dir.realPathFileAlloc(io, ".", alloc);
     defer alloc.free(deployment_dir_path);
 
-    const log_dir_path = try std.fs.path.join(alloc, &.{ deployment_dir_path, "logs" });
-    defer alloc.free(log_dir_path);
-
-    std.Io.Dir.cwd().createDirPath(io, log_dir_path) catch |err|
-        if (err != error.PathAlreadyExists)
-            return err;
-
-    const filename = try std.fmt.allocPrint(alloc, "{s}.log", .{pipeline});
-    defer alloc.free(filename);
+    const log_name = try std.fmt.allocPrint(alloc, "{s}.log", .{pipeline});
+    defer alloc.free(log_name);
 
     return try std.fs.path.join(
         alloc,
-        &.{ log_dir_path, filename },
+        &.{ deployment_dir_path, "logs", log_name },
     );
 }
 

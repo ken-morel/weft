@@ -83,6 +83,15 @@ pub fn recv(self: *@This(), alloc: std.mem.Allocator) ![]u8 {
 
     return data;
 }
+pub fn recv_buf(self: *@This(), buf: []u8) ![]u8 {
+    var fba: std.heap.FixedBufferAllocator = .init(buf);
+    return self.recv(fba.allocator()) catch |err| {
+        return if (err == error.OutOfMemory)
+            error.BufferTooSmall
+        else
+            err;
+    };
+}
 
 pub fn recv_object(self: *@This(), alloc: std.mem.Allocator, comptime T: type) !T {
     var data: []const u8 = try self.recv(alloc);

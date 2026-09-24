@@ -12,6 +12,7 @@ pub const Options = struct {
 
 /// Get a 64-bit structural hash of type T
 pub fn hashType(comptime T: type) u64 {
+    @setEvalBranchQuota(100_000);
     var h: u64 = @intCast(14695981039346656037);
     const prime = 1099511628211;
 

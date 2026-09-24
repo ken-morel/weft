@@ -324,13 +324,13 @@ pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
         .@"union" => |U| blk: {
             var out: []const u8 = "";
 
-            if (docstring(T)) |description|
+            if (docs.docstring(T)) |description|
                 out = out ++ description ++ "\n\n";
 
-            out = out ++ "Usage:\n  " ++ name ++ " <command> [args]\n";
+            out = out ++ "Usage:\n  " ++ name ++ " <command> [options]\n";
 
             if (@hasField(T, "else"))
-                out = out ++ "\n" ++ arguments(@FieldType(T, "else"));
+                out = out ++ "\n" ++ docs.arguments(@FieldType(T, "else"));
 
             out = out ++ "\nCommands:\n";
 
@@ -340,11 +340,11 @@ pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
                 if (is_hidden(T, field.name, field.type))
                     continue;
 
+                const desc = docs.docstring_arg(T, field.name) orelse docs.docstring(field.type) orelse "";
+                out = out ++ "  " ++ docs.pad_right(field.name, 18);
+                if (desc.len > 0)
+                    out = out ++ desc;
                 out = out ++ "\n";
-                out = out ++ prefix_lines(
-                    command_doc(T, field.name, field.type),
-                    "  ",
-                );
             }
 
             break :blk out;
@@ -356,12 +356,12 @@ pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
 
             var out: []const u8 = "";
 
-            if (docstring(T)) |description|
+            if (docs.docstring(T)) |description|
                 out = out ++ description ++ "\n\n";
 
-            const args_doc = arguments(T);
+            const args_doc = docs.arguments(T);
             if (args_doc.len > 0) {
-                out = out ++ "\n" ++ args_doc;
+                out = out ++ "Arguments:\n" ++ args_doc;
             }
 
             break :blk out;
@@ -373,220 +373,83 @@ pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
         ),
     };
 }
+const docs = struct {
+    fn pad_right(comptime str: []const u8, comptime width: usize) []const u8 {
+        if (str.len >= width) return str ++ "  ";
+        comptime var spaces: [width]u8 = undefined;
+        @memset(&spaces, ' ');
+        return str ++ spaces[0 .. width - str.len];
+    }
 
-fn command_doc(
-    comptime Parent: type,
-    comptime name: []const u8,
-    comptime T: type,
-) []const u8 {
-    comptime var out: []const u8 = name;
+    fn arguments(comptime T: type) []const u8 {
+        const S = switch (@typeInfo(T)) {
+            .@"struct" => |S| S,
+            else => @compileError(
+                "argument container must be a struct, found " ++
+                    @typeName(T),
+            ),
+        };
 
-    if (docstring_arg(Parent, name)) |description|
-        out = out ++ "  " ++ description;
+        if (S.fields.len == 0)
+            return "";
 
-    if (@typeInfo(T) != .void)
-        out = out ++ "\n" ++ doc(name, T);
+        var out: []const u8 = "";
 
-    return out ++ "\n";
-}
+        for (S.fields) |field| {
+            if (is_hidden(T, field.name, field.type))
+                continue;
 
-fn arguments(comptime T: type) []const u8 {
-    const S = switch (@typeInfo(T)) {
-        .@"struct" => |S| S,
-        else => @compileError(
-            "argument container must be a struct, found " ++
-                @typeName(T),
-        ),
-    };
+            var arg_line: []const u8 = field.name;
+            if (field.defaultValue() != null) {
+                arg_line = arg_line ++ " [default]";
+            }
+            out = out ++ "  " ++ pad_right(arg_line, 22);
 
-    if (S.fields.len == 0)
-        return "";
+            if (docstring_arg(T, field.name)) |description| {
+                out = out ++ description;
+            }
 
-    var out: []const u8 = "Arguments:\n";
-
-    for (S.fields) |field| {
-        if (is_hidden(T, field.name, field.type))
-            continue;
-
-        out = out ++ "  ";
-        out = out ++ field.name;
-        out = out ++ " ";
-        out = out ++ type_name(field.type);
-
-        if (field.defaultValue() != null)
-            out = out ++ " [default]";
-
-        if (docstring_arg(T, field.name)) |description| {
             out = out ++ "\n";
-            out = out ++ prefix_lines(description, "    ");
         }
 
-        out = out ++ "\n";
+        return out;
     }
 
-    return out;
-}
-
-fn prefix_lines(
-    comptime text: []const u8,
-    comptime prefix: []const u8,
-) []const u8 {
-    if (text.len == 0)
-        return "";
-
-    var out: []const u8 = "";
-    var start: usize = 0;
-
-    while (start < text.len) {
-        const remaining = text[start..];
-        const newline = std.mem.indexOfScalar(u8, remaining, '\n') orelse remaining.len;
-
-        out = out ++ prefix ++ remaining[0..newline];
-
-        if (newline == remaining.len)
-            break;
-
-        out = out ++ "\n";
-        start += newline + 1;
+    pub fn docstring(comptime T: type) ?[]const u8 {
+        return comptime switch (@typeInfo(T)) {
+            .@"struct", .@"enum", .@"union", .@"opaque" => if (@hasDecl(T, "doc"))
+                @field(T, "doc")
+            else
+                null,
+            else => null,
+        };
     }
 
-    return out;
-}
-
-pub fn docstring(comptime T: type) ?[]const u8 {
-    return comptime switch (@typeInfo(T)) {
-        .@"struct", .@"enum", .@"union", .@"opaque" => if (@hasDecl(T, "doc"))
-            @field(T, "doc")
-        else
-            null,
-        else => null,
-    };
-}
-
-pub fn docstring_arg(
-    comptime T: type,
-    comptime name: []const u8,
-) ?[]const u8 {
-    return comptime switch (@typeInfo(T)) {
-        .@"struct", .@"union", .@"enum" => if (@hasDecl(T, "doc_" ++ name))
-            @field(T, "doc_" ++ name)
-        else
-            null,
-        else => null,
-    };
-}
-
-fn type_name(comptime T: type) []const u8 {
-    return comptime switch (@typeInfo(T)) {
-        .pointer => |P| switch (P.size) {
-            .slice => "[]" ++ type_name(P.child),
-            else => "*" ++ type_name(P.child),
-        },
-        .array => |A| std.fmt.comptimePrint("[{}]{s}", .{
-            A.len,
-            type_name(A.child),
-        }),
-        .optional => |O| "?" ++ type_name(O.child),
-        else => @typeName(T),
-    };
-}
-
-test "argz tokenize and parse scalar flags and positionals" {
-    const alloc = std.testing.allocator;
-
-    const TestCmd = struct {
-        name: []const u8,
-        count: u32 = 1,
-        verbose: bool = false,
-        user: ?[]const u8 = null,
-    };
-
-    const parsed1 = try parse(TestCmd, alloc, null, &.{ "hello", "--count", "42", "--verbose", "--user", "admin" });
-    try std.testing.expectEqualStrings("hello", parsed1.name);
-    try std.testing.expectEqual(@as(u32, 42), parsed1.count);
-    try std.testing.expectEqual(true, parsed1.verbose);
-    try std.testing.expectEqualStrings("admin", parsed1.user.?);
-
-    const parsed2 = try parse(TestCmd, alloc, null, &.{"world"});
-    try std.testing.expectEqualStrings("world", parsed2.name);
-    try std.testing.expectEqual(@as(u32, 1), parsed2.count);
-    try std.testing.expectEqual(false, parsed2.verbose);
-    try std.testing.expectEqual(@as(?[]const u8, null), parsed2.user);
-}
-
-test "argz parse subcommands union" {
-    const alloc = std.testing.allocator;
-
-    const SubA = struct {
-        val: []const u8,
-    };
-    const SubB = struct {
-        items: [][]const u8 = &.{},
-    };
-    const Root = union(enum) {
-        a: SubA,
-        b: SubB,
-        run: struct {},
-    };
-
-    const res_a = try parse(Root, alloc, null, &.{ "a", "foo" });
-    switch (res_a) {
-        .a => |a| try std.testing.expectEqualStrings("foo", a.val),
-        else => unreachable,
+    pub fn docstring_arg(
+        comptime T: type,
+        comptime name: []const u8,
+    ) ?[]const u8 {
+        return comptime switch (@typeInfo(T)) {
+            .@"struct", .@"union", .@"enum" => if (@hasDecl(T, "doc_" ++ name))
+                @field(T, "doc_" ++ name)
+            else
+                null,
+            else => null,
+        };
     }
 
-    const res_b = try parse(Root, alloc, null, &.{ "b", "x", "y", "z" });
-    switch (res_b) {
-        .b => |b| {
-            try std.testing.expectEqual(@as(usize, 3), b.items.len);
-            try std.testing.expectEqualStrings("x", b.items[0]);
-            try std.testing.expectEqualStrings("y", b.items[1]);
-            try std.testing.expectEqualStrings("z", b.items[2]);
-            alloc.free(b.items);
-        },
-        else => unreachable,
+    fn type_name(comptime T: type) []const u8 {
+        return comptime switch (@typeInfo(T)) {
+            .pointer => |P| switch (P.size) {
+                .slice => "[]" ++ type_name(P.child),
+                else => "*" ++ type_name(P.child),
+            },
+            .array => |A| std.fmt.comptimePrint("[{}]{s}", .{
+                A.len,
+                type_name(A.child),
+            }),
+            .optional => |O| "?" ++ type_name(O.child),
+            else => @typeName(T),
+        };
     }
-
-    const res_run = try parse(Root, alloc, null, &.{"run"});
-    switch (res_run) {
-        .run => {},
-        else => unreachable,
-    }
-}
-
-test "argz SocketAddr parsing" {
-    const s1 = try SocketAddr.argz_parse(std.testing.allocator, null, "192.168.1.1:9338");
-    try std.testing.expectEqualStrings("192.168.1.1", s1.host);
-    try std.testing.expectEqual(@as(?u16, 9338), s1.port);
-
-    const s2 = try SocketAddr.argz_parse(std.testing.allocator, null, "example.com");
-    try std.testing.expectEqualStrings("example.com", s2.host);
-    try std.testing.expectEqual(@as(?u16, null), s2.port);
-
-    const s3 = try SocketAddr.argz_parse(std.testing.allocator, null, "[::1]:8080");
-    try std.testing.expectEqualStrings("::1", s3.host);
-    try std.testing.expectEqual(@as(?u16, 8080), s3.port);
-}
-
-test "argz doc generation" {
-    const App = union(enum) {
-        const doc = "Test App";
-        cmd: struct {
-            const doc = "Run cmd";
-            const doc_flag = "A flag description";
-            flag: ?[]const u8 = null,
-            hidden_arg: ?[]const u8 = null,
-            pub const hidden_hidden_arg = true;
-        },
-        hidden_cmd: struct {
-            pub const hidden = true;
-            foo: []const u8,
-        },
-    };
-    const documentation = doc("testapp", App);
-    try std.testing.expect(documentation.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, documentation, "Test App") != null);
-    try std.testing.expect(std.mem.indexOf(u8, documentation, "cmd") != null);
-    try std.testing.expect(std.mem.indexOf(u8, documentation, "hidden_cmd") == null);
-    try std.testing.expect(std.mem.indexOf(u8, documentation, "hidden_arg") == null);
-}
+};

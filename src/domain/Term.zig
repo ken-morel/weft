@@ -53,7 +53,7 @@ rw_buf: struct { []u8, []u8 },
 log_level: Level = .debug,
 timestamps: bool = true,
 io: std.Io,
-color: bool,
+is_tty: bool,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
     var ri = std.Io.File.stdin();
@@ -69,7 +69,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
         .rw_io = .{ ri, wo },
         .rw_file = .{ ri.reader(io, ri_buf), wo.writer(io, wo_buf) },
         .rw_buf = .{ ri_buf, wo_buf },
-        .color = wo.isTty(io) catch false,
+        .is_tty = wo.isTty(io) catch false,
         .io = io,
     };
 }
@@ -115,7 +115,7 @@ pub const Size = struct {
 };
 
 pub fn get_size(self: *@This()) Size {
-    if (self.color) {
+    if (self.is_tty) {
         var ws: std.posix.winsize = .{
             .row = 0,
             .col = 0,
@@ -181,7 +181,7 @@ pub fn style(self: *@This(), s: Style) void {
 }
 
 pub fn styled(self: *@This(), s: Style, txt: []const u8) void {
-    if (!self.color) {
+    if (!self.is_tty) {
         self.write(txt) catch {};
         return;
     } else {
@@ -198,7 +198,7 @@ fn write_timestamp(self: *@This(), w: *std.Io.Writer) !void {
     const day = es.getDaySeconds();
     const yd = es.getEpochDay().calculateYearDay();
     const md = yd.calculateMonthDay();
-    if (self.color) {
+    if (self.is_tty) {
         try w.print("{c}[2m{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}{c}[0m ", .{
             0x1b,                       yd.year,
             @intFromEnum(md.month),     md.day_index + 1,
@@ -223,7 +223,7 @@ pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, arg
     const w = self.writer();
     if (self.timestamps)
         self.write_timestamp(w) catch {};
-    if (self.color)
+    if (self.is_tty)
         w.writeAll(comptime tag(level, true)) catch {}
     else
         w.writeAll(comptime tag(level, false)) catch {};
@@ -272,7 +272,7 @@ pub fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     const w = self.writer();
     if (self.timestamps)
         self.write_timestamp(w) catch {};
-    if (self.color) {
+    if (self.is_tty) {
         w.writeAll(Style.bold.code()) catch {};
         w.writeAll(">> ") catch {};
         w.writeAll(Style.reset.code()) catch {};
@@ -287,7 +287,7 @@ pub fn success(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     const w = self.writer();
     if (self.timestamps)
         self.write_timestamp(w) catch {};
-    if (self.color) {
+    if (self.is_tty) {
         w.writeAll(Style.bold.code()) catch {};
         w.writeAll(Style.green.code()) catch {};
         w.writeAll("ok") catch {};
