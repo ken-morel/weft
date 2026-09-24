@@ -9,6 +9,23 @@ const Remote = @import("Remote.zig");
 const Term = @import("../domain/Term.zig");
 const zoto = @import("../util/zoto.zig");
 
+fn format_time(buf: []u8, ns: i128) []const u8 {
+    const epoch_seconds: u64 = if (ns > 0) @intCast(@divTrunc(ns, std.time.ns_per_s)) else 0;
+    const epoch = std.time.epoch.EpochSeconds{ .secs = epoch_seconds };
+    const day = epoch.getEpochDay();
+    const day_seconds = epoch.getDaySeconds();
+    const yd = day.calculateYearDay();
+    const md = yd.calculateMonthDay();
+    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}", .{
+        yd.year,
+        @intFromEnum(md.month),
+        md.day_index + 1,
+        day_seconds.getHoursIntoDay(),
+        day_seconds.getMinutesIntoHour(),
+        day_seconds.getSecondsIntoMinute(),
+    }) catch "----";
+}
+
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -51,7 +68,7 @@ pub fn run(
         .from = .{ .nanoseconds = 0 },
     });
 
-    term.info("connected. Monitoring system stats (Ctrl+C to quit)...", .{});
+    term.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.get_name()});
 
     var frame_arena = std.heap.ArenaAllocator.init(allocator);
     defer frame_arena.deinit();
@@ -61,6 +78,8 @@ pub fn run(
 
     var read_pos: usize = 0;
     var rendered_lines: u16 = 0;
+
+    const color = term.is_tty;
 
     while (true) {
         // Read incoming zoto serialized Stats stream from the raw connection reader
@@ -72,152 +91,133 @@ pub fn run(
         read_pos += n;
 
         var slice: []const u8 = stream_buf[0..read_pos];
-        const stats = zoto.deserialize(frame_arena.allocator(), &slice, Monitor.Stats, .{ .header = true, .hash = true }) catch |err| {
-            if (err == error.BufferTooSmall) {
-                // Incomplete packet in stream_buf, continue reading next chunk
-                continue;
+        while (slice.len > 0) {
+            var parse_slice = slice;
+            const stats = zoto.deserialize(frame_arena.allocator(), &parse_slice, Monitor.Stats, .{ .header = true, .hash = true }) catch |err| {
+                if (err == error.BufferTooSmall or err == error.EndOfStream) {
+                    // Incomplete packet in stream_buf, wait for next read
+                    break;
+                }
+                term.err("failed to decode stats packet: {any}", .{err});
+                return err;
+            };
+
+            slice = parse_slice;
+
+            // 1. Move up and clear interactive bottom deck if active
+            if (term.is_tty and rendered_lines > 0) {
+                term.move_up(rendered_lines);
+                rendered_lines = 0;
             }
-            term.err("failed to decode stats packet: {any}", .{err});
-            return err;
-        };
+
+            // 2. Format and print permanent stats log line (scrollback history)
+            var time_buf: [32]u8 = undefined;
+            const time_str = format_time(&time_buf, stats.time.nanoseconds);
+
+            var ram_u_buf: [32]u8 = undefined;
+            var ram_t_buf: [32]u8 = undefined;
+            const ram_u_str = format_bytes(&ram_u_buf, stats.ram.used);
+            const ram_t_str = format_bytes(&ram_t_buf, stats.ram.total);
+            const ram_pct: u64 = if (stats.ram.total > 0) (stats.ram.used * 100) / stats.ram.total else 0;
+
+            if (color) {
+                if (stats.swap.total > 0) {
+                    var swp_u_buf: [32]u8 = undefined;
+                    var swp_t_buf: [32]u8 = undefined;
+                    const swp_u_str = format_bytes(&swp_u_buf, stats.swap.used);
+                    const swp_t_str = format_bytes(&swp_t_buf, stats.swap.total);
+                    term.println("\x1b[2m{s}\x1b[0m \x1b[36mstats\x1b[0m\t\tCPU: {d}%  RAM: {s}/{s} ({d}%)  SWP: {s}/{s}  Tasks: {d}", .{
+                        time_str,
+                        stats.cpu.usage,
+                        ram_u_str,
+                        ram_t_str,
+                        ram_pct,
+                        swp_u_str,
+                        swp_t_str,
+                        stats.services.len,
+                    });
+                } else {
+                    term.println("\x1b[2m{s}\x1b[0m \x1b[36mstats\x1b[0m\t\tCPU: {d}%  RAM: {s}/{s} ({d}%)  Tasks: {d}", .{
+                        time_str,
+                        stats.cpu.usage,
+                        ram_u_str,
+                        ram_t_str,
+                        ram_pct,
+                        stats.services.len,
+                    });
+                }
+            } else {
+                if (stats.swap.total > 0) {
+                    var swp_u_buf: [32]u8 = undefined;
+                    var swp_t_buf: [32]u8 = undefined;
+                    const swp_u_str = format_bytes(&swp_u_buf, stats.swap.used);
+                    const swp_t_str = format_bytes(&swp_t_buf, stats.swap.total);
+                    term.println("{s} stats\t\tCPU: {d}%  RAM: {s}/{s} ({d}%)  SWP: {s}/{s}  Tasks: {d}", .{
+                        time_str,
+                        stats.cpu.usage,
+                        ram_u_str,
+                        ram_t_str,
+                        ram_pct,
+                        swp_u_str,
+                        swp_t_str,
+                        stats.services.len,
+                    });
+                } else {
+                    term.println("{s} stats\t\tCPU: {d}%  RAM: {s}/{s} ({d}%)  Tasks: {d}", .{
+                        time_str,
+                        stats.cpu.usage,
+                        ram_u_str,
+                        ram_t_str,
+                        ram_pct,
+                        stats.services.len,
+                    });
+                }
+            }
+
+            // 3. Render interactive pinned bottom deck (only on TTY)
+            if (term.is_tty) {
+                var lines_count: u16 = 0;
+
+                term.clear_line();
+                term.println("\x1b[1;30m--- Active Tasks on {s} ({d}) ---\x1b[0m", .{ target_remote.get_name(), stats.services.len });
+                lines_count += 1;
+
+                if (stats.services.len == 0) {
+                    term.clear_line();
+                    term.println("\x1b[2m  (no active tasks)\x1b[0m", .{});
+                    lines_count += 1;
+                } else {
+                    for (stats.services) |svc| {
+                        var mem_buf: [32]u8 = undefined;
+                        var peak_buf: [32]u8 = undefined;
+                        const mem_str = format_bytes(&mem_buf, svc.memory_bytes);
+                        const peak_str = format_bytes(&peak_buf, svc.memory_peak_bytes);
+                        const cpu_ms = svc.cpu_usage_usec / 1000;
+
+                        term.clear_line();
+                        term.println("! \x1b[1m{s}.{s}\x1b[0m  (RAM: {s}, Peak: {s}, CPU: {d}ms)", .{
+                            svc.task.id.workspace,
+                            svc.task.id.pipeline,
+                            mem_str,
+                            peak_str,
+                            cpu_ms,
+                        });
+                        lines_count += 1;
+                    }
+                }
+
+                rendered_lines = lines_count;
+                term.clear_to_end();
+            }
+
+            try term.flush();
+            _ = frame_arena.reset(.retain_capacity);
+        }
 
         // Shift remaining unparsed bytes to the beginning of stream_buf
-        const consumed = read_pos - slice.len;
         if (slice.len > 0) {
             std.mem.copyForwards(u8, stream_buf[0..slice.len], slice);
         }
         read_pos = slice.len;
-        _ = consumed;
-
-        // Render dashboard
-        if (term.is_tty and rendered_lines > 0) {
-            term.move_up(rendered_lines);
-            rendered_lines = 0;
-        }
-
-        var lines: u16 = 0;
-
-        // Header
-        if (term.is_tty) {
-            term.println("\x1b[1;36m=== Remote Monitor: {s} ({s}:{d}) ===\x1b[0m", .{ target_remote.get_name(), target_remote.address.@"0", target_remote.address.@"1" });
-        } else {
-            term.println("=== Remote Monitor: {s} ({s}:{d}) ===", .{ target_remote.get_name(), target_remote.address.@"0", target_remote.address.@"1" });
-        }
-        lines += 1;
-
-        // CPU
-        {
-            var bar_buf: [22]u8 = undefined;
-            const pct = stats.cpu.usage;
-            const filled: usize = @min(20, (pct * 20) / 100);
-            @memset(bar_buf[0..filled], '|');
-            @memset(bar_buf[filled..20], ' ');
-            bar_buf[20] = 0;
-
-            if (term.is_tty) {
-                term.println("\x1b[1mCPU:\x1b[0m [{s}] {d}%  ({s}, {d} MHz)", .{ bar_buf[0..20], pct, stats.cpu.model, stats.cpu.freq });
-            } else {
-                term.println("CPU: [{s}] {d}%  ({s}, {d} MHz)", .{ bar_buf[0..20], pct, stats.cpu.model, stats.cpu.freq });
-            }
-            lines += 1;
-
-            if (stats.cpu.cores.len > 0) {
-                var core_buf: [256]u8 = undefined;
-                var cw: std.Io.Writer = .fixed(&core_buf);
-                for (stats.cpu.cores, 0..) |core, idx| {
-                    if (idx > 0) cw.writeAll("  ") catch break;
-                    cw.print("C{d}:{d:.0}%", .{ core.id, core.usage }) catch break;
-                    if (idx >= 7 and stats.cpu.cores.len > 8) {
-                        cw.print(" ... +{d} more", .{stats.cpu.cores.len - 8}) catch break;
-                        break;
-                    }
-                }
-                term.println("     {s}", .{cw.buffered()});
-                lines += 1;
-            }
-        }
-
-        // RAM
-        {
-            var u_buf: [32]u8 = undefined;
-            var t_buf: [32]u8 = undefined;
-            var f_buf: [32]u8 = undefined;
-            const ram_pct: u64 = if (stats.ram.total > 0) (stats.ram.used * 100) / stats.ram.total else 0;
-            const u_str = format_bytes(&u_buf, stats.ram.used);
-            const t_str = format_bytes(&t_buf, stats.ram.total);
-            const f_str = format_bytes(&f_buf, stats.ram.free);
-
-            if (term.is_tty) {
-                term.println("\x1b[1mRAM:\x1b[0m {s} / {s} ({d}%)  [Free: {s}]", .{ u_str, t_str, ram_pct, f_str });
-            } else {
-                term.println("RAM: {s} / {s} ({d}%)  [Free: {s}]", .{ u_str, t_str, ram_pct, f_str });
-            }
-            lines += 1;
-        }
-
-        // Swap / Zram
-        if (stats.swap.total > 0 or stats.zram.total > 0) {
-            var su_buf: [32]u8 = undefined;
-            var st_buf: [32]u8 = undefined;
-            const su_str = format_bytes(&su_buf, stats.swap.used);
-            const st_str = format_bytes(&st_buf, stats.swap.total);
-            term.println("SWP: {s} / {s}", .{ su_str, st_str });
-            lines += 1;
-        }
-
-        // Disks
-        if (stats.disks.len > 0) {
-            if (term.is_tty) {
-                term.println("\x1b[1mDisks:\x1b[0m", .{});
-            } else {
-                term.println("Disks:", .{});
-            }
-            lines += 1;
-
-            for (stats.disks) |disk| {
-                var du_buf: [32]u8 = undefined;
-                var dt_buf: [32]u8 = undefined;
-                var da_buf: [32]u8 = undefined;
-                const du_str = format_bytes(&du_buf, disk.used);
-                const dt_str = format_bytes(&dt_buf, disk.total);
-                const da_str = format_bytes(&da_buf, disk.available);
-                term.println("  {s:<16} {s} / {s} (avail: {s}) [{s}]", .{ disk.mount_point, du_str, dt_str, da_str, disk.fs });
-                lines += 1;
-            }
-        }
-
-        // Active Weft Tasks / Services
-        if (stats.services.len > 0) {
-            if (term.is_tty) {
-                term.println("\x1b[1mRunning Weft Tasks ({d}):\x1b[0m", .{stats.services.len});
-            } else {
-                term.println("Running Weft Tasks ({d}):", .{stats.services.len});
-            }
-            lines += 1;
-
-            for (stats.services) |svc| {
-                var mem_buf: [32]u8 = undefined;
-                var peak_buf: [32]u8 = undefined;
-                const mem_str = format_bytes(&mem_buf, svc.memory_bytes);
-                const peak_str = format_bytes(&peak_buf, svc.memory_peak_bytes);
-                const cpu_sec: f64 = @as(f64, @floatFromInt(svc.cpu_usage_usec)) / 1_000_000.0;
-                term.println("  * {s}.{s} (RAM: {s} / peak: {s}, CPU: {d:.2}s)", .{
-                    svc.task.id.workspace,
-                    svc.task.id.pipeline,
-                    mem_str,
-                    peak_str,
-                    cpu_sec,
-                });
-                lines += 1;
-            }
-        }
-
-        rendered_lines = lines;
-        if (term.is_tty) {
-            term.clear_to_end();
-        }
-        try term.flush();
-
-        _ = frame_arena.reset(.retain_capacity);
     }
 }

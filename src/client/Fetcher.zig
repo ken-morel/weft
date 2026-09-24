@@ -20,6 +20,7 @@ dep: *Deployment,
 remotes: []const Remote,
 pushing: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 pulling: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
+map_mutex: std.Io.Mutex = .init,
 alloc: std.mem.Allocator,
 state: *DeploymentState,
 term: *Term,
@@ -62,6 +63,22 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
     return reply.has;
 }
 
+fn get_mutex(self: *@This(), io: std.Io, map: *std.StringHashMapUnmanaged(*std.Io.Mutex), key_str: []const u8) !*std.Io.Mutex {
+    self.map_mutex.lockUncancelable(io);
+    defer self.map_mutex.unlock(io);
+
+    if (map.get(key_str)) |m| {
+        return m;
+    }
+
+    const key = try self.alloc.dupe(u8, key_str);
+    errdefer self.alloc.free(key);
+    const m = try self.alloc.create(std.Io.Mutex);
+    m.* = .init;
+    try map.put(self.alloc, key, m);
+    return m;
+}
+
 pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
     if (Weft.is_source_artifact(artifact)) {
         const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
@@ -74,20 +91,8 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
         };
     }
 
-    const m = m: {
-        if (self.pulling.get(artifact)) |m| {
-            try m.lock(io);
-            break :m m;
-        } else {
-            const key = try self.alloc.dupe(u8, artifact);
-            errdefer self.alloc.free(key);
-            const m = try self.alloc.create(std.Io.Mutex);
-            m.* = .init;
-            m.lockUncancelable(io);
-            try self.pulling.put(self.alloc, key, m);
-            break :m m;
-        }
-    };
+    const m = try self.get_mutex(io, &self.pulling, artifact);
+    try m.lock(io);
     defer m.unlock(io);
 
     const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
@@ -103,7 +108,7 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
 
 pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
     if (try self.has_artifact(io, remote, artifact)) {
-        self.state.artifact_progress(self.depl, io, artifact, remote, .ready, 1.0) catch {};
+        self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
         return;
     }
 
@@ -111,29 +116,19 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
 
     const push_id = try std.mem.join(self.alloc, ".", &.{ remote.get_name(), artifact });
     defer self.alloc.free(push_id);
-    const m = m: {
-        if (self.pushing.get(push_id)) |m| {
-            try m.lock(io);
-            break :m m;
-        } else {
-            const key = try self.alloc.dupe(u8, push_id);
-            errdefer self.alloc.free(key);
-            const m = try self.alloc.create(std.Io.Mutex);
-            m.* = .init;
-            m.lockUncancelable(io);
-            try self.pushing.put(self.alloc, key, m);
-            break :m m;
-        }
-    };
+
+    const m = try self.get_mutex(io, &self.pushing, push_id);
+    try m.lock(io);
     defer m.unlock(io);
+
     if (try self.has_artifact(io, remote, artifact))
         return;
     try self.push_artifact(io, remote, artifact);
 }
 
 pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
-    try self.state.artifact_progress(self.depl, io, artifact, remote, .pushing, 0.0);
-    defer self.state.artifact_progress(self.depl, io, artifact, remote, .ready, 1.0) catch {};
+    try self.state.artifact_progress(io, artifact, remote, .pushing, 0.0);
+    defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
 
     const read_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
     defer self.alloc.free(read_buffer);
@@ -175,15 +170,18 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
             };
     }
 
+    var artifact_dir = try std.Io.Dir.cwd().openDir(
+        io,
+        artifact_dir_path,
+        .{
+            .iterate = true,
+        },
+    );
+    defer artifact_dir.close(io);
+
     var packer: Packer = try .packer(
         self.alloc,
-        try std.Io.Dir.cwd().openDir(
-            io,
-            artifact_dir_path,
-            .{
-                .iterate = true,
-            },
-        ),
+        artifact_dir,
     );
     defer packer.deinit(io);
     const pressor_buffer = try self.alloc.alloc(u8, Pressor.buffer_size);
@@ -199,7 +197,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
                 @as(f32, @floatFromInt(sent_files)) / @as(f32, @floatFromInt(total_files))
             else
                 1.0;
-            try self.state.artifact_progress(self.depl, io, artifact, remote, .pushing, pct);
+            try self.state.artifact_progress(io, artifact, remote, .pushing, pct);
         },
         .folder => |path| try conn.send_object(send_buffer, proto.artifact.push.Req, .{ .folder = path }),
         .data => |data| {
@@ -235,8 +233,8 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         } else return error.ArtifactNotFound;
     };
 
-    try self.state.artifact_progress(self.depl, io, artifact, remote, .pulling, 0.0);
-    defer self.state.artifact_progress(self.depl, io, artifact, remote, .ready, 1.0) catch {};
+    try self.state.artifact_progress(io, artifact, remote, .pulling, 0.0);
+    defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
 
     var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
     defer client.destroy(self.alloc, io);
@@ -260,7 +258,8 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         .{ .header = .{ .id = task_id } },
     );
 
-    const dir = try std.Io.Dir.cwd().createDirPathOpen(io, artifact_path, .{});
+    var dir = try std.Io.Dir.cwd().createDirPathOpen(io, artifact_path, .{});
+    defer dir.close(io);
 
     var packer: Packer = .unpacker(dir);
     defer packer.deinit(io);
@@ -293,7 +292,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
                     @as(f32, @floatFromInt(received_files)) / @as(f32, @floatFromInt(total_files))
                 else
                     1.0;
-                try self.state.artifact_progress(self.depl, io, artifact, remote, .pulling, pct);
+                try self.state.artifact_progress(io, artifact, remote, .pulling, pct);
             },
             proto.folder => {
                 const path = data[5..];
@@ -333,7 +332,9 @@ fn fetch_wrapper(self: *@This(), io: std.Io, key: []const u8) !void {
 }
 
 pub fn is_idle(self: *@This(), io: std.Io) bool {
-    _ = io;
+    self.state.mutex.lockUncancelable(io);
+    defer self.state.mutex.unlock(io);
+
     for (self.state.artifacts.items) |art|
         if (art.status == .pulling or art.status == .pushing)
             return false;

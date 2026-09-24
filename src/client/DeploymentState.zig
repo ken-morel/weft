@@ -20,6 +20,7 @@ pub const Step = struct {
     memory_bytes: ?u64 = null,
     prev_cpu_usec: ?u64 = null,
     last_poll_time: ?std.Io.Timestamp = null,
+    log_offset: u64 = 0,
 };
 pub const Artifact = struct {
     pub const Status = enum {
@@ -37,6 +38,7 @@ project: *const Project,
 alloc: std.mem.Allocator,
 steps: std.ArrayList(Step),
 artifacts: std.ArrayList(Artifact),
+mutex: std.Io.Mutex = .init,
 
 pub fn init(alloc: std.mem.Allocator, project: *const Project) @This() {
     return .{
@@ -70,9 +72,9 @@ fn artifact_unlocked(self: *@This(), name: []const u8, remote_name: []const u8) 
     return null;
 }
 
-pub fn add(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote: *const Remote, pipeline: *const Weft.Pipeline) !*Step {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn add(self: *@This(), io: std.Io, remote: *const Remote, pipeline: *const Weft.Pipeline) !*Step {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     if (self.get_unlocked(remote.get_name(), pipeline.name)) |s|
         return s;
@@ -86,9 +88,9 @@ pub fn add(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote: *const Remot
     return &self.steps.items[self.steps.items.len - 1];
 }
 
-pub fn get(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name: []const u8, pipeline_name: []const u8) ?Step {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn get(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) ?Step {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     if (self.get_unlocked(remote_name, pipeline_name)) |s|
         return s.*;
@@ -96,25 +98,25 @@ pub fn get(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name: []const
     return null;
 }
 
-pub fn running(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn running(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     if (self.get_unlocked(remote_name, pipeline_name)) |s|
         s.status = .running;
 }
 
-pub fn completed(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn completed(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     if (self.get_unlocked(remote_name, pipeline_name)) |s|
         s.status = .completed;
 }
 
-pub fn err(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name: []const u8, pipeline_name: []const u8, err_msg: []const u8) void {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn err(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8, err_msg: []const u8) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     if (self.get_unlocked(remote_name, pipeline_name)) |s| {
         s.status = .err;
@@ -122,9 +124,9 @@ pub fn err(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name: []const
     }
 }
 
-pub fn update_usage(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name: []const u8, pipeline_name: []const u8, cpu_usec: u64, memory_bytes: u64, now: std.Io.Timestamp) void {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn update_usage(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8, cpu_usec: u64, memory_bytes: u64, now: std.Io.Timestamp) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     if (self.get_unlocked(remote_name, pipeline_name)) |s| {
         s.memory_bytes = memory_bytes;
@@ -142,9 +144,18 @@ pub fn update_usage(self: *@This(), lock: *std.Io.Mutex, io: std.Io, remote_name
     }
 }
 
-pub fn artifact_progress(self: *@This(), lock: *std.Io.Mutex, io: std.Io, name: []const u8, remote: *const Remote, status: Artifact.Status, percent: f32) !void {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn set_log_offset(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8, offset: u64) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
+
+    if (self.get_unlocked(remote_name, pipeline_name)) |s| {
+        s.log_offset = offset;
+    }
+}
+
+pub fn artifact_progress(self: *@This(), io: std.Io, name: []const u8, remote: *const Remote, status: Artifact.Status, percent: f32) !void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     if (self.artifact_unlocked(name, remote.get_name())) |a| {
         a.status = status;
@@ -159,9 +170,9 @@ pub fn artifact_progress(self: *@This(), lock: *std.Io.Mutex, io: std.Io, name: 
     }
 }
 
-pub fn has_error(self: @This(), lock: *std.Io.Mutex, io: std.Io) bool {
-    lock.lockUncancelable(io);
-    defer lock.unlock(io);
+pub fn has_error(self: *@This(), io: std.Io) bool {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
 
     for (self.steps.items) |s|
         if (s.status == .err)

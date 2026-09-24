@@ -169,6 +169,7 @@ fn handle_artifact_pull(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
             else
                 err;
     };
+    defer artifact_dir.close(io);
 
     const file_count = file_count: {
         var walker = try artifact_dir.walk(gpa);
@@ -269,7 +270,7 @@ fn handle_artifact_push(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
         return .{ .footer = .{} };
 
     const temp_dir_path = receive_artifacts: {
-        const temp_dir = try daemon.install.open_temp(io, "artifact");
+        var temp_dir = try daemon.install.open_temp(io, "artifact");
         defer temp_dir.close(io);
 
         var packer: Packer = .unpacker(temp_dir);
@@ -370,10 +371,12 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         defer gpa.free(buffer);
         while (true) {
             const data = try conn.recv_buf(buffer);
-            if (data.len == 0) return error.InvalidPack;
-            switch (data[0]) {
-                proto.task.spawn.data => try script_file.writeStreamingAll(io, data[1..]),
-                proto.task.spawn.end => break,
+            if (data.len < 5 or !std.mem.eql(u8, data[0..4], "pack"))
+                return error.InvalidPack;
+
+            switch (data[4]) {
+                proto.data => try script_file.writeStreamingAll(io, data[5..]),
+                proto.end => break,
                 else => return error.InvalidPack,
             }
         }

@@ -52,7 +52,7 @@ fn follow_step(
     while (true) {
         var client = Client.connect(alloc, io, try remote.get_address(), &try remote.get_token()) catch |e| {
             const err_msg = try std.fmt.allocPrint(alloc, "connection failed: {any}", .{e});
-            state.err(deployment_lock, io, step.remote, step.pipeline, err_msg);
+            state.err(io, step.remote, step.pipeline, err_msg);
             break;
         };
         defer client.destroy(alloc, io);
@@ -68,7 +68,7 @@ fn follow_step(
         const reply = client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res)) catch break;
         const res = reply catch |e| {
             const err_msg = try std.fmt.allocPrint(alloc, "poll error: {any}", .{e});
-            state.err(deployment_lock, io, step.remote, step.pipeline, err_msg);
+            state.err(io, step.remote, step.pipeline, err_msg);
             break;
         };
         const footer = &res.footer;
@@ -89,7 +89,7 @@ fn follow_step(
         }
 
         if (footer.usage) |u| {
-            state.update_usage(deployment_lock, io, step.remote, step.pipeline, u.cpu_usec, u.memory_bytes, std.Io.Clock.now(.real, io));
+            state.update_usage(io, step.remote, step.pipeline, u.cpu_usec, u.memory_bytes, std.Io.Clock.now(.real, io));
         }
 
         switch (footer.status) {
@@ -112,7 +112,7 @@ fn follow_step(
                     try fetcher.spawn_fetch(io, output);
                 }
 
-                state.completed(deployment_lock, io, step.remote, step.pipeline);
+                state.completed(io, step.remote, step.pipeline);
                 try deployment.save(alloc, io, project);
                 break;
             },
@@ -122,7 +122,7 @@ fn follow_step(
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
                 const err_msg = try std.fmt.allocPrint(alloc, "task failed with exit code {d}", .{code});
-                state.err(deployment_lock, io, step.remote, step.pipeline, err_msg);
+                state.err(io, step.remote, step.pipeline, err_msg);
                 break;
             },
             .not_found => {
@@ -130,7 +130,7 @@ fn follow_step(
                 defer deployment_lock.unlock(io);
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
-                state.err(deployment_lock, io, step.remote, step.pipeline, "task not found on daemon");
+                state.err(io, step.remote, step.pipeline, "task not found on daemon");
                 break;
             },
         }
@@ -254,8 +254,8 @@ pub fn run(
             return error.InvalidPipeline;
         };
 
-        _ = try state.add(&depl, io, remote, pipeline);
-        state.running(&depl, io, step.remote, step.pipeline);
+        _ = try state.add(io, remote, pipeline);
+        state.running(io, step.remote, step.pipeline);
 
         try spawn(
             io,
@@ -272,7 +272,7 @@ pub fn run(
 
             var any_running = false;
             for (steps_list.items) |step| {
-                if (state.get(&depl, io, step.remote, step.pipeline)) |task_state| {
+                if (state.get(io, step.remote, step.pipeline)) |task_state| {
                     if (task_state.status == .running or task_state.status == .preparing) {
                         any_running = true;
                         break;

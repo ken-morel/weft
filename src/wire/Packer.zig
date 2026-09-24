@@ -25,7 +25,6 @@ pub fn unpacker(dir: std.Io.Dir) @This() {
 }
 
 pub fn deinit(self: *@This(), io: std.Io) void {
-    self.root.close(io);
     if (self.walker) |*walker|
         walker.deinit();
     if (self.handle) |handle|

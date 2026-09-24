@@ -167,3 +167,26 @@ pub fn load_deployment(self: @This(), alloc: std.mem.Allocator, io: std.Io, id: 
     deployment.running = &.{};
     return deployment;
 }
+
+pub fn locate_script(self: @This(), gpa: std.mem.Allocator, io: std.Io, name: []const u8) !?[]const u8 {
+    const script_with_dot = try std.mem.join(gpa, "", &.{ name, "." });
+    defer gpa.free(script_with_dot);
+    const script_dir = self.dir.openDir(
+        io,
+        "weft",
+        .{ .iterate = true },
+    ) catch |err|
+        return if (err == error.FileNotFound)
+            null
+        else
+            err;
+    defer script_dir.close(io);
+    var walker = try std.Io.Dir.walkSelectively(script_dir, gpa);
+    defer walker.deinit();
+    while (try walker.next(io)) |entry| {
+        if ((std.mem.startsWith(u8, entry.basename, script_with_dot) and
+            std.mem.countScalar(u8, entry.basename[script_with_dot.len..], '.') == 0) or
+            std.mem.eql(u8, entry.basename, name))
+            return try script_dir.realPathFileAlloc(io, entry.path, gpa);
+    } else return null;
+}

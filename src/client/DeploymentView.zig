@@ -102,7 +102,9 @@ pub fn print_log_lines(term: *Term, lock: ?*std.Io.Mutex, io: std.Io, prefix: []
 }
 
 pub fn update(self: *@This(), io: std.Io) !void {
-    _ = io;
+    self.state.mutex.lockUncancelable(io);
+    defer self.state.mutex.unlock(io);
+
     if (self.term.is_tty and self.rendered_lines > 0) {
         self.term.move_up(self.rendered_lines);
         self.rendered_lines = 0;
