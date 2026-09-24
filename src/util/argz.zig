@@ -305,6 +305,19 @@ pub const ExistingPath = struct {
     }
 };
 
+pub fn is_hidden(comptime Parent: type, comptime name: []const u8, comptime T: type) bool {
+    if (@hasDecl(Parent, "hidden_" ++ name)) {
+        return @field(Parent, "hidden_" ++ name);
+    }
+    return comptime switch (@typeInfo(T)) {
+        .@"struct", .@"enum", .@"union", .@"opaque" => if (@hasDecl(T, "hidden"))
+            @field(T, "hidden")
+        else
+            false,
+        else => false,
+    };
+}
+
 pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
     @setEvalBranchQuota(100_000);
     return comptime switch (@typeInfo(T)) {
@@ -323,6 +336,8 @@ pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
 
             for (U.fields) |field| {
                 if (std.mem.eql(u8, field.name, "else"))
+                    continue;
+                if (is_hidden(T, field.name, field.type))
                     continue;
 
                 out = out ++ "\n";
@@ -346,9 +361,7 @@ pub fn doc(comptime name: []const u8, comptime T: type) []const u8 {
 
             const args_doc = arguments(T);
             if (args_doc.len > 0) {
-                out = out ++ "Usage:\n  " ++ name ++ " [args]\n\n" ++ args_doc;
-            } else {
-                out = out ++ "Usage:\n  " ++ name ++ " [args]\n";
+                out = out ++ "\n" ++ args_doc;
             }
 
             break :blk out;
@@ -392,6 +405,9 @@ fn arguments(comptime T: type) []const u8 {
     var out: []const u8 = "Arguments:\n";
 
     for (S.fields) |field| {
+        if (is_hidden(T, field.name, field.type))
+            continue;
+
         out = out ++ "  ";
         out = out ++ field.name;
         out = out ++ " ";
@@ -559,10 +575,18 @@ test "argz doc generation" {
             const doc = "Run cmd";
             const doc_flag = "A flag description";
             flag: ?[]const u8 = null,
+            hidden_arg: ?[]const u8 = null,
+            pub const hidden_hidden_arg = true;
+        },
+        hidden_cmd: struct {
+            pub const hidden = true;
+            foo: []const u8,
         },
     };
     const documentation = doc("testapp", App);
     try std.testing.expect(documentation.len > 0);
     try std.testing.expect(std.mem.indexOf(u8, documentation, "Test App") != null);
     try std.testing.expect(std.mem.indexOf(u8, documentation, "cmd") != null);
+    try std.testing.expect(std.mem.indexOf(u8, documentation, "hidden_cmd") == null);
+    try std.testing.expect(std.mem.indexOf(u8, documentation, "hidden_arg") == null);
 }

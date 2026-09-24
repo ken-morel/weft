@@ -200,3 +200,69 @@ pub fn install(
         if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"1" else port,
     });
 }
+
+pub fn list(
+    alloc: std.mem.Allocator,
+    io: std.Io,
+    term: *Term,
+    installation: ClientInstall,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const remotes = try installation.get_remotes(arena_alloc, io, term);
+    if (remotes.len == 0) {
+        term.println("No remotes registered in remotes.zon", .{});
+        return;
+    }
+
+    term.println("Registered remotes:", .{});
+    for (remotes) |rem| {
+        const name = rem.get_name();
+        const host = rem.address.@"0";
+        const port = rem.address.@"1";
+        if (rem.groups.len > 0) {
+            var groups_buf: std.ArrayList([]const u8) = .empty;
+            defer groups_buf.deinit(arena_alloc);
+            for (rem.groups) |g| try groups_buf.append(arena_alloc, g);
+            const groups_str = try std.mem.join(arena_alloc, ", ", groups_buf.items);
+            term.println("  \x1b[1m{s}\x1b[0m -> {s}:{d} (groups: {s})", .{ name, host, port, groups_str });
+        } else {
+            term.println("  \x1b[1m{s}\x1b[0m -> {s}:{d}", .{ name, host, port });
+        }
+    }
+}
+
+pub fn remove(
+    alloc: std.mem.Allocator,
+    io: std.Io,
+    term: *Term,
+    installation: ClientInstall,
+    name: []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const remotes = try installation.get_remotes(arena_alloc, io, term);
+    var updated_list: std.ArrayList(Remote) = .empty;
+    defer updated_list.deinit(arena_alloc);
+
+    var found = false;
+    for (remotes) |rem| {
+        if (std.mem.eql(u8, rem.get_name(), name)) {
+            found = true;
+        } else {
+            try updated_list.append(arena_alloc, rem);
+        }
+    }
+
+    if (!found) {
+        term.err("remote '{s}' not found in remotes.zon", .{name});
+        return error.RemoteNotFound;
+    }
+
+    try installation.save_remotes(io, updated_list.items);
+    term.success("removed remote '{s}' from remotes.zon", .{name});
+}

@@ -12,6 +12,7 @@ artifacts: []Artifact = &.{},
 sources: [][]const u8 = &.{},
 running: []Step = &.{},
 targets: []Step = &.{},
+failed: []Step = &.{},
 
 pub const Artifact = struct {
     remote: []const u8,
@@ -101,7 +102,7 @@ pub fn next_step(self: @This(), term: ?*Term) !?Step {
                 continue :target;
 
         return switch (try self.resolve_pipeline(term, target.pipeline, 0)) {
-            .waits, .running => continue :target,
+            .waits, .running, .failed => continue :target,
             .needs => |n| .{
                 .remote = target.remote,
                 .pipeline = n,
@@ -119,6 +120,7 @@ pub const StepStatus = union(enum) {
     done,
     running,
     runnable,
+    failed,
 };
 
 const resolve_pipeline_max_depth: u16 = 100;
@@ -134,11 +136,14 @@ pub fn resolve_pipeline(self: @This(), term: ?*Term, pipeline_name: []const u8, 
             for (self.artifacts) |art|
                 if (std.mem.eql(u8, art.pipeline, pipeline_name))
                     return .done;
+        if (self.get_failed_step(pipeline.name)) |_|
+            return .failed;
         if (self.get_running_step(pipeline.name)) |_|
             return .running;
 
         var waiting: ?[]const u8 = null;
         var needs: ?[]const u8 = null;
+        var dependency_failed = false;
 
         input: for (pipeline.inputs()) |input| {
             if (Weft.is_source_artifact(input))
@@ -156,6 +161,10 @@ pub fn resolve_pipeline(self: @This(), term: ?*Term, pipeline_name: []const u8, 
                     depth + 1,
                 )) {
                     .done => continue :input,
+                    .failed => {
+                        dependency_failed = true;
+                        continue :input;
+                    },
                     .running => waiting = other_pipeline.name,
                     .waits => |task| waiting = task,
                     .needs => |task| needs = task,
@@ -168,7 +177,9 @@ pub fn resolve_pipeline(self: @This(), term: ?*Term, pipeline_name: []const u8, 
                 return error.InvalidInput;
             }
         }
-        if (needs) |task|
+        if (dependency_failed)
+            return .failed
+        else if (needs) |task|
             return .{ .needs = task }
         else if (waiting) |task|
             return .{ .waits = task }
@@ -180,6 +191,13 @@ pub fn get_running_step(self: @This(), pipeline: []const u8) ?*const Step {
     for (self.running) |*running|
         if (std.mem.eql(u8, running.pipeline, pipeline))
             return running;
+    return null;
+}
+
+pub fn get_failed_step(self: @This(), pipeline: []const u8) ?*const Step {
+    for (self.failed) |*failed_step|
+        if (std.mem.eql(u8, failed_step.pipeline, pipeline))
+            return failed_step;
     return null;
 }
 
@@ -224,6 +242,14 @@ pub fn remove_running(self: *@This(), alloc: std.mem.Allocator, remote: []const 
 pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, art: Artifact) !void {
     self.artifacts = try alloc.realloc(self.artifacts, self.artifacts.len + 1);
     self.artifacts[self.artifacts.len - 1] = art;
+}
+pub fn add_failed(self: *@This(), alloc: std.mem.Allocator, step: Step) !void {
+    for (self.failed) |f| {
+        if (std.mem.eql(u8, f.remote, step.remote) and std.mem.eql(u8, f.pipeline, step.pipeline))
+            return;
+    }
+    self.failed = try alloc.realloc(self.failed, self.failed.len + 1);
+    self.failed[self.failed.len - 1] = step;
 }
 pub fn add_source(self: *@This(), alloc: std.mem.Allocator, src: []const u8) !void {
     self.sources = try alloc.realloc(self.sources, self.sources.len + 1);

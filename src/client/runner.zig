@@ -64,6 +64,7 @@ pub fn run_deployment(
                 break;
 
             if (state.has_error() and deployment.running.len == 0) {
+                try deployment.save(alloc, io, project);
                 term.err("Error during deployment", .{});
                 try std.Io.sleep(io, .fromSeconds(3), .awake);
                 try view.update(io);
@@ -116,7 +117,9 @@ pub fn spawn_step(
 ) !void {
     errdefer if (deployment_lock.lock(io)) |_| {
         deployment.remove_running(alloc, step.remote, step.pipeline);
+        deployment.add_failed(alloc, step) catch {};
         state.err(step.remote, step.pipeline, "failed to spawn task");
+        deployment.save(alloc, io, project) catch {};
         deployment_lock.unlock(io);
     } else |_| {};
 
@@ -276,17 +279,21 @@ pub fn spawn_step(
             try deployment_lock.lock(io);
             defer deployment_lock.unlock(io);
             deployment.remove_running(alloc, step.remote, step.pipeline);
+            deployment.add_failed(alloc, step) catch {};
             state.err(step.remote, step.pipeline, @errorName(err));
+            deployment.save(alloc, io, project) catch {};
             return;
         } catch |err| {
             try deployment_lock.lock(io);
             defer deployment_lock.unlock(io);
             deployment.remove_running(alloc, step.remote, step.pipeline);
+            deployment.add_failed(alloc, step) catch {};
             const msg = if (err == error.AlreadyRunning)
                 "task already running on remote"
             else
                 @errorName(err);
             state.err(step.remote, step.pipeline, msg);
+            deployment.save(alloc, io, project) catch {};
             return;
         };
     }
@@ -363,8 +370,10 @@ pub fn spawn_step(
                 defer deployment_lock.unlock(io);
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
+                deployment.add_failed(alloc, step) catch {};
                 const err_msg = try std.fmt.allocPrint(alloc, "task failed with exit code {d}", .{code});
                 state.err(step.remote, step.pipeline, err_msg);
+                deployment.save(alloc, io, project) catch {};
                 break;
             },
             .not_found => {
@@ -372,7 +381,9 @@ pub fn spawn_step(
                 defer deployment_lock.unlock(io);
 
                 deployment.remove_running(alloc, step.remote, step.pipeline);
+                deployment.add_failed(alloc, step) catch {};
                 state.err(step.remote, step.pipeline, "task not found on remote");
+                deployment.save(alloc, io, project) catch {};
                 break;
             },
         }

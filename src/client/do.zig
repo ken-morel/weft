@@ -17,23 +17,21 @@ pub fn run(
     project: Project,
     inst: ClientInstall,
     targets: []const Step,
-    continue_id: ?Deployment.Id,
+    resume_id: ?Deployment.Id,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var alloc = arena.allocator();
 
     var deployment: Deployment = undefined;
-    if (continue_id) |id| {
+    if (resume_id) |id| {
         deployment = try project.load_deployment(alloc, io, id);
+        deployment.failed = &.{};
+        deployment.running = &.{};
         if (project.get_config(alloc, term, io)) |config| {
             deployment.config = config;
         } else |_| {}
-        if (targets.len > 0) {
-            const owned_targets = try alloc.dupe(Step, targets);
-            deployment.targets = owned_targets;
-        }
-        term.info("continuing deployment {s}", .{&deployment.id.to_string()});
+        term.info("resuming deployment {s}", .{&deployment.id.to_string()});
     } else {
         const owned_targets = try alloc.dupe(Step, targets);
         const config = try project.get_config(alloc, term, io);

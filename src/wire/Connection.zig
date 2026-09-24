@@ -8,7 +8,7 @@ const Nonce = @import("Nonce.zig");
 pub const max_packet_size = std.math.maxInt(u16);
 
 const ZotoOptions: zoto.Options = .{
-    .hash = u64,
+    .hash = true,
     .header = false,
 };
 

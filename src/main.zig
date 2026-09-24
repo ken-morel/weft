@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_follow = @import("client/cmd_follow.zig");
+const cmd_list = @import("client/cmd_list.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
 const cmd_remote = @import("client/cmd_remote.zig");
 const Deployment = @import("client/Deployment.zig");
@@ -18,6 +19,20 @@ pub const Monitor = @import("util/Monitor.zig");
 
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
+};
+
+pub const ResumeCmd = struct {
+    pub const doc = "Resume an existing deployment";
+    pub const doc_deployment = "The id of the deployment, or shortened id containing the last unique letters of the deployment id (defaults to latest)";
+
+    deployment: ?[]const u8 = null,
+};
+
+pub const RemoveRemoteCmd = struct {
+    pub const doc = "Remove a remote from remotes.zon";
+    pub const doc_name = "The name of the remote to remove";
+
+    name: []const u8,
 };
 
 const Argz = union(enum) {
@@ -43,6 +58,7 @@ const Argz = union(enum) {
             pub const doc = "Display the daemon's access token";
         },
         ipc: union(enum) {
+            pub const hidden = true;
             completed: struct {
                 task: Task,
                 code: u16,
@@ -56,13 +72,9 @@ const Argz = union(enum) {
 
         targets: []Step = &.{},
     },
-    @"continue": struct {
-        pub const doc = "Continue an existing deployment";
-        pub const doc_deployment = "The id of the deployment, or shortened id containing the last unique letters of the deployment id";
-        pub const doc_targets = "Additional targets for the deployment";
-
-        deployment: ?[]const u8 = null,
-        targets: []Step = &.{},
+    @"resume": ResumeCmd,
+    list: struct {
+        pub const doc = "List recent deployments and their status";
     },
     follow: struct {
         pub const doc = "Follow a running deployment or pipelines";
@@ -93,12 +105,16 @@ const Argz = union(enum) {
             user: ?[]const u8 = null,
             extra: [][]const u8 = &.{},
         },
+        list: struct {
+            pub const doc = "List registered remotes";
+        },
+        remove: RemoveRemoteCmd,
     },
     help: struct {
         pub const doc = "Show this help message";
     },
     nop: struct {
-        pub const doc = "Do nothing";
+        pub const hidden = true;
     },
 };
 
@@ -188,41 +204,31 @@ pub fn main(init: std.process.Init) !void {
 
             return cmd_do.run(alloc, init.io, &term, project, installation, cmd.targets, null);
         },
-        .@"continue" => |cmd| {
+        .@"resume" => |cmd| {
             const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            var maybe_continue_id: ?Deployment.Id = null;
-            var extra_targets: []const Step = cmd.targets;
-
-            if (cmd.deployment) |dep_arg| {
-                if (project.find_deployment_id(init.io, dep_arg)) |id| {
-                    maybe_continue_id = id;
-                } else |_| {
-                    if (Step.argz_parse(arena_alloc, init.io, dep_arg)) |step| {
-                        var targets_list: std.ArrayList(Step) = .empty;
-                        defer targets_list.deinit(alloc);
-                        try targets_list.append(alloc, step);
-                        for (cmd.targets) |t| {
-                            try targets_list.append(alloc, t);
-                        }
-                        extra_targets = try targets_list.toOwnedSlice(alloc);
-                    } else |_| {
-                        term.err("deployment '{s}' not found or invalid step", .{dep_arg});
-                        return error.InvalidDeploymentId;
-                    }
+            const resume_id = if (cmd.deployment) |dep_arg|
+                project.find_deployment_id(init.io, dep_arg) catch {
+                    term.err("deployment '{s}' not found or ambiguous", .{dep_arg});
+                    return error.InvalidDeploymentId;
                 }
-            }
-            if (maybe_continue_id == null) {
-                maybe_continue_id = try project.latest_deployment_id(init.io) orelse {
+            else
+                try project.latest_deployment_id(init.io) orelse {
                     term.err("no deployments found in .weft", .{});
                     return error.NoDeployments;
                 };
-            }
 
-            return cmd_do.run(alloc, init.io, &term, project, installation, extra_targets, maybe_continue_id);
+            return cmd_do.run(alloc, init.io, &term, project, installation, &.{}, resume_id);
+        },
+        .list => {
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open(project_dir);
+
+            return cmd_list.run(alloc, init.io, &term, project);
         },
         .follow => |cmd| {
             const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
@@ -265,6 +271,14 @@ pub fn main(init: std.process.Init) !void {
                     weft_port,
                     extra_list.items,
                 );
+            },
+            .list => {
+                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+                return cmd_remote.list(alloc, init.io, &term, installation);
+            },
+            .remove => |r_rm| {
+                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+                return cmd_remote.remove(alloc, init.io, &term, installation, r_rm.name);
             },
         },
         .help => {
@@ -340,16 +354,19 @@ test "main Argz parsing all commands" {
         else => unreachable,
     }
 
-    // continue
-    const cmd_cont = try argz.parse(Argz, alloc, null, &.{ "continue", "abc12345", ".test" });
-    switch (cmd_cont) {
-        .@"continue" => |c| {
+    // resume
+    const cmd_res = try argz.parse(Argz, alloc, null, &.{ "resume", "abc12345" });
+    switch (cmd_res) {
+        .@"resume" => |c| {
             try std.testing.expectEqualStrings("abc12345", c.deployment.?);
-            try std.testing.expectEqual(@as(usize, 1), c.targets.len);
-            try std.testing.expectEqualStrings("local", c.targets[0].remote);
-            try std.testing.expectEqualStrings("test", c.targets[0].pipeline);
-            alloc.free(c.targets);
         },
+        else => unreachable,
+    }
+
+    // list
+    const cmd_list_val = try argz.parse(Argz, alloc, null, &.{"list"});
+    switch (cmd_list_val) {
+        .list => {},
         else => unreachable,
     }
 
@@ -381,6 +398,27 @@ test "main Argz parsing all commands" {
                 try std.testing.expectEqualStrings("extra1", inst.extra[0]);
                 alloc.free(inst.extra);
             },
+            else => unreachable,
+        },
+        else => unreachable,
+    }
+
+    // remote list
+    const cmd_rem_list = try argz.parse(Argz, alloc, null, &.{ "remote", "list" });
+    switch (cmd_rem_list) {
+        .remote => |r| switch (r) {
+            .list => {},
+            else => unreachable,
+        },
+        else => unreachable,
+    }
+
+    // remote remove
+    const cmd_rem_rm = try argz.parse(Argz, alloc, null, &.{ "remote", "remove", "srv1" });
+    switch (cmd_rem_rm) {
+        .remote => |r| switch (r) {
+            .remove => |rem| try std.testing.expectEqualStrings("srv1", rem.name),
+            else => unreachable,
         },
         else => unreachable,
     }
@@ -391,6 +429,13 @@ test "main Argz parsing all commands" {
         .help => {},
         else => unreachable,
     }
+
+    // doc hides hidden commands
+    const docs = argz.doc("weft", Argz);
+    try std.testing.expect(std.mem.indexOf(u8, docs, "resume") != null);
+    try std.testing.expect(std.mem.indexOf(u8, docs, "list") != null);
+    try std.testing.expect(std.mem.indexOf(u8, docs, "ipc") == null);
+    try std.testing.expect(std.mem.indexOf(u8, docs, "nop") == null);
 
     // nop
     const cmd_nop_val = try argz.parse(Argz, alloc, null, &.{"nop"});

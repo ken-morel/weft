@@ -4,15 +4,14 @@ const endian: std.builtin.Endian = .little;
 
 /// Serialization and deserialization options
 pub const Options = struct {
-    /// The serialized data contains a heder
+    /// The serialized data contains a header
     header: bool = false,
-    /// Specify an integer type to use it as integer size for the hash,
-    /// or null if you don't want a type hash
-    hash: ?type = u64,
+    /// Whether to include a 64-bit type hash
+    hash: bool = true,
 };
 
-/// Get a hash of type T, the hash is a u64 truncated to type I
-pub fn hashType(comptime T: type, comptime I: type) I {
+/// Get a 64-bit structural hash of type T
+pub fn hashType(comptime T: type) u64 {
     var h: u64 = @intCast(14695981039346656037);
     const prime = 1099511628211;
 
@@ -33,22 +32,22 @@ pub fn hashType(comptime T: type, comptime I: type) I {
             for (s.fields) |f| {
                 for (f.name) |char|
                     h = (h ^ char) *% prime;
-                h = (h ^ hashType(f.type, u64)) *% prime;
+                h = (h ^ hashType(f.type)) *% prime;
             }
         },
 
         .@"union" => |u| {
             if (u.tag_type) |tt|
-                h = (h ^ hashType(tt, u64)) *% prime;
+                h = (h ^ hashType(tt)) *% prime;
             for (u.fields) |f| {
                 for (f.name) |char|
                     h = (h ^ char) *% prime;
-                h = (h ^ hashType(f.type, u64)) *% prime;
+                h = (h ^ hashType(f.type)) *% prime;
             }
         },
 
         .@"enum" => |e| {
-            h = (h ^ hashType(e.tag_type, u64)) *% prime;
+            h = (h ^ hashType(e.tag_type)) *% prime;
             for (e.fields) |f| {
                 for (f.name) |char|
                     h = (h ^ char) *% prime;
@@ -57,20 +56,20 @@ pub fn hashType(comptime T: type, comptime I: type) I {
         },
 
         .pointer => |p| {
+            h = (h ^ 0xCAFE) *% prime;
             h = (h ^ @intFromEnum(p.size)) *% prime;
             h = (h ^ @as(u64, if (p.is_const) 1 else 0)) *% prime;
-            for (@typeName(p.child)) |char|
-                h = (h ^ char) *% prime;
+            h = (h ^ hashType(p.child)) *% prime;
         },
 
         .array => |a| {
             h = (h ^ a.len) *% prime;
-            h = (h ^ hashType(a.child, u64)) *% prime;
+            h = (h ^ hashType(a.child)) *% prime;
         },
 
         .optional => |o| {
             h = (h ^ 0xBEEF) *% prime;
-            h = (h ^ hashType(o.child, u64)) *% prime;
+            h = (h ^ hashType(o.child)) *% prime;
         },
 
         .error_set => |es| if (es) |fields| {
@@ -82,20 +81,20 @@ pub fn hashType(comptime T: type, comptime I: type) I {
         },
 
         .error_union => |eu| {
-            h = (h ^ hashType(eu.error_set, u64)) *% prime;
-            h = (h ^ hashType(eu.payload, u64)) *% prime;
+            h = (h ^ hashType(eu.error_set)) *% prime;
+            h = (h ^ hashType(eu.payload)) *% prime;
         },
 
         else => @compileError("Zoto does not support hashing type: " ++ @typeName(T)),
     }
-    return @truncate(h);
+    return h;
 }
 
 pub fn serialize(writer: *std.Io.Writer, comptime T: type, value: T, comptime opts: Options) std.Io.Writer.Error!void {
     if (opts.header)
         try writer.writeAll("ZOTO");
-    if (opts.hash) |I|
-        try writer.writeInt(I, comptime hashType(T, I), endian);
+    if (opts.hash)
+        try writer.writeInt(u64, comptime hashType(T), endian);
     try serializeValue(writer, T, value);
 }
 
@@ -170,9 +169,9 @@ pub fn deserialize(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type
             return error.InvalidHeader;
     }
 
-    if (opts.hash) |I| {
-        const actual_hash = try readInt(src, I);
-        if (actual_hash != comptime hashType(T, I))
+    if (opts.hash) {
+        const actual_hash = try readInt(src, u64);
+        if (actual_hash != comptime hashType(T))
             return error.TypeMismatch;
     }
 
@@ -354,4 +353,37 @@ fn readInt(src: *[]const u8, comptime IntT: type) !IntT {
     const val = std.mem.readInt(IntT, src.*[0..size], .little);
     src.* = src.*[size..];
     return val;
+}
+
+test "zoto structural type hashing" {
+    // Two differently named structs with identical structure must have the same hash
+    const S1 = struct {
+        id: u64,
+        name: []const u8,
+        active: bool,
+    };
+    const S2 = struct {
+        id: u64,
+        name: []const u8,
+        active: bool,
+    };
+    try std.testing.expectEqual(comptime hashType(S1), comptime hashType(S2));
+
+    // Slices of anonymous structs with same shape must have identical hash
+    const SliceAnon1 = []const struct { []const u8, u16 };
+    const SliceAnon2 = []const struct { []const u8, u16 };
+    try std.testing.expectEqual(comptime hashType(SliceAnon1), comptime hashType(SliceAnon2));
+
+    // Different fields must yield different hashes
+    const S3 = struct {
+        id: u32, // different int type
+        name: []const u8,
+        active: bool,
+    };
+    try std.testing.expect(comptime (hashType(S1) != hashType(S3)));
+
+    // Const vs non-const pointer produces different hash
+    const PtrConst = *const u32;
+    const PtrMut = *u32;
+    try std.testing.expect(comptime (hashType(PtrConst) != hashType(PtrMut)));
 }

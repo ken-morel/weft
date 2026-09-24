@@ -80,7 +80,7 @@ fn print_log_tail(self: *@This(), io: std.Io, pipeline_name: []const u8, max_lin
         }
     }
 
-    const prefix = " | ";
+    const prefix = "    | ";
     const col_limit = cols -| prefix.len;
     var printed: u16 = 0;
     var i = count;
