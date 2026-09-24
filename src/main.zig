@@ -68,10 +68,12 @@ const Argz = union(enum) {
         pub const doc = "List recent deployments and their status";
     },
     follow: struct {
-        pub const doc = "Follow a running deployment or pipelines";
-        pub const doc_spec = "The specifier with the format [id][.pipeline] if nothing is specified then the last deployment is followed";
+        pub const doc = "Follow a running task";
+        pub const doc_pipeline = "The pipeline name to follow";
+        pub const doc_deployment = "The deployment id to follow (defaults to latest)";
 
-        spec: ?[]const u8 = null,
+        pipeline: []const u8,
+        deployment: ?[]const u8 = null,
     },
     monitor: struct {
         pub const doc = "Monitor a remote or remote group";
@@ -234,8 +236,7 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            const follow_args: []const []const u8 = if (cmd.spec) |s| &.{s} else &.{};
-            return cmd_follow.run(alloc, init.io, &term, project, installation, follow_args);
+            return cmd_follow.run(alloc, init.io, &term, project, installation, cmd.pipeline, cmd.deployment);
         },
         .monitor => |cmd| {
             const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);

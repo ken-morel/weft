@@ -52,23 +52,14 @@ pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) void 
         self.rendered_lines = 0;
     }
 
-    const is_color = self.term.is_tty;
-    const tabs: []const u8 = if (prefix.len < 8) "\t\t" else "\t";
-
+    const color = Term.task_color(prefix);
     var lines = std.mem.splitScalar(u8, std.mem.trim(u8, content, "\r\n"), '\n');
-    var first = true;
     while (lines.next()) |line| {
         const clean_line = std.mem.trimEnd(u8, line, "\r");
-        if (first) {
-            if (is_color) {
-                self.term.println("\x1b[36m{s}\x1b[0m{s}{s}", .{ prefix, tabs, clean_line });
-            } else {
-                self.term.println("{s}{s}{s}", .{ prefix, tabs, clean_line });
-            }
-            first = false;
-        } else {
-            self.term.println("\t|\t{s}", .{clean_line});
-        }
+        self.term.write_task_log(color, prefix, clean_line);
+    }
+    if (self.term.is_tty) {
+        self.term.clear_to_end();
     }
     self.term.flush() catch {};
 }
@@ -81,23 +72,11 @@ pub fn print_log_lines(term: *Term, lock: ?*std.Io.Mutex, io: std.Io, prefix: []
         m.unlock(io);
     };
 
-    const is_color = term.is_tty;
-    const tabs: []const u8 = if (prefix.len < 8) "\t\t" else "\t";
-
+    const color = Term.task_color(prefix);
     var lines = std.mem.splitScalar(u8, std.mem.trim(u8, content, "\r\n"), '\n');
-    var first = true;
     while (lines.next()) |line| {
         const clean_line = std.mem.trimEnd(u8, line, "\r");
-        if (first) {
-            if (is_color) {
-                term.println("\x1b[36m{s}\x1b[0m{s}{s}", .{ prefix, tabs, clean_line });
-            } else {
-                term.println("{s}{s}{s}", .{ prefix, tabs, clean_line });
-            }
-            first = false;
-        } else {
-            term.println("\t|\t{s}", .{clean_line});
-        }
+        term.write_task_log(color, prefix, clean_line);
     }
 }
 
@@ -107,58 +86,36 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
     if (self.term.is_tty and self.rendered_lines > 0) {
         self.term.move_up(self.rendered_lines);
+        self.term.clear_to_end();
         self.rendered_lines = 0;
     }
-
-    const color = self.term.is_tty;
 
     // 1. Process and print permanent step state transition events
     for (self.state.steps.items) |step| {
         const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
         defer self.alloc.free(key);
+        const color = Term.task_color(key);
 
         if (self.step_history.get(key)) |prev_status| {
             if (prev_status != step.status) {
                 if (step.status == .running and prev_status == .preparing) {
-                    if (color) {
-                        self.term.println("\x1b[36mstart\x1b[0m\t\t{s}", .{key});
-                    } else {
-                        self.term.println("start\t\t{s}", .{key});
-                    }
+                    self.term.write_event(color, "{", " {s}", .{key});
                 } else if (step.status == .completed) {
-                    if (color) {
-                        self.term.println("\x1b[32mdone\x1b[0m\t\t{s}", .{key});
-                    } else {
-                        self.term.println("done\t\t{s}", .{key});
-                    }
+                    self.term.write_event(.green, "}", " {s}", .{key});
                 } else if (step.status == .err) {
-                    if (color) {
-                        self.term.println("\x1b[31merror\x1b[0m\t\t{s}: {s}", .{ key, step.err orelse "<unknown error>" });
-                    } else {
-                        self.term.println("error\t\t{s}: {s}", .{ key, step.err orelse "<unknown error>" });
-                    }
+                    self.term.write_event(.red, "}", " {s} ({s})", .{ key, step.err orelse "<unknown error>" });
                 }
                 _ = self.step_history.put(self.alloc, try self.alloc.dupe(u8, key), step.status) catch {};
             }
         } else {
             if (step.status == .running) {
-                if (color) {
-                    self.term.println("\x1b[36mstart\x1b[0m\t\t{s}", .{key});
-                } else {
-                    self.term.println("start\t\t{s}", .{key});
-                }
+                self.term.write_event(color, "{", " {s}", .{key});
             } else if (step.status == .completed) {
-                if (color) {
-                    self.term.println("\x1b[32mdone\x1b[0m\t\t{s}", .{key});
-                } else {
-                    self.term.println("done\t\t{s}", .{key});
-                }
+                self.term.write_event(color, "{", " {s}", .{key});
+                self.term.write_event(.green, "}", " {s}", .{key});
             } else if (step.status == .err) {
-                if (color) {
-                    self.term.println("\x1b[31merror\x1b[0m\t\t{s}: {s}", .{ key, step.err orelse "<unknown error>" });
-                } else {
-                    self.term.println("error\t\t{s}: {s}", .{ key, step.err orelse "<unknown error>" });
-                }
+                self.term.write_event(color, "{", " {s}", .{key});
+                self.term.write_event(.red, "}", " {s} ({s})", .{ key, step.err orelse "<unknown error>" });
             }
             try self.step_history.put(self.alloc, try self.alloc.dupe(u8, key), step.status);
         }
@@ -171,52 +128,18 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
         if (self.artifact_history.get(key)) |prev_status| {
             if (prev_status != art.status) {
-                if (art.status == .pulling) {
-                    if (color) {
-                        self.term.println("\x1b[33martifact\x1b[0m\t{s} pulling", .{key});
-                    } else {
-                        self.term.println("artifact\t{s} pulling", .{key});
-                    }
-                } else if (art.status == .pushing) {
-                    if (color) {
-                        self.term.println("\x1b[33martifact\x1b[0m\t{s} pushing", .{key});
-                    } else {
-                        self.term.println("artifact\t{s} pushing", .{key});
-                    }
-                } else if (art.status == .ready and prev_status == .pulling) {
-                    if (color) {
-                        self.term.println("\x1b[33martifact\x1b[0m\t{s} pulled", .{key});
-                    } else {
-                        self.term.println("artifact\t{s} pulled", .{key});
-                    }
-                } else if (art.status == .ready and prev_status == .pushing) {
-                    if (color) {
-                        self.term.println("\x1b[33martifact\x1b[0m\t{s} pushed", .{key});
-                    } else {
-                        self.term.println("artifact\t{s} pushed", .{key});
-                    }
+                if (art.status == .pulling and prev_status != .pulling) {
+                    self.term.write_event(.cyan, "<", " {s}", .{key});
+                } else if (art.status == .pushing and prev_status != .pushing) {
+                    self.term.write_event(.yellow, ">", " {s}", .{key});
                 }
                 _ = self.artifact_history.put(self.alloc, try self.alloc.dupe(u8, key), art.status) catch {};
             }
         } else {
             if (art.status == .pulling) {
-                if (color) {
-                    self.term.println("\x1b[33martifact\x1b[0m\t{s} pulling", .{key});
-                } else {
-                    self.term.println("artifact\t{s} pulling", .{key});
-                }
+                self.term.write_event(.cyan, "<", " {s}", .{key});
             } else if (art.status == .pushing) {
-                if (color) {
-                    self.term.println("\x1b[33martifact\x1b[0m\t{s} pushing", .{key});
-                } else {
-                    self.term.println("artifact\t{s} pushing", .{key});
-                }
-            } else if (art.status == .ready) {
-                if (color) {
-                    self.term.println("\x1b[33martifact\x1b[0m\t{s} ready", .{key});
-                } else {
-                    self.term.println("artifact\t{s} ready", .{key});
-                }
+                self.term.write_event(.yellow, ">", " {s}", .{key});
             }
             try self.artifact_history.put(self.alloc, try self.alloc.dupe(u8, key), art.status);
         }
@@ -231,47 +154,84 @@ pub fn update(self: *@This(), io: std.Io) !void {
     // 3. Render the interactive pinned bottom deck
     var lines_count: u16 = 0;
 
+    var has_active_items = false;
     for (self.state.steps.items) |step| {
-        if (step.status == .preparing) {
-            self.term.clear_line();
-            self.term.println("? {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
-            lines_count += 1;
-        } else if (step.status == .running) {
-            var stats_buf: [128]u8 = undefined;
-            var stats_str: []const u8 = "";
-            if (step.cpu_ms != null or step.memory_bytes != null) {
-                var mem_buf: [32]u8 = undefined;
-                const m_str = if (step.memory_bytes) |mb| format_bytes(&mem_buf, mb) else "--";
-                if (step.cpu_pct) |pct| {
-                    stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d:.1}% / {d}ms, RAM: {s})", .{
-                        pct,
-                        step.cpu_ms orelse 0,
-                        m_str,
-                    }) catch "";
-                } else {
-                    stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d}ms, RAM: {s})", .{
-                        step.cpu_ms orelse 0,
-                        m_str,
-                    }) catch "";
-                }
+        if (step.status == .preparing or step.status == .running) {
+            has_active_items = true;
+            break;
+        }
+    }
+    if (!has_active_items) {
+        for (self.state.artifacts.items) |art| {
+            if (art.status == .pulling or art.status == .pushing) {
+                has_active_items = true;
+                break;
             }
-            self.term.clear_line();
-            self.term.println("! {s}.{s}{s}", .{ step.remote.get_name(), step.pipeline.name, stats_str });
-            lines_count += 1;
         }
     }
 
-    for (self.state.artifacts.items) |art| {
-        if (art.status == .pulling) {
-            const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
-            self.term.clear_line();
-            self.term.println("<< {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
-            lines_count += 1;
-        } else if (art.status == .pushing) {
-            const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
-            self.term.clear_line();
-            self.term.println(">> {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
-            lines_count += 1;
+    if (has_active_items) {
+        const term_size = self.term.get_size();
+        const width: usize = @min(@as(usize, term_size.cols), 60);
+        var rule_buf: [256]u8 = undefined;
+        const char = "─";
+        const count = @max(width, 10);
+        var pos: usize = 0;
+        for (0..count) |_| {
+            if (pos + char.len <= rule_buf.len) {
+                @memcpy(rule_buf[pos .. pos + char.len], char);
+                pos += char.len;
+            }
+        }
+        self.term.clear_line();
+        self.term.styled_ln(.dim, "{s}", .{rule_buf[0..pos]});
+        lines_count += 1;
+
+        for (self.state.steps.items) |step| {
+            if (step.status == .preparing) {
+                self.term.clear_line();
+                self.term.styled_ln(.dim, "? {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                lines_count += 1;
+            } else if (step.status == .running) {
+                var stats_buf: [128]u8 = undefined;
+                var stats_str: []const u8 = "";
+                if (step.cpu_ms != null or step.memory_bytes != null) {
+                    var mem_buf: [32]u8 = undefined;
+                    const m_str = if (step.memory_bytes) |mb| format_bytes(&mem_buf, mb) else "--";
+                    if (step.cpu_pct) |pct| {
+                        stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d:.1}% / {d}ms, RAM: {s})", .{
+                            pct,
+                            step.cpu_ms orelse 0,
+                            m_str,
+                        }) catch "";
+                    } else {
+                        stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d}ms, RAM: {s})", .{
+                            step.cpu_ms orelse 0,
+                            m_str,
+                        }) catch "";
+                    }
+                }
+                const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                defer self.alloc.free(key);
+                const color = Term.task_color(key);
+                self.term.clear_line();
+                self.term.styled_ln(color, "! {s}{s}", .{ key, stats_str });
+                lines_count += 1;
+            }
+        }
+
+        for (self.state.artifacts.items) |art| {
+            if (art.status == .pulling) {
+                const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
+                self.term.clear_line();
+                self.term.styled_ln(.cyan, "< {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
+                lines_count += 1;
+            } else if (art.status == .pushing) {
+                const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
+                self.term.clear_line();
+                self.term.styled_ln(.yellow, "> {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
+                lines_count += 1;
+            }
         }
     }
 

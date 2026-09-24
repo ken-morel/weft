@@ -227,9 +227,13 @@ pub fn list(
             defer groups_buf.deinit(arena_alloc);
             for (rem.groups) |g| try groups_buf.append(arena_alloc, g);
             const groups_str = try std.mem.join(arena_alloc, ", ", groups_buf.items);
-            term.println("  \x1b[1m{s}\x1b[0m -> {s}:{d} (groups: {s})", .{ name, host, port, groups_str });
+            term.print("  ", .{});
+            term.styled(.bold, "{s}", .{name});
+            term.println(" -> {s}:{d} (groups: {s})", .{ host, port, groups_str });
         } else {
-            term.println("  \x1b[1m{s}\x1b[0m -> {s}:{d}", .{ name, host, port });
+            term.print("  ", .{});
+            term.styled(.bold, "{s}", .{name});
+            term.println(" -> {s}:{d}", .{ host, port });
         }
     }
 }

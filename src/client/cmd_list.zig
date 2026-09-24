@@ -78,7 +78,7 @@ pub fn run(
         }
     }.lessThan);
 
-    term.println("\x1b[1mRecent Deployments:\x1b[0m", .{});
+    term.styled_ln(.bold, "Recent Deployments:", .{});
     for (deployments_list.items) |d| {
         const id_str = d.id.to_string();
 
@@ -90,16 +90,25 @@ pub fn run(
         }
         const targets_str = try std.mem.join(alloc, ", ", targets_buf.items);
 
-        const status_badge: []const u8 = if (d.is_completed)
-            "\x1b[32m[DONE]\x1b[0m   "
+        const status_color: Term.Color = if (d.is_completed)
+            .green
         else if (d.failed_count > 0)
-            "\x1b[31m[FAILED]\x1b[0m "
+            .red
         else
-            "\x1b[33m[INCOMP]\x1b[0m ";
+            .yellow;
 
-        term.println("  \x1b[1m{s}\x1b[0m  {s} targets: {s} (artifacts: {d})", .{
-            &id_str,
-            status_badge,
+        const status_badge: []const u8 = if (d.is_completed)
+            "[DONE]   "
+        else if (d.failed_count > 0)
+            "[FAILED] "
+        else
+            "[INCOMP] ";
+
+        term.print("  ", .{});
+        term.styled(.bold, "{s}", .{&id_str});
+        term.print("  ", .{});
+        term.styled(status_color, "{s}", .{status_badge});
+        term.println("targets: {s} (artifacts: {d})", .{
             if (targets_str.len > 0) targets_str else "(none)",
             d.artifacts_count,
         });

@@ -82,10 +82,13 @@ pub const task = struct {
         pub const Res = struct {};
     };
     pub const poll = struct {
+        pub const ItemReq = struct {
+            task: Id,
+            logs_offset: ?u64,
+        };
         pub const Req = union(enum) {
             header: struct {
-                task: Id,
-                logs_offset: ?u64,
+                tasks: []const ItemReq,
             },
         };
         pub const Logs = struct {
@@ -103,12 +106,15 @@ pub const task = struct {
             cpu_usec: u64 = 0,
             memory_bytes: u64 = 0,
         };
+        pub const ItemRes = struct {
+            task: Id,
+            logs: ?Logs,
+            status: Status,
+            usage: ?TaskUsage = null,
+        };
         pub const Res = union(enum) {
-            footer: struct {
-                logs: ?Logs,
-                status: Status,
-                usage: ?TaskUsage = null,
-            },
+            item: ItemRes,
+            footer: struct {},
         };
     };
 };

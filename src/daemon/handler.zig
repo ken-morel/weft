@@ -58,7 +58,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
 
     daemon.term.info("Request: {any}", .{request});
 
-    const response_buf = try gpa.alloc(u8, 1 << 10);
+    const response_buf = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(response_buf);
     switch (request) {
         .artifact_push => {
@@ -89,7 +89,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             try conn.send_object(response_buf, @TypeOf(res), res);
         },
         .task_poll => {
-            const res = handle_task_poll(daemon, &arena, &conn) catch |err| err: {
+            const res = handle_task_poll(daemon, &arena, &conn, response_buf) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
                 daemon.term.err("daemon::worker::task_poll {any}", .{err});
@@ -188,11 +188,11 @@ fn handle_artifact_pull(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
         defer packer.deinit(io);
         const buffer = try gpa.alloc(u8, Pressor.chunk_size + 5);
         defer gpa.free(buffer);
-        @memcpy(buffer[0..4], "pack");
 
         try conn.send_object(buffer, proto.artifact.pull.Res, .{ .files = file_count });
 
-        while (try packer.get(io, buffer[5..])) |pack|
+        while (try packer.get(io, buffer[5..])) |pack| {
+            @memcpy(buffer[0..4], "pack");
             switch (pack) {
                 .file => |path| {
                     buffer[4] = proto.file;
@@ -224,8 +224,10 @@ fn handle_artifact_pull(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
                     buffer[4] = proto.data;
                     try conn.send(buffer[0 .. 5 + data.len]);
                 },
-            };
+            }
+        }
 
+        @memcpy(buffer[0..4], "pack");
         buffer[4] = proto.end;
         try conn.send(buffer[0..5]);
         break :send_files;
@@ -535,91 +537,102 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
 }
 
 const max_log_pack_size = 32 << 10;
-const task_not_found: proto.task.poll.Res = .{
-    .footer = .{
-        .logs = null,
-        .status = .not_found,
-    },
-};
-
-pub fn handle_task_poll(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.task.poll.Res) {
+pub fn handle_task_poll(
+    daemon: *Daemon,
+    arena: *std.heap.ArenaAllocator,
+    conn: *Connection,
+    response_buf: []u8,
+) proto.Res(proto.task.poll.Res) {
     const cwd = std.Io.Dir.cwd();
     const ara = arena.allocator();
     const gpa = daemon.gpa;
     const io = daemon.io;
     const req = (try conn.recv_object(ara, proto.task.poll.Req)).header;
 
-    const task: Task = .{ .id = req.task };
+    for (req.tasks) |item_req| {
+        const task: Task = .{ .id = item_req.task };
 
-    var archive_dir = archive_dir: {
-        const archive_dir_path = try task.archive(gpa);
-        defer gpa.free(archive_dir_path);
+        const archive_dir_path = task.archive(ara) catch |err| return err;
 
-        break :archive_dir cwd.openDir(io, archive_dir_path, .{}) catch |err|
-            return if (err == error.FileNotFound)
-                task_not_found
-            else
-                err;
-    };
-    defer archive_dir.close(io);
-
-    const status: ?u16 = status: {
-        var buf: [2]u8 = undefined;
-        const file = archive_dir.openFile(io, "status", .{ .allow_directory = false }) catch |err| {
-            if (err == error.FileNotFound)
-                break :status null
-            else
-                return err;
+        var archive_dir = cwd.openDir(io, archive_dir_path, .{}) catch |err| {
+            if (err == error.FileNotFound) {
+                try conn.send_object(response_buf, proto.Res(proto.task.poll.Res), .{
+                    .item = .{
+                        .task = item_req.task,
+                        .logs = null,
+                        .status = .not_found,
+                        .usage = null,
+                    },
+                });
+                continue;
+            } else return err;
         };
-        defer file.close(io);
-        const s = try file.readStreaming(io, &.{&buf});
-        if (s < 2)
-            break :status null;
-        break :status std.mem.readInt(u16, &buf, .little);
-    };
+        defer archive_dir.close(io);
 
-    const logs: ?proto.task.poll.Logs = if (req.logs_offset) |offset| read_logs: {
-        const logs_file = archive_dir.openFile(
-            io,
-            "log.txt",
-            .{ .allow_directory = false },
-        ) catch |err|
-            return if (err == error.FileNotFound)
-                task_not_found
-            else
-                err;
-        defer logs_file.close(io);
-
-        const size = try logs_file.length(io);
-        if (size <= offset)
-            break :read_logs .{
-                .data = &.{},
-                .compressed = false,
-                .end_offset = size,
+        const status: ?u16 = status: {
+            var buf: [2]u8 = undefined;
+            const file = archive_dir.openFile(io, "status", .{ .allow_directory = false }) catch |err| {
+                if (err == error.FileNotFound)
+                    break :status null
+                else
+                    return err;
             };
-
-        const to_read = @min(size - offset, max_log_pack_size);
-        const buff = try ara.alloc(u8, to_read);
-
-        _ = try logs_file.readPositionalAll(io, buff, offset);
-        break :read_logs .{
-            .data = buff,
-            .compressed = false,
-            .end_offset = offset + to_read,
+            defer file.close(io);
+            const s = try file.readStreaming(io, &.{&buf});
+            if (s < 2)
+                break :status null;
+            break :status std.mem.readInt(u16, &buf, .little);
         };
-    } else null;
 
-    const usage: ?proto.task.poll.TaskUsage = if (status == null) task.usage(gpa, io) else null;
+        const logs: ?proto.task.poll.Logs = if (item_req.logs_offset) |offset| read_logs: {
+            const logs_file = archive_dir.openFile(
+                io,
+                "log.txt",
+                .{ .allow_directory = false },
+            ) catch |err| {
+                if (err == error.FileNotFound)
+                    break :read_logs null
+                else
+                    return err;
+            };
+            defer logs_file.close(io);
 
-    return .{ .footer = .{
-        .logs = logs,
-        .status = if (status) |code|
-            if (code == 0)
-                .success
-            else
-                .{ .failed = code }
-        else
-            .running,
-        .usage = usage,
-    } };
+            const size = try logs_file.length(io);
+            if (size <= offset)
+                break :read_logs .{
+                    .data = &.{},
+                    .compressed = false,
+                    .end_offset = size,
+                };
+
+            const to_read = @min(size - offset, max_log_pack_size);
+            const buff = try ara.alloc(u8, to_read);
+
+            _ = try logs_file.readPositionalAll(io, buff, offset);
+            break :read_logs .{
+                .data = buff,
+                .compressed = false,
+                .end_offset = offset + to_read,
+            };
+        } else null;
+
+        const usage: ?proto.task.poll.TaskUsage = if (status == null) task.usage(gpa, io) else null;
+
+        try conn.send_object(response_buf, proto.Res(proto.task.poll.Res), .{
+            .item = .{
+                .task = item_req.task,
+                .logs = logs,
+                .status = if (status) |code|
+                    if (code == 0)
+                        .success
+                    else
+                        .{ .failed = code }
+                else
+                    .running,
+                .usage = usage,
+            },
+        });
+    }
+
+    return .{ .footer = .{} };
 }

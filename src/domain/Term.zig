@@ -20,35 +20,15 @@ pub const Level = enum(u8) {
     }
 };
 
-pub const Style = enum {
-    reset,
-    bold,
-    dim,
-    red,
-    green,
-    yellow,
-    blue,
-    magenta,
-    cyan,
+pub const Color = std.Io.Terminal.Color;
 
-    pub fn code(self: Style) []const u8 {
-        return switch (self) {
-            .reset => "\x1b[0m",
-            .bold => "\x1b[1m",
-            .dim => "\x1b[2m",
-            .red => "\x1b[31m",
-            .green => "\x1b[32m",
-            .yellow => "\x1b[33m",
-            .blue => "\x1b[34m",
-            .magenta => "\x1b[35m",
-            .cyan => "\x1b[36m",
-        };
-    }
-};
-
-rw_io: struct { std.Io.File, std.Io.File },
-rw_file: struct { std.Io.File.Reader, std.Io.File.Writer },
-rw_buf: struct { []u8, []u8 },
+stdin_file: std.Io.File,
+stdout_file: std.Io.File,
+reader_file: std.Io.File.Reader,
+writer_file: std.Io.File.Writer,
+in_buf: []u8,
+out_buf: []u8,
+terminal: std.Io.Terminal,
 
 log_level: Level = .debug,
 timestamps: bool = true,
@@ -57,114 +37,142 @@ is_tty: bool,
 mutex: std.Io.Mutex = .init,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
-    var ri = std.Io.File.stdin();
-    var wo = std.Io.File.stdout();
+    var stdin_file = std.Io.File.stdin();
+    var stdout_file = std.Io.File.stdout();
 
-    const wo_buf = try alloc.alloc(u8, 4 << 10);
-    errdefer alloc.free(wo_buf);
+    const out_buf = try alloc.alloc(u8, 4 << 10);
+    errdefer alloc.free(out_buf);
 
-    const ri_buf = try alloc.alloc(u8, 4 << 10);
-    errdefer alloc.free(ri_buf);
+    const in_buf = try alloc.alloc(u8, 4 << 10);
+    errdefer alloc.free(in_buf);
 
-    return .{
-        .rw_io = .{ ri, wo },
-        .rw_file = .{ ri.reader(io, ri_buf), wo.writer(io, wo_buf) },
-        .rw_buf = .{ ri_buf, wo_buf },
-        .is_tty = wo.isTty(io) catch false,
+    const is_tty = stdout_file.isTty(io) catch false;
+    const mode = std.Io.Terminal.Mode.detect(io, stdout_file, false, false) catch .no_color;
+
+    var self: @This() = .{
+        .stdin_file = stdin_file,
+        .stdout_file = stdout_file,
+        .reader_file = stdin_file.reader(io, in_buf),
+        .writer_file = stdout_file.writer(io, out_buf),
+        .in_buf = in_buf,
+        .out_buf = out_buf,
+        .terminal = .{
+            .writer = undefined,
+            .mode = mode,
+        },
+        .is_tty = is_tty,
         .io = io,
     };
-}
-
-pub inline fn reader(self: *@This()) *std.Io.Reader {
-    return &self.rw_file.@"0".interface;
-}
-
-pub inline fn writer(self: *@This()) *std.Io.Writer {
-    return &self.rw_file.@"1".interface;
+    self.terminal.writer = &self.writer_file.interface;
+    return self;
 }
 
 pub fn deinit(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
     _ = io;
-    alloc.free(self.rw_buf.@"0");
-    alloc.free(self.rw_buf.@"1");
+    alloc.free(self.in_buf);
+    alloc.free(self.out_buf);
+}
+
+pub inline fn reader(self: *@This()) *std.Io.Reader {
+    return &self.reader_file.interface;
+}
+
+pub inline fn writer(self: *@This()) *std.Io.Writer {
+    return &self.writer_file.interface;
 }
 
 pub inline fn flush(self: *@This()) !void {
     try self.writer().flush();
 }
 
-pub inline fn print(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+pub fn setColor(self: *@This(), color: Color) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    self.terminal.writer = &self.writer_file.interface;
+    self.terminal.setColor(color) catch {};
+}
+
+pub fn setReverse(self: *@This(), enable: bool) void {
+    if (!self.is_tty or self.terminal.mode != .escape_codes) return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    self.writer().writeAll(if (enable) "\x1b[7m" else "\x1b[27m") catch {};
+}
+
+pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     self.mutex.lockUncancelable(self.io);
     defer self.mutex.unlock(self.io);
     self.writer().print(fmt, args) catch return;
     self.flush() catch return;
 }
 
-pub inline fn println(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+pub fn println(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     self.mutex.lockUncancelable(self.io);
     defer self.mutex.unlock(self.io);
     self.writer().print(fmt ++ "\n", args) catch return;
     self.flush() catch return;
 }
 
-pub inline fn write(self: *@This(), txt: []const u8) !void {
-    try self.writer().writeAll(txt);
+pub fn styled(self: *@This(), color: Color, comptime fmt: []const u8, args: anytype) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    self.terminal.writer = &self.writer_file.interface;
+    self.terminal.setColor(color) catch {};
+    self.writer().print(fmt, args) catch {};
+    self.terminal.setColor(.reset) catch {};
+    self.flush() catch return;
 }
-pub inline fn byte(self: *@This(), b: u8) !void {
-    try self.writer().writeByte(b);
+
+pub fn styled_ln(self: *@This(), color: Color, comptime fmt: []const u8, args: anytype) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    self.terminal.writer = &self.writer_file.interface;
+    self.terminal.setColor(color) catch {};
+    self.writer().print(fmt, args) catch {};
+    self.terminal.setColor(.reset) catch {};
+    self.writer().writeByte('\n') catch {};
+    self.flush() catch return;
 }
 
-pub const Size = struct {
-    rows: u16,
-    cols: u16,
-};
+pub fn clear_line(self: *@This()) void {
+    if (!self.is_tty) return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    self.writer().writeAll("\x1b[2K\r") catch {};
+}
 
-pub fn get_size(self: *@This()) Size {
-    if (self.is_tty) {
-        var ws: std.posix.winsize = .{
-            .row = 0,
-            .col = 0,
-            .xpixel = 0,
-            .ypixel = 0,
-        };
-        const res = self.io.operate(.{ .device_io_control = .{
-            .file = self.rw_io.@"1",
-            .code = std.posix.T.IOCGWINSZ,
-            .arg = &ws,
-        } }) catch null;
-
-        if (res) |r|
-            if (r.device_io_control >= 0 and ws.row > 0 and ws.col > 0)
-                return .{ .rows = ws.row, .cols = ws.col };
-    }
-    return .{ .rows = 24, .cols = 80 };
+pub fn clear_to_end(self: *@This()) void {
+    if (!self.is_tty) return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    self.writer().writeAll("\x1b[J") catch {};
 }
 
 pub fn move_up(self: *@This(), n: u16) void {
-    if (n == 0)
-        return;
+    if (n == 0 or !self.is_tty) return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     self.writer().print("\x1b[{d}A", .{n}) catch {};
 }
 
 pub fn move_down(self: *@This(), n: u16) void {
-    if (n == 0)
-        return;
+    if (n == 0 or !self.is_tty) return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     self.writer().print("\x1b[{d}B", .{n}) catch {};
 }
 
-pub fn clear_to_end(self: *@This()) void {
-    self.writer().writeAll("\x1b[J") catch {};
-}
-
-pub fn clear_line(self: *@This()) void {
-    self.writer().writeAll("\x1b[2K\r") catch {};
-}
-
 pub fn hide_cursor(self: *@This()) void {
+    if (!self.is_tty) return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     self.writer().writeAll("\x1b[?25l") catch {};
 }
 
 pub fn show_cursor(self: *@This()) void {
+    if (!self.is_tty) return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     self.writer().writeAll("\x1b[?25h") catch {};
 }
 
@@ -181,81 +189,121 @@ pub inline fn read_line(self: *@This(), buf: []u8) ![]u8 {
     return self.read_till(buf, '\n');
 }
 
-pub fn style(self: *@This(), s: Style) void {
-    self.write(s.code()) catch {};
-}
+pub const Size = struct {
+    rows: u16,
+    cols: u16,
+};
 
-pub fn styled(self: *@This(), s: Style, txt: []const u8) void {
-    if (!self.is_tty) {
-        self.write(txt) catch {};
-        return;
-    } else {
-        self.write(s.code()) catch {};
-        self.write(txt) catch {};
-        self.write(Style.reset.code()) catch {};
+pub fn get_size(self: *@This()) Size {
+    if (self.is_tty) {
+        var ws: std.posix.winsize = .{
+            .row = 0,
+            .col = 0,
+            .xpixel = 0,
+            .ypixel = 0,
+        };
+        const res = self.io.operate(.{ .device_io_control = .{
+            .file = self.stdout_file,
+            .code = std.posix.T.IOCGWINSZ,
+            .arg = &ws,
+        } }) catch null;
+
+        if (res) |r|
+            if (r.device_io_control >= 0 and ws.row > 0 and ws.col > 0)
+                return .{ .rows = ws.row, .cols = ws.col };
     }
+    return .{ .rows = 24, .cols = 80 };
 }
 
-fn write_timestamp(self: *@This(), w: *std.Io.Writer) !void {
-    const io = self.io;
-    const ts = std.Io.Clock.now(.real, io);
+fn write_timestamp_unlocked(self: *@This(), w: *std.Io.Writer) !void {
+    const ts = std.Io.Clock.now(.real, self.io);
     const es = std.time.epoch.EpochSeconds{ .secs = @intCast(@max(0, ts.toSeconds())) };
     const day = es.getDaySeconds();
     const yd = es.getEpochDay().calculateYearDay();
     const md = yd.calculateMonthDay();
-    if (self.is_tty) {
-        try w.print("{c}[2m{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}{c}[0m ", .{
-            0x1b,                       yd.year,
-            @intFromEnum(md.month),     md.day_index + 1,
-            day.getHoursIntoDay(),      day.getMinutesIntoHour(),
-            day.getSecondsIntoMinute(), 0x1b,
-        });
-    } else {
-        try w.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} ", .{
-            yd.year,
-            @intFromEnum(md.month),
-            md.day_index + 1,
-            day.getHoursIntoDay(),
-            day.getMinutesIntoHour(),
-            day.getSecondsIntoMinute(),
-        });
-    }
+    self.terminal.writer = &self.writer_file.interface;
+    self.terminal.setColor(.dim) catch {};
+    try w.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} ", .{
+        yd.year,
+        @intFromEnum(md.month),
+        md.day_index + 1,
+        day.getHoursIntoDay(),
+        day.getMinutesIntoHour(),
+        day.getSecondsIntoMinute(),
+    });
+    self.terminal.setColor(.reset) catch {};
+}
+
+pub fn write_tag(self: *@This(), tag_color: Color, tag_text: []const u8, comptime fmt: []const u8, args: anytype) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    const w = self.writer();
+    if (self.is_tty) w.writeAll("\x1b[2K\r") catch {};
+    if (self.timestamps) self.write_timestamp_unlocked(w) catch {};
+    self.terminal.writer = &self.writer_file.interface;
+    self.terminal.setColor(tag_color) catch {};
+    w.writeAll(tag_text) catch {};
+    self.terminal.setColor(.reset) catch {};
+    w.print(fmt ++ "\n", args) catch {};
+    w.flush() catch {};
+}
+
+pub const task_palette = [_]Color{
+    .cyan,
+    .bright_yellow,
+    .magenta,
+    .bright_blue,
+    .bright_cyan,
+    .bright_magenta,
+    .green,
+    .yellow,
+    .bright_green,
+};
+
+pub fn task_color(name: []const u8) Color {
+    const h = std.hash.Fnv1a_32.hash(name);
+    return task_palette[h % task_palette.len];
+}
+
+pub fn write_task_log(self: *@This(), color: Color, prefix: []const u8, line: []const u8) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    const w = self.writer();
+    if (self.is_tty) w.writeAll("\x1b[2K\r") catch {};
+    self.terminal.writer = &self.writer_file.interface;
+    self.terminal.setColor(color) catch {};
+    w.writeAll(prefix) catch {};
+    w.writeAll(" │ ") catch {};
+    self.terminal.setColor(.reset) catch {};
+    w.writeAll(line) catch {};
+    w.writeByte('\n') catch {};
+    w.flush() catch {};
+}
+
+pub fn write_event(self: *@This(), tag_color: Color, tag_text: []const u8, comptime fmt: []const u8, args: anytype) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
+    const w = self.writer();
+    if (self.is_tty) w.writeAll("\x1b[2K\r") catch {};
+    self.terminal.writer = &self.writer_file.interface;
+    self.terminal.setColor(tag_color) catch {};
+    w.writeAll(tag_text) catch {};
+    self.terminal.setColor(.reset) catch {};
+    w.print(fmt ++ "\n", args) catch {};
+    w.flush() catch {};
 }
 
 pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(level) > @intFromEnum(self.log_level))
         return;
-    self.mutex.lockUncancelable(self.io);
-    defer self.mutex.unlock(self.io);
-    const w = self.writer();
-    if (self.timestamps)
-        self.write_timestamp(w) catch {};
-    if (self.is_tty)
-        w.writeAll(comptime tag(level, true)) catch {}
-    else
-        w.writeAll(comptime tag(level, false)) catch {};
-
-    w.print(fmt ++ "\n", args) catch {};
-    w.flush() catch {};
-}
-
-fn tag(comptime level: Level, comptime colored: bool) []const u8 {
-    if (colored) {
-        return switch (level) {
-            .quiet => "",
-            .err => Style.red.code() ++ Style.bold.code() ++ "error" ++ Style.reset.code() ++ Style.red.code() ++ ":" ++ Style.reset.code() ++ " ",
-            .warn => Style.yellow.code() ++ "warn" ++ Style.reset.code() ++ ": ",
-            .info => Style.green.code() ++ "info" ++ Style.reset.code() ++ ": ",
-            .debug => Style.dim.code() ++ "debug" ++ Style.reset.code() ++ ": ",
-        };
-    }
-    return switch (level) {
-        .quiet => "",
-        .err => "error: ",
-        .warn => "warn: ",
-        .info => "info: ",
-        .debug => "debug: ",
+    const tag_info: struct { Color, []const u8 } = switch (level) {
+        .quiet => return,
+        .err => .{ .red, "error: " },
+        .warn => .{ .yellow, "warn: " },
+        .info => .{ .green, "info: " },
+        .debug => .{ .dim, "debug: " },
     };
+    self.write_tag(tag_info.@"0", tag_info.@"1", fmt, args);
 }
 
 pub fn err(self: *@This(), comptime fmt: []const u8, args: anytype) void {
@@ -276,32 +324,10 @@ pub fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) void {
 
 pub fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
-    const w = self.writer();
-    if (self.timestamps)
-        self.write_timestamp(w) catch {};
-    if (self.is_tty) {
-        w.writeAll(Style.bold.code()) catch {};
-        w.writeAll(">> ") catch {};
-        w.writeAll(Style.reset.code()) catch {};
-    } else w.writeAll(">> ") catch {};
-    w.print(fmt ++ "\n", args) catch {};
-    w.flush() catch {};
+    self.write_tag(.bold, ">> ", fmt, args);
 }
 
 pub fn success(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level))
-        return;
-    const w = self.writer();
-    if (self.timestamps)
-        self.write_timestamp(w) catch {};
-    if (self.is_tty) {
-        w.writeAll(Style.bold.code()) catch {};
-        w.writeAll(Style.green.code()) catch {};
-        w.writeAll("ok") catch {};
-        w.writeAll(Style.reset.code()) catch {};
-        w.writeAll(": ") catch {};
-    } else w.writeAll("ok: ") catch {};
-
-    w.print(fmt ++ "\n", args) catch {};
-    w.flush() catch {};
+    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level)) return;
+    self.write_tag(.green, "ok: ", fmt, args);
 }

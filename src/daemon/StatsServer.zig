@@ -120,6 +120,26 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
 
     self.term.info("daemon::stats_server sent {d} catchup samples to listener", .{catchup_count});
 
+    if (catchup_count == 0) {
+        if (self.monitor.fetch(self.alloc, self.io)) |stats| {
+            if (self.stats_history[@intCast(self.stats_idx)]) |stat|
+                stat.free(self.alloc);
+            self.stats_history[@intCast(self.stats_idx)] = stats;
+            self.stats_idx = (self.stats_idx + 1) % self.stats_history.len;
+
+            var hw: std.Io.Writer = .fixed(hist_buffer);
+            if (zoto.serialize(&hw, Monitor.Stats, stats, .{ .header = true })) |_| {
+                var w_buf: [256]u8 = undefined;
+                var w = stream.writer(self.io, &w_buf);
+                w.interface.writeAll(hw.buffered()) catch {};
+                w.interface.flush() catch {};
+                last_time = stats.time;
+            } else |_| {}
+        } else |err| {
+            self.term.err("daemon::stats_server initial fetch error: {any}", .{err});
+        }
+    }
+
     try self.listeners.append(self.alloc, .{
         .last = last_time,
         .stream = stream,
@@ -148,7 +168,7 @@ fn _run(self: *@This()) !void {
     while (true) {
         const stats = self.monitor.fetch(self.alloc, self.io) catch |err| {
             self.term.err("daemon::stats_server fetch error: {any}", .{err});
-            try std.Io.sleep(self.io, .fromSeconds(5), .awake);
+            try std.Io.sleep(self.io, .fromSeconds(2), .awake);
             continue;
         };
 
@@ -200,7 +220,7 @@ fn _run(self: *@This()) !void {
             }
         }
 
-        try std.Io.sleep(self.io, .fromSeconds(5), .awake);
+        try std.Io.sleep(self.io, .fromSeconds(2), .awake);
     }
 }
 

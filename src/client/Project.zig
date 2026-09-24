@@ -67,22 +67,6 @@ pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, de
     );
 }
 
-pub fn task_log_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deployment_id: Deployment.Id, pipeline: []const u8) ![]const u8 {
-    const deployment_dir = try self.open_deployment_dir(io, deployment_id);
-    defer deployment_dir.close(io);
-
-    const deployment_dir_path = try deployment_dir.realPathFileAlloc(io, ".", alloc);
-    defer alloc.free(deployment_dir_path);
-
-    const log_name = try std.fmt.allocPrint(alloc, "{s}.log", .{pipeline});
-    defer alloc.free(log_name);
-
-    return try std.fs.path.join(
-        alloc,
-        &.{ deployment_dir_path, "logs", log_name },
-    );
-}
-
 pub fn latest_deployment_id(self: @This(), io: std.Io) !?Deployment.Id {
     var weft_dir = self.open_weft_dir(io) catch |err|
         if (err == error.FileNotFound)
