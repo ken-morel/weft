@@ -54,6 +54,7 @@ log_level: Level = .debug,
 timestamps: bool = true,
 io: std.Io,
 is_tty: bool,
+mutex: std.Io.Mutex = .init,
 
 pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
     var ri = std.Io.File.stdin();
@@ -93,11 +94,15 @@ pub inline fn flush(self: *@This()) !void {
 }
 
 pub inline fn print(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     self.writer().print(fmt, args) catch return;
     self.flush() catch return;
 }
 
 pub inline fn println(self: *@This(), comptime fmt: []const u8, args: anytype) void {
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     self.writer().print(fmt ++ "\n", args) catch return;
     self.flush() catch return;
 }
@@ -220,6 +225,8 @@ fn write_timestamp(self: *@This(), w: *std.Io.Writer) !void {
 pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) void {
     if (@intFromEnum(level) > @intFromEnum(self.log_level))
         return;
+    self.mutex.lockUncancelable(self.io);
+    defer self.mutex.unlock(self.io);
     const w = self.writer();
     if (self.timestamps)
         self.write_timestamp(w) catch {};

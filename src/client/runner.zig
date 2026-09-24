@@ -82,6 +82,8 @@ pub fn run_deployment(
             const pipeline = deployment.config.get_pipeline(step.pipeline) orelse
                 return error.InvalidPipeline;
 
+            _ = try state.add(io, remote, pipeline);
+            try deployment.add_running(gpa, step);
             try spawn(
                 io,
                 &group,
@@ -286,7 +288,6 @@ pub fn spawn_step(
         .pipeline = step.pipeline,
         .workspace = dep.config.workspace,
     };
-    _ = try state.add(io, remote, pipeline);
 
     for (pipeline.inputs()) |input|
         try fetcher.upload(io, remote, input);
@@ -349,10 +350,7 @@ pub fn spawn_step(
         };
 
         if (res) |_| {
-            try depl.lock(io);
-            try dep.add_running(gpa, step);
             state.running(io, step.remote, step.pipeline);
-            defer depl.unlock(io);
         } else |err| {
             try depl.lock(io);
             defer depl.unlock(io);
