@@ -1,0 +1,22 @@
+.{
+    .workspace = "weft",
+    .pipelines = .{
+        .{
+            .name = "docs",
+            .in = .{ "src" },
+            .pkgs = .{
+                "il1g4zw7ngwvsnn051z8zj1vr2v9pwg1-lowdown-3.0.1",
+            },
+        },
+        .{
+            .name = "build",
+            .in = .{ "src" },
+            .pkgs = .{
+                "83qs3ksyjclr149vpxbaz1z18wvi9rms-zig-0.16.0",
+            },
+            .keep = .{
+                .{ "zig-cache", ".zig-cache" },
+            },
+        },
+    },
+}
