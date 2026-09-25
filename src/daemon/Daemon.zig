@@ -149,6 +149,8 @@ fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
 }
 
 pub fn run(self: *@This()) !void {
+    paths.ensure_dirs(self.io);
+
     var group: std.Io.Group = .init;
 
     try spawn(self.io, &group, run_client_server, .{self});
@@ -182,7 +184,10 @@ pub fn finalize_task(self: *@This(), task: Task, status: u16) !void {
     const artifacts_dir = try cwd.createDirPathOpen(self.io, artifacts_dir_path, .{});
     defer artifacts_dir.close(self.io);
 
-    const outputs_dir = try cwd.openDir(self.io, output_dirs_path, .{ .iterate = true });
+    const outputs_dir = cwd.openDir(self.io, output_dirs_path, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) return;
+        return err;
+    };
     defer outputs_dir.close(self.io);
 
     var outputs: std.ArrayList([]const u8) = .empty;
@@ -191,14 +196,12 @@ pub fn finalize_task(self: *@This(), task: Task, status: u16) !void {
             self.gpa.free(name);
         outputs.deinit(self.gpa);
     }
-    var walker = try std.Io.Dir.walkSelectively(
-        outputs_dir,
-        self.gpa,
-    );
-    defer walker.deinit();
-    while (try walker.next(self.io)) |entry|
-        try outputs.append(self.gpa, try self.gpa.dupe(u8, entry.basename));
+    var it = outputs_dir.iterate();
+    while (try it.next(self.io)) |entry|
+        try outputs.append(self.gpa, try self.gpa.dupe(u8, entry.name));
 
-    for (outputs.items) |name|
+    for (outputs.items) |name| {
+        artifacts_dir.deleteTree(self.io, name) catch {};
         try outputs_dir.rename(name, artifacts_dir, name, self.io);
+    }
 }

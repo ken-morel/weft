@@ -5,6 +5,7 @@ const read_only_user_permissions = ClientInstall.read_only_user_permissions;
 const read_only_user_mode = ClientInstall.read_only_user_mode;
 const Deployment = @import("../client/Deployment.zig");
 const proto = @import("../domain/proto.zig");
+const paths = @import("../domain/paths.zig");
 const Term = @import("../domain/Term.zig");
 
 const client_config_size_limit: std.Io.Limit = .limited(10 << 10);
@@ -64,8 +65,15 @@ pub fn init(io: std.Io) !@This() {
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
     const uuid = (try Deployment.Id.now(io)).to_string();
 
-    try self.temp_dir.createDirPath(io, sub);
-    var sub_dir = try self.temp_dir.createDirPathOpen(io, sub, .{});
+    var tmp_dir = std.Io.Dir.cwd().createDirPathOpen(
+        io,
+        paths.weft_tmp_dir,
+        .{ .open_options = .{ .iterate = true } },
+    ) catch return self.temp_dir.createDirPathOpen(io, sub, .{});
+    defer tmp_dir.close(io);
+
+    try tmp_dir.createDirPath(io, sub);
+    var sub_dir = try tmp_dir.createDirPathOpen(io, sub, .{});
     defer sub_dir.close(io);
 
     return try sub_dir.createDirPathOpen(io, &uuid, .{});

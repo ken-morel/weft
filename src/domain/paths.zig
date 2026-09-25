@@ -14,9 +14,21 @@ pub const weft_run_dir = weft_dir ++ "run/";
 pub const weft_archive = weft_dir ++ "archive/";
 pub const weft_cache_dir = weft_dir ++ "cache/";
 pub const weft_home_dir = weft_dir ++ "home/";
+pub const weft_tmp_dir = weft_dir ++ "tmp/";
 
 pub const weft_runtime_dir = "/run/weft/";
 pub const weft_socket = weft_runtime_dir ++ "weft.pipe";
+
+pub fn ensure_dirs(io: std.Io) void {
+    const cwd = std.Io.Dir.cwd();
+    cwd.createDirPath(io, weft_dir) catch {};
+    cwd.createDirPath(io, weft_artifacts_dir) catch {};
+    cwd.createDirPath(io, weft_run_dir) catch {};
+    cwd.createDirPath(io, weft_archive) catch {};
+    cwd.createDirPath(io, weft_cache_dir) catch {};
+    cwd.createDirPath(io, weft_home_dir) catch {};
+    cwd.createDirPath(io, weft_tmp_dir) catch {};
+}
 
 pub inline fn home(alloc: std.mem.Allocator, w: []const u8) ![]u8 {
     return try std.fs.path.join(

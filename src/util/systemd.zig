@@ -190,7 +190,7 @@ pub fn run(
         }
 
         for (opts.fs.read) |read_path|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pReadOnlyPaths={s}", .{read_path}));
+            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pReadOnlyPaths=-{s}", .{read_path}));
 
         for (opts.fs.write) |write_path|
             try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pReadWritePaths={s}", .{write_path}));
@@ -306,7 +306,7 @@ pub fn kill(io: std.Io, unit: []const u8) !void {
     var child = try std.process.spawn(
         io,
         .{
-            .argv = &.{ "systemctl", "kill", unit },
+            .argv = &.{ "systemctl", "--no-ask-password", "kill", unit },
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .inherit,
@@ -319,7 +319,7 @@ pub fn stop(io: std.Io, unit: []const u8) !void {
     var child = try std.process.spawn(
         io,
         .{
-            .argv = &.{ "systemctl", "stop", unit },
+            .argv = &.{ "systemctl", "--no-ask-password", "stop", unit },
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .inherit,

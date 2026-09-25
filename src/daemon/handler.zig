@@ -10,6 +10,7 @@ const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
 const Daemon = @import("Daemon.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
+const gc = @import("gc.zig");
 const Server = @import("Server.zig");
 const Task = @import("Task.zig");
 
@@ -110,6 +111,24 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const req = try conn.recv_object_buf(response_buf, proto.system.stats.Req);
             try daemon.stats_server.add_listener(stream, req.from);
             return error.ReAssigned;
+        },
+        .task_kill => {
+            const res = handle_task_kill(daemon, &arena, &conn) catch |err| err: {
+                if (@errorReturnTrace()) |trace|
+                    std.debug.dumpErrorReturnTrace(trace);
+                daemon.term.err("daemon::worker::task_kill {any}", .{err});
+                break :err err;
+            };
+            try conn.send_object(response_buf, @TypeOf(res), res);
+        },
+        .gc => {
+            const res = handle_gc(daemon, &arena, &conn) catch |err| err: {
+                if (@errorReturnTrace()) |trace|
+                    std.debug.dumpErrorReturnTrace(trace);
+                daemon.term.err("daemon::worker::gc {any}", .{err});
+                break :err err;
+            };
+            try conn.send_object(response_buf, @TypeOf(res), res);
         },
     }
 }
@@ -635,3 +654,63 @@ pub fn handle_task_poll(
 
     return .{ .footer = .{} };
 }
+
+fn handle_task_kill(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.task.kill.Res) {
+    const ara = arena.allocator();
+    const gpa = daemon.gpa;
+    const io = daemon.io;
+
+    const req = try conn.recv_object(ara, proto.task.kill.Req);
+    if (req.task.pipeline.len > 0) {
+        const t: Task = .{ .id = req.task };
+        const active = t.is_active(gpa, io) catch false;
+        if (active) {
+            try t.kill(gpa, io);
+        }
+        return .{ .killed = active };
+    }
+
+    const run_base = try std.fs.path.join(ara, &.{ paths.weft_run_dir, req.task.workspace });
+    defer ara.free(run_base);
+    var ws_dir = std.Io.Dir.cwd().openDir(io, run_base, .{ .iterate = true }) catch |err| {
+        if (err == error.FileNotFound) return .{ .killed = false };
+        return err;
+    };
+    defer ws_dir.close(io);
+
+    var killed_any = false;
+    const dep_str = req.task.deployment.to_string();
+    var p_iter = ws_dir.iterate();
+    while (try p_iter.next(io)) |p_entry| {
+        if (p_entry.kind != .directory) continue;
+        const dep_path = try std.fs.path.join(ara, &.{ run_base, p_entry.name, &dep_str });
+        defer ara.free(dep_path);
+        std.Io.Dir.cwd().access(io, dep_path, .{}) catch continue;
+        const sub_task: Task = .{ .id = .{
+            .workspace = req.task.workspace,
+            .deployment = req.task.deployment,
+            .pipeline = p_entry.name,
+        } };
+        if (sub_task.is_active(gpa, io) catch false) {
+            sub_task.kill(gpa, io) catch {};
+            killed_any = true;
+        }
+    }
+    return .{ .killed = killed_any };
+}
+
+fn handle_gc(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.gc.Res) {
+    const ara = arena.allocator();
+    const req = try conn.recv_object(ara, proto.gc.Req);
+    const res = try gc.run(daemon.gpa, daemon.io, daemon.term, .{
+        .workspace = req.workspace,
+        .keep = req.keep,
+        .older_than_ms = req.older_than_ms,
+        .dry_run = req.dry_run,
+    });
+    return .{
+        .deployments_removed = res.deployments_removed,
+        .bytes_freed = res.bytes_freed,
+    };
+}
+
