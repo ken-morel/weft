@@ -100,7 +100,7 @@ pub fn run_deployment(
             for (deployment.running) |step| {
                 if (!std.mem.eql(u8, step.remote, remote_name)) continue;
                 const step_state = state.get(io, step.remote, step.pipeline) orelse continue;
-                if (step_state.status != .running) continue;
+                if (step_state.status != .running and step_state.status != .initializing) continue;
 
                 try batch_tasks.append(poll_arena.allocator(), .{
                     .task = .{

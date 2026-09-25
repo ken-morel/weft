@@ -13,7 +13,10 @@ pub fn create_sources(alloc: std.mem.Allocator, io: std.Io, _: *Term, inst: Clie
     const sources = deployment.config.get_sources();
 
     source: for (sources) |source| {
-        const source_name = try std.mem.join(alloc, ".", &.{ "src", source.@"0" });
+        const source_name = if (source.@"0".len > 0)
+            try std.mem.join(alloc, ".", &.{ "src", source.@"0" })
+        else
+            try alloc.dupe(u8, "src");
         defer alloc.free(source_name);
         const source_dir_path = try project.artifact_dir_path(alloc, io, deployment.id, source_name);
         defer alloc.free(source_dir_path);

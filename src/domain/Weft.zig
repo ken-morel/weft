@@ -89,7 +89,7 @@ pub fn get_sources(self: @This()) []const struct { []const u8, []const u8 } {
     return if (self.sources) |s|
         s
     else
-        &.{.{ "src", "." }};
+        &.{.{ "", "." }};
 }
 
 pub fn is_source_artifact(p: []const u8) bool {

@@ -49,7 +49,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
         .term = term,
         .pressor = try .init(alloc, io),
         .stats_server = try .init(alloc, io, term),
-        .store = Store.init(alloc),
+        .store = Store.init(alloc, term),
     };
 }
 

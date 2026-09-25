@@ -374,8 +374,22 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         break :input_dirs input_dirs;
     };
 
-    for (req.pipeline.pkgs) |basename| {
-        try daemon.store.fetch(io, basename);
+    const archive_dir_path = try task.archive(ara);
+    try std.Io.Dir.cwd().createDirPath(daemon.io, archive_dir_path);
+    const log_path = try std.fs.path.join(ara, &.{ archive_dir_path, "log.txt" });
+
+    if (req.pipeline.pkgs.len > 0) {
+        var log_file = try std.Io.Dir.cwd().createFile(daemon.io, log_path, .{ .truncate = false });
+        defer log_file.close(io);
+
+        for (req.pipeline.pkgs) |basename| {
+            try log_file.writeStreamingAll(io, try std.fmt.allocPrint(ara, "[nix] fetching {s}...\n", .{basename}));
+            daemon.store.fetch(io, basename) catch |err| {
+                try log_file.writeStreamingAll(io, try std.fmt.allocPrint(ara, "[nix] failed to fetch {s}: {s}\n", .{ basename, @errorName(err) }));
+                return err;
+            };
+            try log_file.writeStreamingAll(io, try std.fmt.allocPrint(ara, "[nix] installed {s}\n", .{basename}));
+        }
     }
 
     const run_dir_path = try task.run_dir_path(ara);
@@ -455,10 +469,6 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
             try std.fmt.allocPrint(ara, "{s}:{s}", .{ cache_path, mount_path }),
         );
     }
-
-    const archive_dir_path = try task.archive(ara);
-    try std.Io.Dir.cwd().createDirPath(daemon.io, archive_dir_path);
-    const log_path = try std.fs.path.join(ara, &.{ archive_dir_path, "log.txt" });
 
     const env = bind_env: {
         var env: std.ArrayList([]const u8) = .empty;
