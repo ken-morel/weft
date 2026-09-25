@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ClientInstall = @import("client/ClientInstall.zig");
+const cmd_check = @import("client/cmd_check.zig");
 const cmd_follow = @import("client/cmd_follow.zig");
 const cmd_gc = @import("client/cmd_gc.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
@@ -54,6 +55,13 @@ const Argz = union(enum) {
                 code: u16,
             },
         },
+    },
+
+    check: struct {
+        pub const doc = "Validate project configuration, pipeline DAG, scripts, and environment";
+        pub const doc_remote = "Target remote to validate environment for (defaults to 'local')";
+
+        remote: []const u8 = "local",
     },
 
     do: struct {
@@ -220,6 +228,17 @@ pub fn main(init: std.process.Init) !void {
                     try clinternal.task_completed(alloc, init.io, &term, msg.task, msg.code);
                 },
             },
+        },
+        .check => |cmd| {
+            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{ .iterate = true });
+            defer project_dir.close(init.io);
+            const project = try Project.open(project_dir);
+
+            cmd_check.run(alloc, init.io, &term, project, installation, cmd.remote) catch |err| switch (err) {
+                error.ValidationFailed, error.InvalidConfig => return,
+                else => return err,
+            };
         },
         .do => |cmd| {
             if (cmd.targets.len == 0) {

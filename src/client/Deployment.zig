@@ -95,7 +95,7 @@ pub fn next_target(self: @This()) ?*const Step {
     return null;
 }
 
-pub fn next_step(self: @This(), term: ?*Term) !?Step {
+pub fn next_step(self: @This(), term: *Term) !?Step {
     target: for (self.targets) |*target| {
         for (self.artifacts) |artifact|
             if (std.mem.eql(u8, artifact.pipeline, target.pipeline) and std.mem.eql(u8, artifact.remote, target.remote))
@@ -125,7 +125,7 @@ pub const StepStatus = union(enum) {
 
 const resolve_pipeline_max_depth: u16 = 100;
 
-pub fn resolve_pipeline(self: @This(), term: ?*Term, pipeline_name: []const u8, depth: u16) !StepStatus {
+pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, depth: u16) !StepStatus {
     if (depth >= resolve_pipeline_max_depth)
         return error.CyclicPipeline;
     if (self.config.get_pipeline(pipeline_name)) |pipeline| {
@@ -149,8 +149,11 @@ pub fn resolve_pipeline(self: @This(), term: ?*Term, pipeline_name: []const u8, 
             if (Weft.is_source_artifact(input))
                 continue :input;
             other_pipeline: for (self.config.pipelines) |other_pipeline| {
+                if (std.mem.eql(u8, other_pipeline.name, pipeline.name))
+                    continue;
                 blk: {
                     for (other_pipeline.outputs()) |output| {
+                        term.println("{s} -> {s}", .{ other_pipeline.name, output });
                         if (std.mem.eql(u8, output, input))
                             break :blk;
                     } else continue :other_pipeline;
@@ -171,8 +174,7 @@ pub fn resolve_pipeline(self: @This(), term: ?*Term, pipeline_name: []const u8, 
                     .runnable => needs = other_pipeline.name,
                 };
             } else {
-                if (term) |t|
-                    t.err("Pipeline {s} has input {s} not provided by any other pipeline", .{ pipeline_name, input });
+                term.err("Pipeline {s} has input {s} not provided by any other pipeline", .{ pipeline_name, input });
 
                 return error.InvalidInput;
             }

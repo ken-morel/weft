@@ -26,8 +26,26 @@ pub fn run_deployment(
     const remotes = try inst.get_remotes(gpa, io, term);
     defer gpa.free(remotes);
 
-    var env = try dotenv.load(gpa, io, project.dir);
-    defer env.deinit(gpa);
+    var envs: std.StringHashMapUnmanaged(dotenv.DotEnv) = .empty;
+    defer {
+        var iter = envs.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit(gpa);
+        }
+        envs.deinit(gpa);
+    }
+
+    for (remotes) |*remote| {
+        const name = remote.get_name();
+        const r_env = try dotenv.load_for_remote(gpa, io, project.dir, name);
+        try envs.put(gpa, name, r_env);
+    }
+    if (!envs.contains("local")) {
+        const local_env = try dotenv.load_for_remote(gpa, io, project.dir, "local");
+        try envs.put(gpa, "local", local_env);
+    }
+    var default_env = try dotenv.load(gpa, io, project.dir);
+    defer default_env.deinit(gpa);
 
     var state: DeploymentState = .init(gpa, &project);
     defer state.deinit();
@@ -84,11 +102,12 @@ pub fn run_deployment(
 
             _ = try state.add(io, remote, pipeline);
             try deployment.add_running(gpa, step);
+            const step_env = envs.getPtr(step.remote) orelse &default_env;
             try spawn(
                 io,
                 &group,
                 spawn_step,
-                .{ gpa, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, &env, inst.env },
+                .{ gpa, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, step_env, inst.env },
             );
         }
 
