@@ -6,6 +6,16 @@ Weft coordinates artifact packaging, incremental build caching, dependency resol
 
 ---
 
+## Motivation & Design Goals
+
+Deploying small services and applications often forces a choice between resource-heavy container runtimes (which consume hundreds of megabytes of memory before running any workload) or fragile custom shell scripts.
+
+Weft is designed specifically for small virtual private servers (such as 512 MB to 1 GB RAM instances) with a primary goal of maintaining a daemon memory footprint of under 15 MB. It relies directly on Linux-native `systemd` transient services for sandboxing, process isolation, cgroup limits, and lifecycle management rather than introducing an external container engine.
+
+When package dependencies are defined with `pkgs`, Weft streams pre-compiled closures directly from the Nix binary cache (`cache.nixos.org`) without requiring Nix to be installed. While network transfers and archive decompression transiently elevate memory usage during package extraction, the daemon returns to its minimal baseline once tasks are launched.
+
+---
+
 ## Highlights
 
 - **Declarative Pipeline Graphs (`weft/weft.zon`)**: Define pipelines with explicit input dependencies, output artifacts, persistent caches, and environment bindings.
