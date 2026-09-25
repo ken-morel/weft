@@ -17,7 +17,10 @@ pub fn run(
     project: Project,
     inst: ClientInstall,
     do: union(enum) {
-        start: []const Step,
+        start: struct {
+            targets: []const Step,
+            env: ?[]const u8 = null,
+        },
         retry: Deployment.Id,
     },
 ) !void {
@@ -26,10 +29,10 @@ pub fn run(
     var alloc = arena.allocator();
 
     var deployment = switch (do) {
-        .start => |targets| blk: {
-            const owned_targets = try alloc.dupe(Step, targets);
+        .start => |start| blk: {
+            const owned_targets = try alloc.dupe(Step, start.targets);
             const config = try project.get_config(alloc, term, io);
-            const deployment = try Deployment.create(io, config, owned_targets);
+            const deployment = try Deployment.create(io, config, owned_targets, start.env);
             try deployment.save(alloc, io, project);
             break :blk deployment;
         },
@@ -59,5 +62,6 @@ pub fn run(
         project,
         inst,
         &deployment,
+        deployment.env,
     );
 }

@@ -59,16 +59,18 @@ const Argz = union(enum) {
 
     check: struct {
         pub const doc = "Validate project configuration, pipeline DAG, scripts, and environment";
-        pub const doc_remote = "Target remote to validate environment for (defaults to 'local')";
+        pub const doc_env = "Target environment to validate (e.g. 'prod' loads .env overlaid by .env.prod; checks all if omitted)";
 
-        remote: []const u8 = "local",
+        env: ?[]const u8 = null,
     },
 
     do: struct {
         pub const doc = "Start a deployment";
         pub const doc_targets = "The different deployment targets";
+        pub const doc_env = "Environment to load (.env overlaid by .env.<name>)";
 
         targets: []Step = &.{},
+        env: ?[]const u8 = null,
     },
     retry: struct {
         pub const doc = "Retry an existing deployment";
@@ -235,7 +237,7 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            cmd_check.run(alloc, init.io, &term, project, installation, cmd.remote) catch |err| switch (err) {
+            cmd_check.run(alloc, init.io, &term, project, installation, cmd.env) catch |err| switch (err) {
                 error.ValidationFailed, error.InvalidConfig => return,
                 else => return err,
             };
@@ -250,7 +252,12 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            return cmd_do.run(alloc, init.io, &term, project, installation, .{ .start = cmd.targets });
+            return cmd_do.run(alloc, init.io, &term, project, installation, .{
+                .start = .{
+                    .targets = cmd.targets,
+                    .env = cmd.env,
+                },
+            });
         },
         .retry => |cmd| {
             const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);

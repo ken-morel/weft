@@ -22,30 +22,19 @@ pub fn run_deployment(
     project: Project,
     inst: ClientInstall,
     deployment: *Deployment,
+    env_name: ?[]const u8,
 ) !void {
     const remotes = try inst.get_remotes(gpa, io, term);
     defer gpa.free(remotes);
 
-    var envs: std.StringHashMapUnmanaged(dotenv.DotEnv) = .empty;
-    defer {
-        var iter = envs.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.deinit(gpa);
+    var env = dotenv.load_env(gpa, io, project.dir, env_name) catch |err| {
+        if (err == error.EnvFileNotFound) {
+            term.err("Environment file not found for env '{s}'", .{env_name.?});
+            return err;
         }
-        envs.deinit(gpa);
-    }
-
-    for (remotes) |*remote| {
-        const name = remote.get_name();
-        const r_env = try dotenv.load_for_remote(gpa, io, project.dir, name);
-        try envs.put(gpa, name, r_env);
-    }
-    if (!envs.contains("local")) {
-        const local_env = try dotenv.load_for_remote(gpa, io, project.dir, "local");
-        try envs.put(gpa, "local", local_env);
-    }
-    var default_env = try dotenv.load(gpa, io, project.dir);
-    defer default_env.deinit(gpa);
+        return err;
+    };
+    defer env.deinit(gpa);
 
     var state: DeploymentState = .init(gpa, &project);
     defer state.deinit();
@@ -102,12 +91,11 @@ pub fn run_deployment(
 
             _ = try state.add(io, remote, pipeline);
             try deployment.add_running(gpa, step);
-            const step_env = envs.getPtr(step.remote) orelse &default_env;
             try spawn(
                 io,
                 &group,
                 spawn_step,
-                .{ gpa, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, step_env, inst.env },
+                .{ gpa, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, &env, inst.env },
             );
         }
 
@@ -181,7 +169,8 @@ pub fn run_deployment(
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
                                 const pipeline = deployment.config.get_pipeline(pipeline_name);
                                 if (pipeline) |p| {
-                                    for (p.outputs()) |output| {
+                                    var out_buf: [1][]const u8 = undefined;
+                                    for (p.outputs(&out_buf)) |output| {
                                         try deployment.add_artifact(gpa, .{
                                             .remote = remote_name,
                                             .pipeline = pipeline_name,
@@ -251,7 +240,8 @@ pub fn spawn_step(
             try depl.lock(io);
             defer depl.unlock(io);
 
-            for (pipeline.outputs()) |output| {
+            var out_buf: [1][]const u8 = undefined;
+            for (pipeline.outputs(&out_buf)) |output| {
                 try dep.add_artifact(gpa, .{
                     .remote = step.remote,
                     .pipeline = step.pipeline,

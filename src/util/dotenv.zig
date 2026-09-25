@@ -50,7 +50,7 @@ pub fn parse(alloc: std.mem.Allocator, content: []const u8) !Map {
     return map;
 }
 
-pub fn load_for_remote(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, remote: ?[]const u8) !DotEnv {
+pub fn load_env(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, env_name: ?[]const u8) !DotEnv {
     var result: DotEnv = .{};
     errdefer result.deinit(alloc);
 
@@ -61,16 +61,33 @@ pub fn load_for_remote(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, re
         return err;
     }
 
-    if (remote) |r| {
-        if (r.len > 0) {
-            const remote_env_name = try std.fmt.allocPrint(alloc, ".env.{s}", .{r});
-            defer alloc.free(remote_env_name);
+    if (env_name) |name| {
+        if (name.len > 0) {
+            var loaded_override = false;
 
-            if (dir.readFileAllocOptions(io, remote_env_name, alloc, .limited(1 << 20), .of(u8), 0)) |remote_content| {
-                try result.contents.append(alloc, remote_content);
-                try parse_into(alloc, &result.map, remote_content);
+            if (dir.readFileAllocOptions(io, name, alloc, .limited(1 << 20), .of(u8), 0)) |content| {
+                try result.contents.append(alloc, content);
+                try parse_into(alloc, &result.map, content);
+                loaded_override = true;
             } else |err| if (err != error.FileNotFound) {
                 return err;
+            }
+
+            if (!loaded_override) {
+                const prefixed = try std.fmt.allocPrint(alloc, ".env.{s}", .{name});
+                defer alloc.free(prefixed);
+
+                if (dir.readFileAllocOptions(io, prefixed, alloc, .limited(1 << 20), .of(u8), 0)) |content| {
+                    try result.contents.append(alloc, content);
+                    try parse_into(alloc, &result.map, content);
+                    loaded_override = true;
+                } else |err| if (err != error.FileNotFound) {
+                    return err;
+                }
+            }
+
+            if (!loaded_override) {
+                return error.EnvFileNotFound;
             }
         }
     }
@@ -79,5 +96,5 @@ pub fn load_for_remote(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, re
 }
 
 pub fn load(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !DotEnv {
-    return load_for_remote(alloc, io, dir, null);
+    return load_env(alloc, io, dir, null);
 }

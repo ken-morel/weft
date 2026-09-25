@@ -434,12 +434,14 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
 
     const output_dir_path = try std.fs.path.join(ara, &.{ run_dir_path, "out" });
 
-    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(ara, req.pipeline.outputs().len + 2);
+    var out_buf: [1][]const u8 = undefined;
+    const outs = req.pipeline.outputs(&out_buf);
+    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(ara, outs.len + 2);
     try state_dirs.append(ara, paths.state_dir(cwd_dir_path));
     if (is_default_runner)
         try state_dirs.append(ara, paths.state_dir(home_dir_path));
 
-    for (req.pipeline.outputs()) |output| {
+    for (outs) |output| {
         const path = try std.fs.path.join(ara, &.{
             output_dir_path,
             output,

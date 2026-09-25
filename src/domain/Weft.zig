@@ -62,8 +62,20 @@ pub const Pipeline = struct {
     pub fn inputs(self: @This()) []const []const u8 {
         return self.in;
     }
-    pub fn outputs(self: @This()) []const []const u8 {
-        return self.out orelse &.{self.name};
+    pub fn produces(self: @This(), artifact: []const u8) bool {
+        if (self.out) |outs| {
+            for (outs) |out| {
+                if (std.mem.eql(u8, out, artifact))
+                    return true;
+            }
+            return false;
+        }
+        return std.mem.eql(u8, self.name, artifact);
+    }
+    pub fn outputs(self: *const @This(), buf: *[1][]const u8) []const []const u8 {
+        if (self.out) |o| return o;
+        buf[0] = self.name;
+        return buf;
     }
 };
 

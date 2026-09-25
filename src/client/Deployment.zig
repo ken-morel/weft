@@ -8,6 +8,7 @@ pub const Step = @import("Step.zig");
 id: Id,
 
 config: Weft,
+env: ?[]const u8 = null,
 artifacts: []Artifact = &.{},
 sources: [][]const u8 = &.{},
 running: []Step = &.{},
@@ -129,10 +130,12 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
     if (depth >= resolve_pipeline_max_depth)
         return error.CyclicPipeline;
     if (self.config.get_pipeline(pipeline_name)) |pipeline| {
-        for (pipeline.outputs()) |output|
+        var out_buf: [1][]const u8 = undefined;
+        const outs = pipeline.outputs(&out_buf);
+        for (outs) |output|
             if (self.get_artifact(output)) |_|
                 return .done;
-        if (pipeline.outputs().len == 0)
+        if (outs.len == 0)
             for (self.artifacts) |art|
                 if (std.mem.eql(u8, art.pipeline, pipeline_name))
                     return .done;
@@ -143,7 +146,7 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
 
         var waiting: ?[]const u8 = null;
         var needs: ?[]const u8 = null;
-        var dependency_failed = false;
+        var failed = false;
 
         input: for (pipeline.inputs()) |input| {
             if (Weft.is_source_artifact(input))
@@ -151,13 +154,8 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
             other_pipeline: for (self.config.pipelines) |other_pipeline| {
                 if (std.mem.eql(u8, other_pipeline.name, pipeline.name))
                     continue;
-                blk: {
-                    for (other_pipeline.outputs()) |output| {
-                        term.println("{s} -> {s}", .{ other_pipeline.name, output });
-                        if (std.mem.eql(u8, output, input))
-                            break :blk;
-                    } else continue :other_pipeline;
-                }
+                if (!other_pipeline.produces(input))
+                    continue :other_pipeline;
                 break :other_pipeline switch (try self.resolve_pipeline(
                     term,
                     other_pipeline.name,
@@ -165,7 +163,7 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
                 )) {
                     .done => continue :input,
                     .failed => {
-                        dependency_failed = true;
+                        failed = true;
                         continue :input;
                     },
                     .running => waiting = other_pipeline.name,
@@ -179,7 +177,7 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
                 return error.InvalidInput;
             }
         }
-        if (dependency_failed)
+        if (failed)
             return .failed
         else if (needs) |task|
             return .{ .needs = task }
@@ -207,7 +205,7 @@ pub fn completed(self: @This()) bool {
     return self.next_target() == null;
 }
 
-pub fn create(io: std.Io, config: Weft, targets: []Step) !@This() {
+pub fn create(io: std.Io, config: Weft, targets: []Step, env: ?[]const u8) !@This() {
     const id = try Id.now(io);
     return .{
         .id = id,
@@ -215,6 +213,7 @@ pub fn create(io: std.Io, config: Weft, targets: []Step) !@This() {
         .artifacts = &.{},
         .running = &.{},
         .targets = targets,
+        .env = env,
     };
 }
 

@@ -23,15 +23,69 @@ fn check_cycle(
         if (Weft.is_source_artifact(input))
             continue;
         for (config.pipelines) |*other| {
-            for (other.outputs()) |output| {
-                if (std.mem.eql(u8, output, input)) {
-                    if (check_cycle(alloc, config, other, stack))
-                        return true;
-                }
+            if (other.produces(input)) {
+                if (check_cycle(alloc, config, other, stack))
+                    return true;
             }
         }
     }
     return false;
+}
+
+fn validate_env_map(
+    term: *Term,
+    config: *const Weft,
+    inst: ClientInstall,
+    env: *const dotenv.DotEnv,
+    target_desc: []const u8,
+) usize {
+    var missing: usize = 0;
+    for (config.required_env) |key| {
+        var found = env.get(key) != null or inst.env.get(key) != null;
+        if (!found) {
+            for (config.env) |entry| {
+                if (std.mem.eql(u8, entry.@"0", key)) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            term.err("workspace: missing required env var '{s}' ({s})", .{ key, target_desc });
+            missing += 1;
+        }
+    }
+
+    for (config.pipelines) |*pipeline| {
+        for (pipeline.required_env) |key| {
+            var found = env.get(key) != null or inst.env.get(key) != null;
+            if (!found) {
+                for (pipeline.env) |entry| {
+                    if (std.mem.eql(u8, entry.@"0", key)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                for (config.env) |entry| {
+                    if (std.mem.eql(u8, entry.@"0", key)) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) {
+                term.err("pipeline '{s}': missing required env var '{s}' ({s})", .{
+                    pipeline.name,
+                    key,
+                    target_desc,
+                });
+                missing += 1;
+            }
+        }
+    }
+    return missing;
 }
 
 pub fn run(
@@ -40,7 +94,7 @@ pub fn run(
     term: *Term,
     project: Project,
     inst: ClientInstall,
-    remote_name: []const u8,
+    env_name: ?[]const u8,
 ) !void {
     defer _ = term.flush() catch {};
 
@@ -113,13 +167,10 @@ pub fn run(
             } else {
                 var found_provider = false;
                 for (config.pipelines) |*other| {
-                    for (other.outputs()) |output| {
-                        if (std.mem.eql(u8, output, input)) {
-                            found_provider = true;
-                            break;
-                        }
+                    if (other.produces(input)) {
+                        found_provider = true;
+                        break;
                     }
-                    if (found_provider) break;
                 }
                 if (!found_provider) {
                     term.err("pipeline '{s}': input '{s}' is not produced by any pipeline", .{
@@ -218,51 +269,70 @@ pub fn run(
         term.success("Scripts: {d} pipeline scripts verified", .{scripts_checked});
     }
 
-    var env = try dotenv.load_for_remote(alloc, io, project.dir, remote_name);
-    defer env.deinit(alloc);
+    if (env_name) |target| {
+        var env = dotenv.load_env(alloc, io, project.dir, target) catch |err| {
+            if (err == error.EnvFileNotFound) {
+                term.err("environment file for '{s}' not found (.env.{s} or {s})", .{ target, target, target });
+            } else {
+                term.err("failed to load environment '{s}': {s}", .{ target, @errorName(err) });
+            }
+            return error.ValidationFailed;
+        };
+        defer env.deinit(alloc);
 
-    for (config.required_env) |key| {
-        var found = env.get(key) != null or inst.env.get(key) != null;
-        if (!found) {
-            for (config.env) |entry| {
-                if (std.mem.eql(u8, entry.@"0", key)) {
-                    found = true;
-                    break;
+        const desc = try std.fmt.allocPrint(alloc, "env: '{s}'", .{target});
+        const missing = validate_env_map(term, &config, inst, &env, desc);
+        errors += missing;
+        if (missing == 0) {
+            term.success("Environment: '{s}' verified", .{target});
+        }
+    } else {
+        var env_list: std.ArrayList([]const u8) = .empty;
+        defer env_list.deinit(alloc);
+
+        var iter = project.dir.iterate();
+        while (try iter.next(io)) |entry| {
+            if (entry.kind == .directory)
+                continue;
+            if (std.mem.startsWith(u8, entry.name, ".env.")) {
+                const suffix = entry.name[".env.".len..];
+                if (suffix.len > 0 and
+                    !std.mem.eql(u8, suffix, "example") and
+                    !std.mem.eql(u8, suffix, "sample") and
+                    !std.mem.endsWith(u8, suffix, ".bak") and
+                    !std.mem.endsWith(u8, suffix, ".backup"))
+                {
+                    try env_list.append(alloc, try alloc.dupe(u8, suffix));
                 }
             }
         }
-        if (!found) {
-            term.err("workspace: missing required env var '{s}' (target remote: '{s}')", .{ key, remote_name });
-            errors += 1;
-        }
-    }
 
-    for (config.pipelines) |*pipeline| {
-        for (pipeline.required_env) |key| {
-            var found = env.get(key) != null or inst.env.get(key) != null;
-            if (!found) {
-                for (pipeline.env) |entry| {
-                    if (std.mem.eql(u8, entry.@"0", key)) {
-                        found = true;
-                        break;
-                    }
-                }
+        const has_base_env = if (project.dir.access(io, ".env", .{})) |_| true else |_| false;
+
+        if (has_base_env or env_list.items.len == 0) {
+            var base_env = try dotenv.load(alloc, io, project.dir);
+            defer base_env.deinit(alloc);
+
+            const base_missing = validate_env_map(term, &config, inst, &base_env, "env: default");
+            errors += base_missing;
+            if (base_missing == 0) {
+                term.success("Environment: default (.env) verified", .{});
             }
-            if (!found) {
-                for (config.env) |entry| {
-                    if (std.mem.eql(u8, entry.@"0", key)) {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (!found) {
-                term.err("pipeline '{s}': missing required env var '{s}' (target remote: '{s}')", .{
-                    pipeline.name,
-                    key,
-                    remote_name,
-                });
+        }
+
+        for (env_list.items) |name| {
+            var sub_env = dotenv.load_env(alloc, io, project.dir, name) catch |err| {
+                term.err("failed to load environment '{s}': {s}", .{ name, @errorName(err) });
                 errors += 1;
+                continue;
+            };
+            defer sub_env.deinit(alloc);
+
+            const desc = try std.fmt.allocPrint(alloc, "env: '{s}'", .{name});
+            const sub_missing = validate_env_map(term, &config, inst, &sub_env, desc);
+            errors += sub_missing;
+            if (sub_missing == 0) {
+                term.success("Environment: '{s}' (.env.{s}) verified", .{ name, name });
             }
         }
     }
@@ -272,9 +342,17 @@ pub fn run(
         return error.ValidationFailed;
     }
 
-    if (warnings > 0) {
-        term.warn("Validation passed with {d} warning(s) for remote '{s}'", .{ warnings, remote_name });
+    if (env_name) |target| {
+        if (warnings > 0) {
+            term.warn("Validation passed with {d} warning(s) for env '{s}'", .{ warnings, target });
+        } else {
+            term.success("Validation passed: project is ready for deployment (env: '{s}')", .{target});
+        }
     } else {
-        term.success("Validation passed: project is ready for deployment to '{s}'", .{remote_name});
+        if (warnings > 0) {
+            term.warn("Validation passed with {d} warning(s)", .{warnings});
+        } else {
+            term.success("Validation passed: project is ready for deployment", .{});
+        }
     }
 }
