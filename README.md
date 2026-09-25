@@ -217,6 +217,18 @@ When a pipeline task executes inside its transient systemd unit:
 
 ## Command Guide
 
+### Pre-Flight Validation (`weft check`)
+
+Validate configuration syntax, source directories, pipeline DAG dependencies, script existence, executable permissions, and environment variables without triggering a deployment:
+
+```bash
+# Validate against local environment:
+weft check
+
+# Validate against a specific remote environment (.env.prod):
+weft check --remote prod
+```
+
 ### Executing Deployments (`weft do`)
 
 Run one or more pipeline targets. Upstream dependencies are automatically resolved, built, and streamed across hosts.
@@ -421,12 +433,21 @@ Every Weft project defines its graph in `weft/weft.zon`:
 | `env` | `[][2][]const u8` | `.{}` | Environment variables injected into the task process. |
 | `run` | `.default` \| `.{ .script = "name" }` \| `.nothing` | `.default` | Script resolution mode in `weft/`. |
 
+### Scoped Environment Variables (`.env.<remote>`)
+
+Weft supports environment scoping per target remote. Variables in `.env` serve as the base defaults, and `.env.<remote>` overrides or extends them:
+
+* Local deployments (`weft do .run`): loads `.env`, overlaid by `.env.local` if present.
+* Remote deployments (`weft do prod.run`): loads `.env`, overlaid by `.env.prod` if present.
+* Pre-flight checks (`weft check --remote prod`): validates that all required environment variables for `prod` are satisfied.
+
 ---
 
 ## Command Reference
 
 | Command | Syntax | Description |
 |---|---|---|
+| `check` | `weft check [--remote name]` | Pre-flight validation of configuration, DAG, scripts, and environment |
 | `do` | `weft do <[remote.]pipeline...>` | Execute build and deployment pipelines across hosts |
 | `retry` | `weft retry [deployment]` | Resume or retry an existing deployment run |
 | `list` | `weft list` | Display recent deployments and their execution statuses |
