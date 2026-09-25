@@ -247,23 +247,24 @@ Metrics tracked in real-time include:
 
 ### Process Control (`weft kill`)
 
-Terminate running tasks by specifying `[deployment.]pipeline`:
+Terminate running tasks by deployment and optional pipeline:
 
 ```bash
-# Kill a running pipeline task in the latest deployment:
-weft kill .run
+# Kill all running pipelines in the latest deployment:
+weft kill
 
-# Kill a remote pipeline task in the latest deployment:
-weft kill .prod.run
+# Kill a specific pipeline in the latest deployment:
+weft kill . run
 
-# Kill a pipeline task in a specific deployment:
-weft kill 2947MsUl.run
+# Kill all pipelines in a specific deployment:
+weft kill 2947MsUl
 
-# Kill a remote pipeline task in a specific deployment:
-weft kill 2947MsUl.prod.run
+# Kill a specific pipeline in a specific deployment:
+weft kill 2947MsUl run
 ```
 
-When the deployment identifier is omitted, the leading dot (`.`) targets the latest deployment. The remote host is automatically extracted from deployment targets.
+- When the deployment is omitted (or given as `.`), it targets the latest deployment.
+- The remote is extracted automatically from the deployment targets without having to crawl remotes.
 
 ### Garbage Collection (`weft gc`)
 
@@ -384,7 +385,7 @@ Every Weft project defines its graph in `weft.zon` at the project root:
 | `list` | `weft list` | Display recent deployments and their execution statuses |
 | `follow` | `weft follow <[deployment.]pipeline>` | Stream live logs for a running task |
 | `monitor` | `weft monitor [remote]` | Open real-time host metrics dashboard (CPU, memory, I/O, network) |
-| `kill` | `weft kill <[deployment.]pipeline>` | Terminate a running task or deployment |
+| `kill` | `weft kill [deployment] [pipeline]` | Terminate a deployment or a specific pipeline in a deployment |
 | `gc` | `weft gc [remote] [--keep N] [--older-than dur] [--dry-run]` | Garbage collect stale deployment artifacts and sandboxes |
 | `remote install` | `weft remote install <name> <ssh> [host]` | Provision and register a remote server via SSH |
 | `remote list` | `weft remote list` | List registered remote servers |

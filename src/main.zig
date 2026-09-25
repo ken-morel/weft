@@ -112,10 +112,12 @@ const Argz = union(enum) {
         },
     },
     kill: struct {
-        pub const doc = "Kill a running task or deployment";
-        pub const doc_target = "The deployment and pipeline to kill: [deployment.]pipeline";
+        pub const doc = "Kill a deployment or a specific pipeline in a deployment";
+        pub const doc_deployment = "The deployment id (defaults to latest)";
+        pub const doc_pipeline = "The pipeline name to kill (omit to kill all pipelines in deployment)";
 
-        target: Step,
+        deployment: ?[]const u8 = null,
+        pipeline: ?[]const u8 = null,
     },
     gc: struct {
         pub const doc = "Garbage collect old artifacts on remotes or locally";
@@ -303,7 +305,7 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            return cmd_kill.run(alloc, init.io, &term, project, installation, cmd.target);
+            return cmd_kill.run(alloc, init.io, &term, project, installation, cmd.deployment, cmd.pipeline);
         },
         .gc => |cmd| {
             const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
