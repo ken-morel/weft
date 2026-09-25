@@ -22,6 +22,7 @@ pub fn query_store_basename(gpa: std.mem.Allocator, client: *std.http.Client, na
     );
     switch (res.status) {
         .ok => {},
+        .not_found => return error.PackageNotFound,
         else => return error.InvalidHttpResponse,
     }
     const written = buf[0..writer.end];

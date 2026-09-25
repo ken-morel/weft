@@ -334,8 +334,16 @@ pub fn main(init: std.process.Init) !void {
                 defer client.deinit();
 
                 const basename = nix.query_store_basename(alloc, &client, cmd.pkg, "latest") catch |err| {
-                    term.err("failed to query package '{s}': {s}", .{ cmd.pkg, @errorName(err) });
-                    return err;
+                    switch (err) {
+                        error.PackageNotFound => {
+                            term.err("package '{s}' not found on Hydra", .{cmd.pkg});
+                        },
+                        else => {
+                            term.err("failed to query package '{s}': {s}", .{ cmd.pkg, @errorName(err) });
+                        },
+                    }
+                    _ = term.flush() catch {};
+                    std.process.exit(1);
                 };
                 defer alloc.free(basename);
 
