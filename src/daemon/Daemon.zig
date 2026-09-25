@@ -11,6 +11,7 @@ const handler = @import("handler.zig");
 const Server = @import("Server.zig");
 const SharedPressor = @import("SharedPressor.zig");
 const StatsServer = @import("StatsServer.zig");
+const Store = @import("Store.zig");
 const Task = @import("Task.zig");
 
 io: std.Io,
@@ -21,12 +22,14 @@ config: DaemonInstall.Config,
 term: *Term,
 pressor: SharedPressor,
 stats_server: StatsServer,
+store: Store,
 
 pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
     self.pressor.deinit(self.gpa);
     self.stats_server.deinit();
     std.zon.parse.free(self.gpa, self.config);
+    self.store.deinit();
 }
 pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
     const config = try install.get_config(io, alloc, term);
@@ -46,6 +49,7 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: 
         .term = term,
         .pressor = try .init(alloc, io),
         .stats_server = try .init(alloc, io, term),
+        .store = Store.init(alloc),
     };
 }
 

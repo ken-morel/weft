@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub fn query_package_hash(gpa: std.mem.Allocator, client: *std.http.Client, name: []const u8, version: []const u8) ![]const u8 {
+pub fn query_store_basename(gpa: std.mem.Allocator, client: *std.http.Client, name: []const u8, version: []const u8) ![]const u8 {
     const hydra_url = try std.fmt.allocPrint(
         gpa,
         "https://hydra.nixos.org/job/nixpkgs/unstable/{s}.{s}-linux/{s}",
@@ -9,7 +9,7 @@ pub fn query_package_hash(gpa: std.mem.Allocator, client: *std.http.Client, name
     );
     defer gpa.free(hydra_url);
 
-    var buf: [4 << 10]u8 = undefined;
+    var buf: [16 << 10]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
     const res = try client.fetch(
         .{
@@ -98,6 +98,9 @@ pub const NarInfo = struct {
         if (!std.mem.startsWith(u8, line, prefix))
             return null;
         return std.mem.trim(u8, line[prefix.len..], " \r");
+    }
+    pub fn deinit(self: @This(), gpa: std.mem.Allocator) void {
+        gpa.free(self._buffer);
     }
 };
 
@@ -225,13 +228,13 @@ pub fn fetch(
     gpa: std.mem.Allocator,
     client: *std.http.Client,
     io: std.Io,
-    nar_url_suffix: []const u8,
+    nar_url: []const u8,
     dest_dir: std.Io.Dir,
 ) !void {
-    const full_url = try std.fmt.allocPrint(gpa, "https://cache.nixos.org/{s}", .{nar_url_suffix});
-    defer gpa.free(full_url);
+    const url = try std.fmt.allocPrint(gpa, "https://cache.nixos.org/{s}", .{nar_url});
+    defer gpa.free(url);
 
-    const uri = try std.Uri.parse(full_url);
+    const uri = try std.Uri.parse(url);
     var req = try client.request(.GET, uri, .{
         .redirect_behavior = @enumFromInt(3),
     });

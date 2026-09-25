@@ -318,6 +318,8 @@ pub fn spawn_step(
     const buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(buffer);
 
+    state.initializing(io, step.remote, step.pipeline);
+
     spawn_task: {
         const client = try Client.connect(gpa, io, try remote.get_address(), &try remote.get_token());
         defer client.destroy(gpa, io);

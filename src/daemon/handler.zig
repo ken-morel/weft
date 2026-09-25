@@ -291,7 +291,7 @@ fn handle_artifact_push(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
         return .{ .footer = .{} };
 
     const temp_dir_path = receive_artifacts: {
-        var temp_dir = try daemon.install.open_temp(io, "artifact");
+        var temp_dir = try DaemonInstall.open_temp(io, "artifact");
         defer temp_dir.close(io);
 
         var packer: Packer = .unpacker(temp_dir);
@@ -374,6 +374,10 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         break :input_dirs input_dirs;
     };
 
+    for (req.pipeline.pkgs) |basename| {
+        try daemon.store.fetch(io, basename);
+    }
+
     const run_dir_path = try task.run_dir_path(ara);
 
     try std.Io.Dir.cwd().createDirPath(daemon.io, run_dir_path);
@@ -431,6 +435,12 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
     }
     const unit_name = try task.unit_name(ara);
     var bind_paths: std.ArrayList([]const u8) = .empty;
+    var bind_paths_read: std.ArrayList([]const u8) = .empty;
+
+    if (req.pipeline.pkgs.len > 0) {
+        try bind_paths_read.append(ara, "/var/lib/weft/store:/nix/store");
+        try bind_paths_read.append(ara, "/var/lib/weft/store");
+    }
 
     for (req.pipeline.keep) |keep| {
         const cache_path = try task.keep_path(ara, keep.@"0");
@@ -462,6 +472,16 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         try env.append(ara, try std.mem.join(ara, "=", &.{ "HOME", home_dir_path }));
         try env.append(ara, try std.mem.join(ara, "=", &.{ "USER", runner_user }));
         try env.append(ara, try std.mem.join(ara, "=", &.{ "LOGNAME", runner_user }));
+
+        if (req.pipeline.pkgs.len > 0) {
+            var pkg_bin_paths: std.ArrayList([]const u8) = .empty;
+            for (req.pipeline.pkgs) |basename| {
+                const bin_dir = try std.fmt.allocPrint(ara, "/nix/store/{s}/bin", .{basename});
+                try pkg_bin_paths.append(ara, bin_dir);
+            }
+            const joined_bins = try std.mem.join(ara, ":", pkg_bin_paths.items);
+            try env.append(ara, try std.fmt.allocPrint(ara, "PATH={s}:/usr/local/bin:/usr/bin:/bin", .{joined_bins}));
+        }
 
         for (req.pipeline.env) |pair|
             try env.append(ara, try std.mem.join(ara, "=", &.{ pair.@"0", pair.@"1" }));
@@ -506,6 +526,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
                 .root_image = null,
                 .tmpfs = &.{},
                 .bind_paths = bind_paths.items,
+                .bind_paths_read = bind_paths_read.items,
             },
             .permissions = .{
                 .capability_bounding_set = &.{},
@@ -678,4 +699,3 @@ fn handle_gc(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection
         .bytes_freed = res.bytes_freed,
     };
 }
-

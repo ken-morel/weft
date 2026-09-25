@@ -34,9 +34,10 @@ pub const Pipeline = struct {
     out: ?[]const Output = null,
     run: Run = .default,
 
+    //TODO
     max_ram: ?u64 = null,
     mem_lock: bool = false,
-    disable_network: bool = true,
+    disable_network: bool = false,
     oom_score_adjust: ?i32 = null,
 
     memory_max: ?u64 = null,
@@ -54,8 +55,9 @@ pub const Pipeline = struct {
     databases: []const struct {} = &.{},
     volumes: []const struct {} = &.{},
     ports: []const struct {} = &.{},
-    runtimes: []const struct {} = &.{},
     env: []struct { []const u8, []const u8 } = &.{},
+
+    pkgs: []const []const u8 = &.{},
 
     pub fn inputs(self: @This()) []const []const u8 {
         return self.in;

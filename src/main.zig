@@ -14,6 +14,7 @@ const Step = @import("client/Step.zig");
 const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
+const nix = @import("daemon/nix.zig");
 const Task = @import("daemon/Task.zig");
 const proto = @import("domain/proto.zig");
 const Term = @import("domain/Term.zig");
@@ -130,6 +131,15 @@ const Argz = union(enum) {
         keep: ?u32 = null,
         older_than: ?[]const u8 = null,
         dry_run: bool = false,
+    },
+    nix: union(enum) {
+        pub const doc = "Perform nix operations";
+        show: struct {
+            pub const doc = "Query hydra for the latest store path of a package";
+            pub const doc_pkg = "The nix package attribute (e.g. bun, lowdown, python312)";
+
+            pkg: []const u8,
+        },
     },
     help: argz.Help,
     nop: struct {
@@ -314,6 +324,23 @@ pub fn main(init: std.process.Init) !void {
             const project = if (project_dir) |d| Project.open(d) catch null else null;
 
             return cmd_gc.run(alloc, init.io, &term, project, installation, cmd.remote, cmd.keep, cmd.older_than, cmd.dry_run);
+        },
+        .nix => |n| switch (n) {
+            .show => |cmd| {
+                var client: std.http.Client = .{
+                    .io = init.io,
+                    .allocator = alloc,
+                };
+                defer client.deinit();
+
+                const basename = nix.query_store_basename(alloc, &client, cmd.pkg, "latest") catch |err| {
+                    term.err("failed to query package '{s}': {s}", .{ cmd.pkg, @errorName(err) });
+                    return err;
+                };
+                defer alloc.free(basename);
+
+                term.println("{s}", .{basename});
+            },
         },
         .help => |cmd| {
             argz.help("weft", Argz, cmd, &term);

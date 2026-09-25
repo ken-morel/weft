@@ -81,7 +81,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
         if (self.step_history.get(key)) |prev_status| {
             if (prev_status != step.status) {
-                if (step.status == .running and prev_status == .preparing)
+                if (step.status == .running and (prev_status == .preparing or prev_status == .initializing))
                     self.term.write_event(color, "{", " {s}", .{key})
                 else if (step.status == .completed)
                     self.term.write_event(.green, "}", " {s}", .{key})
@@ -136,7 +136,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
     var has_active_items = false;
     for (self.state.steps.items) |step| {
-        if (step.status == .preparing or step.status == .running) {
+        if (step.status == .preparing or step.status == .initializing or step.status == .running) {
             has_active_items = true;
             break;
         }
@@ -171,6 +171,10 @@ pub fn update(self: *@This(), io: std.Io) !void {
             if (step.status == .preparing) {
                 self.term.clear_line();
                 self.term.styled_ln(.dim, "? {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                lines_count += 1;
+            } else if (step.status == .initializing) {
+                self.term.clear_line();
+                self.term.styled_ln(.dim, "# {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
                 lines_count += 1;
             } else if (step.status == .running) {
                 var stats_buf: [128]u8 = undefined;

@@ -7,6 +7,7 @@ const Remote = @import("Remote.zig");
 pub const Step = struct {
     pub const Status = enum {
         preparing,
+        initializing,
         running,
         completed,
         err,
@@ -96,6 +97,14 @@ pub fn get(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: [
         return s.*;
 
     return null;
+}
+
+pub fn initializing(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
+
+    if (self.get_unlocked(remote_name, pipeline_name)) |s|
+        s.status = .initializing;
 }
 
 pub fn running(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
