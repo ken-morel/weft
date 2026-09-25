@@ -113,8 +113,8 @@ const Argz = union(enum) {
     },
     kill: struct {
         pub const doc = "Kill a running task or deployment";
-        pub const doc_pipeline = "The pipeline name to kill, or [remote].pipeline (omit to kill all tasks in deployment)";
-        pub const doc_deployment = "The deployment id to kill (defaults to latest)";
+        pub const doc_pipeline = "The pipeline name to kill, or [remote].pipeline (use '.' for all pipelines)";
+        pub const doc_deployment = "The deployment id to kill (defaults to latest, use '.' for all deployments)";
         pub const doc_remote = "The remote to kill the task on (defaults to local)";
 
         pipeline: ?[]const u8 = null,

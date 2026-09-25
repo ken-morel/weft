@@ -45,7 +45,7 @@ pub fn run(
                     }
                 }
             }
-            if (!std.mem.eql(u8, raw, "*") and !std.mem.eql(u8, raw, "all")) {
+            if (!std.mem.eql(u8, raw, ".")) {
                 pipe_filter = raw;
             }
         }
@@ -59,7 +59,7 @@ pub fn run(
 
         if (dep_id == null) {
             if (deployment_spec) |dep_str| {
-                if (!std.mem.eql(u8, dep_str, "*") and !std.mem.eql(u8, dep_str, "all")) {
+                if (!std.mem.eql(u8, dep_str, ".")) {
                     dep_id = prj.find_deployment_id(io, dep_str) catch |err| {
                         term.err("deployment '{s}' not found: {any}", .{ dep_str, err });
                         return error.InvalidDeploymentId;
@@ -71,7 +71,7 @@ pub fn run(
         }
     } else {
         if (deployment_spec) |dep_str| {
-            if (!std.mem.eql(u8, dep_str, "*") and !std.mem.eql(u8, dep_str, "all")) {
+            if (!std.mem.eql(u8, dep_str, ".")) {
                 dep_id = Deployment.Id.parse(dep_str) catch |err| {
                     term.err("invalid deployment id '{s}': {any}", .{ dep_str, err });
                     return err;

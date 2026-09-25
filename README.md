@@ -271,18 +271,16 @@ weft kill run
 # Kill a specific pipeline in a specific deployment:
 weft kill run 2947MsUl
 
-# Kill all pipelines across all deployments on a remote:
-weft kill all all --remote bellacall
-# or using wildcards:
-weft kill * * --remote bellacall
+# Kill all pipelines across all deployments on a remote (using '.' as wildcard):
+weft kill . . --remote bellacall
 
 # Target remote via prefix:
 weft kill bellacall.run
 ```
 
 - **Remote targeting**: Queries `local` by default. Specify `--remote <name>` or `[remote].<pipeline>` to target a remote.
-- **Deployment selectors**: Defaults to the latest deployment of the project. Pass `all` or `*` to target all deployments.
-- **Pipeline selectors**: Pass `all` or `*` (or omit) to target all running tasks in the selected deployment.
+- **Deployment selectors**: Defaults to the latest deployment of the project. Pass `.` to target all deployments.
+- **Pipeline selectors**: Pass `.` (or omit) to target all running tasks in the selected deployment.
 
 ---
 
