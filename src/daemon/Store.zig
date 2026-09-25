@@ -2,6 +2,7 @@ const std = @import("std");
 
 const Term = @import("../domain/Term.zig");
 const paths = @import("../domain/paths.zig");
+const sizes = @import("../util/sizes.zig");
 const nix = @import("nix.zig");
 
 gpa: std.mem.Allocator,
@@ -102,7 +103,9 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
         const temp_store_path = try std.fmt.allocPrint(gpa, "{s}.tmp-{s}", .{ paths.weft_store_dir, target_store_basename[0..32] });
         defer gpa.free(temp_store_path);
 
-        self.term.info("nix::store downloading {s} ({d} bytes)...", .{ target_store_basename, nar_info.file_size });
+        var size_buf: [32]u8 = undefined;
+        const size_str = sizes.format_bytes(&size_buf, nar_info.file_size);
+        self.term.info("nix::store downloading {s} ({s})...", .{ target_store_basename, size_str });
 
         try cwd.createDirPath(io, temp_store_path);
         {
