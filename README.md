@@ -73,7 +73,7 @@ This creates `/var/lib/weft`, initializes `/etc/weft.zon` with a secure token, i
 To view your daemon token:
 
 ```bash
-weft daemon show-token
+weft daemon token
 ```
 
 To run the daemon in foreground for debugging:
@@ -257,23 +257,84 @@ weft do bellacall.run
 
 ---
 
+## Process Control (`weft kill`)
+
+Terminate running tasks or deployments on a local daemon or remote host:
+
+```bash
+# Kill all running tasks in the latest deployment locally:
+weft kill
+
+# Kill a specific pipeline in the latest deployment:
+weft kill run
+
+# Kill a specific pipeline in a specific deployment:
+weft kill run 2947MsUl
+
+# Kill all pipelines across all deployments on a remote:
+weft kill all all --remote bellacall
+# or using wildcards:
+weft kill * * --remote bellacall
+
+# Target remote via prefix:
+weft kill bellacall.run
+```
+
+- **Remote targeting**: Queries `local` by default. Specify `--remote <name>` or `[remote].<pipeline>` to target a remote.
+- **Deployment selectors**: Defaults to the latest deployment of the project. Pass `all` or `*` to target all deployments.
+- **Pipeline selectors**: Pass `all` or `*` (or omit) to target all running tasks in the selected deployment.
+
+---
+
+## Garbage Collection (`weft gc`)
+
+Clean up old deployment artifacts, temporary build files, and unused sandboxes:
+
+```bash
+# Garbage collect old artifacts locally (keeps last 5 deployments):
+weft gc
+
+# Dry run to see what would be removed without deleting:
+weft gc --dry-run
+
+# Garbage collect on a remote server, keeping only the last 3 deployments:
+weft gc bellacall --keep 3
+
+# Remove artifacts older than a specific duration:
+weft gc --older-than 7d
+```
+
+- **Options**:
+  - `--keep <N>`: Number of recent deployments to retain (default: 5).
+  - `--older-than <dur>`: Remove artifacts older than a duration (e.g. `7d`, `24h`, `30m`).
+  - `--dry-run`: Preview disk space freed and deployments removed without deleting anything.
+
+---
+
 ## CLI Reference
 
 ```
 Usage: weft [options] <command> [args]
 
 Commands:
-  daemon install                      Install the weft daemon (systemd service, config)
-  daemon run                          Run the daemon in the foreground
-  daemon show-token                   Print the daemon secret token
-  do <pipeline[.remote]...>           Run pipelines: weft do [remote.]pipeline ...
-  continue [id] [targets]             Continue an existing deployment
-  follow [id][.pipeline]              Follow a running deployment or pipeline
+  daemon install                      Install the weft daemon locally
+  daemon run                          Run the weft daemon
+  daemon token                        Print the daemon access token
+  do <[remote.]pipeline...>           Start a deployment
+  retry [deployment]                  Retry an existing deployment (defaults to latest)
+  list                                List recent deployments and their status
+  follow <pipeline> [deployment]      Follow a running task
+  monitor [spec]                      Monitor a remote or remote group
   remote install <name> <ssh> [host]  Install weft on a remote and register it
+  remote list                         List registered remotes
+  remote remove <name>                Remove a remote from remotes.zon
+  kill [pipeline] [deployment]        Kill a running task or deployment
+  gc [remote]                         Garbage collect old artifacts on remotes or locally
+  help [command]                      Show help for weft or a specific command
 
 Options:
   -q, --quiet                         Only log errors
-  -v, --verbose                       Log debug messages
+  -v, --verbose                       Also log debug messages
   --no-color                          Disable colored output
 ```
 
@@ -282,3 +343,4 @@ Options:
 ## License
 
 MIT / Apache-2.0
+

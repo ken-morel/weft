@@ -14,13 +14,10 @@ const Step = @import("client/Step.zig");
 const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
-const gc_core = @import("daemon/gc.zig");
 const Task = @import("daemon/Task.zig");
 const proto = @import("domain/proto.zig");
 const Term = @import("domain/Term.zig");
 const argz = @import("util/argz.zig");
-const format_bytes = @import("util/sizes.zig").format_bytes;
-const systemd = @import("util/systemd.zig");
 pub const Monitor = @import("util/Monitor.zig");
 
 pub const std_options: std.Options = .{
@@ -48,24 +45,6 @@ const Argz = union(enum) {
         },
         token: struct {
             pub const doc = "Display the daemon's access token";
-        },
-        gc: struct {
-            pub const doc = "Garbage collect old artifacts and run directories";
-            pub const doc_keep = "Number of recent deployments to keep (default: 5)";
-            pub const doc_older_than = "Remove artifacts older than duration (e.g. 7d, 24h)";
-            pub const doc_dry_run = "Show what would be removed without deleting";
-
-            keep: ?u32 = null,
-            older_than: ?[]const u8 = null,
-            dry_run: bool = false,
-        },
-        kill: struct {
-            pub const doc = "Kill a task on the daemon";
-            pub const doc_task = "Task unit name or pipeline name";
-            pub const doc_remote = "Remote daemon to kill on (defaults to local)";
-
-            task: []const u8,
-            remote: ?[]const u8 = null,
         },
         ipc: union(enum) {
             pub const hidden = true;
@@ -136,11 +115,11 @@ const Argz = union(enum) {
         pub const doc = "Kill a running task or deployment";
         pub const doc_pipeline = "The pipeline name to kill, or [remote].pipeline (omit to kill all tasks in deployment)";
         pub const doc_deployment = "The deployment id to kill (defaults to latest)";
-        pub const doc_remote = "The remote to kill the task on";
+        pub const doc_remote = "The remote to kill the task on (defaults to local)";
 
         pipeline: ?[]const u8 = null,
         deployment: ?[]const u8 = null,
-        remote: ?[]const u8 = null,
+        remote: []const u8 = "local",
     },
     gc: struct {
         pub const doc = "Garbage collect old artifacts on remotes or locally";
@@ -149,7 +128,7 @@ const Argz = union(enum) {
         pub const doc_older_than = "Remove artifacts older than duration (e.g. 7d, 24h)";
         pub const doc_dry_run = "Show what would be removed without deleting";
 
-        remote: ?[]const u8 = null,
+        remote: []const u8 = "local",
         keep: ?u32 = null,
         older_than: ?[]const u8 = null,
         dry_run: bool = false,
@@ -227,47 +206,6 @@ pub fn main(init: std.process.Init) !void {
                 const config = try DaemonInstall.read_config(init.io, alloc, &term);
                 defer std.zon.parse.free(alloc, config);
                 term.println("{s}", .{config.secret});
-            },
-            .gc => |cmd| {
-                var gc_arena = std.heap.ArenaAllocator.init(alloc);
-                defer gc_arena.deinit();
-                const ara = gc_arena.allocator();
-
-                var buf: [32]u8 = undefined;
-                const older_than_ms = if (cmd.older_than) |s| gc_core.parse_duration(s) else null;
-                const res = try gc_core.run(ara, init.io, &term, .{
-                    .keep = cmd.keep,
-                    .older_than_ms = older_than_ms,
-                    .dry_run = cmd.dry_run,
-                });
-                if (cmd.dry_run) {
-                    term.println("gc: would remove {d} deployments, freeing {s}", .{
-                        res.deployments_removed,
-                        format_bytes(&buf, res.bytes_freed),
-                    });
-                } else {
-                    term.println("gc: removed {d} deployments, freed {s}", .{
-                        res.deployments_removed,
-                        format_bytes(&buf, res.bytes_freed),
-                    });
-                }
-            },
-            .kill => |cmd| {
-                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
-                const rem_name = cmd.remote orelse "local";
-                if (Task.from_unit_name(cmd.task)) |unit_task| {
-                    try cmd_kill.kill_on_remote(alloc, init.io, &term, installation, rem_name, unit_task.id);
-                } else if (std.mem.eql(u8, rem_name, "local")) {
-                    try systemd.stop(init.io, cmd.task);
-                    term.println("stopped unit {s}", .{cmd.task});
-                } else {
-                    const task_id: proto.task.Id = .{
-                        .workspace = "",
-                        .deployment = .{ .raw = 0 },
-                        .pipeline = cmd.task,
-                    };
-                    try cmd_kill.kill_on_remote(alloc, init.io, &term, installation, rem_name, task_id);
-                }
             },
             .ipc => |i| switch (i) {
                 .completed => |msg| {

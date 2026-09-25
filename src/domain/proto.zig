@@ -119,10 +119,12 @@ pub const task = struct {
     };
     pub const kill = struct {
         pub const Req = struct {
-            task: task.Id,
+            workspace: []const u8 = "",
+            deployment: ?Deployment.Id = null,
+            pipeline: ?[]const u8 = null,
         };
         pub const Res = struct {
-            killed: bool,
+            killed_count: u32,
         };
     };
 };

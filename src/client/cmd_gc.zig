@@ -15,7 +15,7 @@ pub fn run(
     term: *Term,
     project: ?Project,
     inst: ClientInstall,
-    remote_spec: ?[]const u8,
+    remote_spec: []const u8,
     keep: ?u32,
     older_than_str: ?[]const u8,
     dry_run: bool,
@@ -27,124 +27,84 @@ pub fn run(
     const older_than_ms = if (older_than_str) |s| gc_core.parse_duration(s) else null;
     const remotes = inst.get_remotes(alloc, io, term) catch &.{};
 
+    var workspace: ?[]const u8 = null;
+    if (project) |prj| {
+        const config = prj.get_config(alloc, term, io) catch null;
+        if (config) |c| workspace = c.workspace;
+    }
+
     var buf: [32]u8 = undefined;
 
-    if (remote_spec) |rem_name| {
-        if (std.mem.eql(u8, rem_name, "local")) {
-            const res = try gc_core.run(alloc, io, term, .{
-                .keep = keep,
-                .older_than_ms = older_than_ms,
-                .dry_run = dry_run,
-            });
-            if (dry_run) {
-                term.println("gc [local]: would remove {d} deployments, freeing {s}", .{
-                    res.deployments_removed,
-                    format_bytes(&buf, res.bytes_freed),
-                });
-            } else {
-                term.println("gc [local]: removed {d} deployments, freed {s}", .{
-                    res.deployments_removed,
-                    format_bytes(&buf, res.bytes_freed),
-                });
-            }
-            return;
+    const remote = for (remotes) |*r| {
+        if (std.mem.eql(u8, r.get_name(), remote_spec))
+            break r;
+    } else null;
+
+    var res: ?proto.gc.Res = null;
+
+    if (remote) |r| {
+        const addr = r.get_address() catch null;
+        const tok = r.get_token() catch null;
+        if (addr != null and tok != null) {
+            if (Client.connect(alloc, io, addr.?, &tok.?)) |client| {
+                defer client.destroy(alloc, io);
+
+                var send_buf: [128]u8 = undefined;
+                if (client.conn.send_object(&send_buf, proto.Request, .gc)) |_| {
+                    if (client.conn.send_object(&send_buf, proto.gc.Req, .{
+                        .workspace = workspace,
+                        .keep = keep,
+                        .older_than_ms = older_than_ms,
+                        .dry_run = dry_run,
+                    })) |_| {
+                        if (client.conn.recv_object(alloc, proto.Res(proto.gc.Res))) |r_res| {
+                            if (r_res) |val| res = val else |_| {}
+                        } else |_| {}
+                    } else |_| {}
+                } else |_| {}
+            } else |_| {}
         }
+    }
 
-        const remote = for (remotes) |*r| {
-            if (std.mem.eql(u8, r.get_name(), rem_name))
-                break r;
-        } else {
-            term.err("remote '{s}' not found", .{rem_name});
-            return error.RemoteNotFound;
-        };
-
-        var client = try Client.connect(alloc, io, try remote.get_address(), &try remote.get_token());
-        defer client.destroy(alloc, io);
-
-        var send_buf: [128]u8 = undefined;
-        try client.conn.send_object(&send_buf, proto.Request, .gc);
-        try client.conn.send_object(&send_buf, proto.gc.Req, .{
+    if (res == null and std.mem.eql(u8, remote_spec, "local")) {
+        const local_res = gc_core.run(alloc, io, term, .{
+            .workspace = workspace,
             .keep = keep,
             .older_than_ms = older_than_ms,
             .dry_run = dry_run,
-        });
+        }) catch |err| {
+            term.err("gc failed: {any}", .{err});
+            return err;
+        };
+        res = .{
+            .deployments_removed = local_res.deployments_removed,
+            .bytes_freed = local_res.bytes_freed,
+        };
+    }
 
-        const res = try try client.conn.recv_object(alloc, proto.Res(proto.gc.Res));
+    if (res) |r| {
         if (dry_run) {
             term.println("gc [{s}]: would remove {d} deployments, freeing {s}", .{
-                rem_name,
-                res.deployments_removed,
-                format_bytes(&buf, res.bytes_freed),
+                remote_spec,
+                r.deployments_removed,
+                format_bytes(&buf, r.bytes_freed),
             });
         } else {
             term.println("gc [{s}]: removed {d} deployments, freed {s}", .{
-                rem_name,
-                res.deployments_removed,
-                format_bytes(&buf, res.bytes_freed),
+                remote_spec,
+                r.deployments_removed,
+                format_bytes(&buf, r.bytes_freed),
             });
         }
-        return;
-    }
-
-    const local_res = gc_core.run(alloc, io, term, .{
-        .keep = keep,
-        .older_than_ms = older_than_ms,
-        .dry_run = dry_run,
-    }) catch |err| res: {
-        term.warn("local gc failed: {any}", .{err});
-        break :res gc_core.GcResult{};
-    };
-
-    if (dry_run) {
-        term.println("gc [local]: would remove {d} deployments, freeing {s}", .{
-            local_res.deployments_removed,
-            format_bytes(&buf, local_res.bytes_freed),
-        });
     } else {
-        term.println("gc [local]: removed {d} deployments, freed {s}", .{
-            local_res.deployments_removed,
-            format_bytes(&buf, local_res.bytes_freed),
-        });
-    }
-
-    for (remotes) |*remote| {
-        const r_name = remote.get_name();
-        if (std.mem.eql(u8, r_name, "local")) continue;
-
-        var client = Client.connect(alloc, io, remote.get_address() catch continue, &(remote.get_token() catch continue)) catch |err| {
-            term.warn("failed to connect to remote '{s}': {any}", .{ r_name, err });
-            continue;
-        };
-        defer client.destroy(alloc, io);
-
-        var send_buf: [128]u8 = undefined;
-        client.conn.send_object(&send_buf, proto.Request, .gc) catch continue;
-        client.conn.send_object(&send_buf, proto.gc.Req, .{
-            .keep = keep,
-            .older_than_ms = older_than_ms,
-            .dry_run = dry_run,
-        }) catch continue;
-
-        const res = client.conn.recv_object(alloc, proto.Res(proto.gc.Res)) catch continue;
-        if (res) |r| {
-            if (dry_run) {
-                term.println("gc [{s}]: would remove {d} deployments, freeing {s}", .{
-                    r_name,
-                    r.deployments_removed,
-                    format_bytes(&buf, r.bytes_freed),
-                });
-            } else {
-                term.println("gc [{s}]: removed {d} deployments, freed {s}", .{
-                    r_name,
-                    r.deployments_removed,
-                    format_bytes(&buf, r.bytes_freed),
-                });
-            }
-        } else |_| {}
+        term.err("could not connect to remote '{s}'", .{remote_spec});
+        return error.ConnectionFailed;
     }
 
     if (project) |prj| {
-        clean_project_weft(alloc, io, term, prj, keep orelse 5, older_than_ms, dry_run);
+        if (std.mem.eql(u8, remote_spec, "local")) {
+            clean_project_weft(alloc, io, term, prj, keep orelse 5, older_than_ms, dry_run);
+        }
     }
 }
 

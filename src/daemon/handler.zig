@@ -657,46 +657,11 @@ pub fn handle_task_poll(
 
 fn handle_task_kill(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.task.kill.Res) {
     const ara = arena.allocator();
-    const gpa = daemon.gpa;
     const io = daemon.io;
 
     const req = try conn.recv_object(ara, proto.task.kill.Req);
-    if (req.task.pipeline.len > 0) {
-        const t: Task = .{ .id = req.task };
-        const active = t.is_active(gpa, io) catch false;
-        if (active) {
-            try t.kill(gpa, io);
-        }
-        return .{ .killed = active };
-    }
-
-    const run_base = try std.fs.path.join(ara, &.{ paths.weft_run_dir, req.task.workspace });
-    defer ara.free(run_base);
-    var ws_dir = std.Io.Dir.cwd().openDir(io, run_base, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return .{ .killed = false };
-        return err;
-    };
-    defer ws_dir.close(io);
-
-    var killed_any = false;
-    const dep_str = req.task.deployment.to_string();
-    var p_iter = ws_dir.iterate();
-    while (try p_iter.next(io)) |p_entry| {
-        if (p_entry.kind != .directory) continue;
-        const dep_path = try std.fs.path.join(ara, &.{ run_base, p_entry.name, &dep_str });
-        defer ara.free(dep_path);
-        std.Io.Dir.cwd().access(io, dep_path, .{}) catch continue;
-        const sub_task: Task = .{ .id = .{
-            .workspace = req.task.workspace,
-            .deployment = req.task.deployment,
-            .pipeline = p_entry.name,
-        } };
-        if (sub_task.is_active(gpa, io) catch false) {
-            sub_task.kill(gpa, io) catch {};
-            killed_any = true;
-        }
-    }
-    return .{ .killed = killed_any };
+    const killed_count = try Task.kill_matching(ara, io, req);
+    return .{ .killed_count = killed_count };
 }
 
 fn handle_gc(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.gc.Res) {
