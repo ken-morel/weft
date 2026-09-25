@@ -2,56 +2,40 @@
 
 A lightweight, distributed build and deployment runner written in Zig.
 
-Weft connects local development environments and remote servers into a unified pipeline graph. It coordinates artifact packaging, cache persistence, dependency resolution, process lifecycle management, and task execution across machines.
+Weft connects local development environments and remote servers into a unified execution graph. It coordinates artifact packaging, incremental build caching, dependency resolution, process lifecycle management, and sandboxed task execution across machines without third-party agents or heavy container runtimes.
 
 ---
 
-## Key Features
+## Highlights
 
-- **Declarative Pipeline Graph (`weft.zon`)**: Define pipelines with explicit input dependencies, output artifacts, persistent caches, and environment bindings.
-- **Distributed Remote Execution**: Run build pipelines locally and deploy or run services on remote servers with one command:
+- **Declarative Pipeline Graphs (`weft.zon`)**: Express build pipelines with explicit input dependencies, output artifacts, persistent caches, and environment bindings.
+- **Distributed Remote Execution**: Seamlessly build locally and deploy services to remote servers in a single invocation:
   ```bash
-  weft do build bellacall.run
+  weft do .build bellacall.run
   ```
-- **Zero-Friction Remote Provisioning**: Install and register remote servers over SSH with a single command:
+- **Zero-Friction Remote Provisioning**: Provision and register remote servers over SSH with a single command:
   ```bash
   weft remote install bellacall s.bellacall
   ```
-- **Sandboxed Systemd Execution**: Tasks run in isolated systemd transient units with cgroup accounting, custom mount points, and clean lifecycle management.
-- **Process Lifecycle Management (`.second_instance = .kill`)**: Automatically terminate older running instances of a service when deploying a new release.
-- **Incremental Build Caching (`.keep`)**: Persist build caches (such as Cargo `target/`, Flutter `.dart_tool/`, and npm/bun caches) across runs per workspace.
-- **Streaming Wire Protocol**: Binary artifacts are packed, compressed, streamed over TCP, and unpacked with progress tracking.
-- **Live Interactive Terminal UI**: Real-time deployment visualization showing step progress, logs, and artifacts.
-
----
-
-## Architecture
-
-```
-   Local Machine (Client)                         Remote VPS (Daemon)
-┌──────────────────────────────┐              ┌──────────────────────────────┐
-│  weft do build bellacall.run │              │  weftd (systemd / port 9338) │
-│                              │              │                              │
-│  1. Snapshot 'src' artifact  │              │  1. Receive artifacts        │
-│  2. Execute [local] build    │  TCP (Wire)  │  2. Kill previous instances  │
-│  3. Push artifacts           │─────────────►│  3. Spawn systemd unit       │
-│  4. Stream remote logs       │◄─────────────│  4. Run service & stream logs│
-└──────────────────────────────┘              └──────────────────────────────┘
-```
+- **Native Systemd Sandboxing**: Tasks run in isolated, transient systemd units with cgroup resource limits, dynamic tmp directories, read-only system mounts, and clean lifecycle tracking.
+- **Automated Process Lifecycle (`.second_instance = .kill`)**: Automatically terminate older running instances when deploying a new release of a service.
+- **Incremental Cache Persistence (`.keep`)**: Retain compiler caches (Cargo `target/`, Flutter `.dart_tool/`, Bun/Node modules) across deployments within isolated workspaces.
+- **Streaming Wire Protocol**: Binary artifacts are packed, compressed with DEFLATE, streamed over encrypted TCP connections, and unpacked with real-time progress indicators.
+- **Live Terminal Monitor & Follow**: Built-in real-time TUI dashboard for system metrics (CPU, memory, disk I/O, network RX/TX, active services) and live deployment log streaming.
 
 ---
 
 ## Requirements
 
 - **Zig**: `>= 0.16.0`
-- **Linux**: Kernel with `systemd` support (for daemon task runner).
-- **SSH**: OpenSSH client (for remote provisioning).
+- **Linux**: Kernel with `systemd` support (for local or remote task runners)
+- **OpenSSH**: Client binary (for `weft remote install`)
 
 ---
 
-## Installation & Setup
+## Quickstart
 
-### Build from Source
+### 1. Build & Install
 
 ```bash
 git clone https://github.com/dev-safe/weft.git
@@ -60,58 +44,280 @@ zig build -Doptimize=ReleaseFast
 sudo cp zig-out/bin/weft /usr/local/bin/weft
 ```
 
-### Install Local Daemon
+### 2. Initialize Local Daemon
 
-To run local pipelines or tasks:
+To run local pipelines or act as a build host:
 
 ```bash
 sudo weft daemon install
 ```
 
-This creates `/var/lib/weft`, initializes `/etc/weft.zon` with a secure token, installs the systemd unit `weftd.service`, and starts the service.
+This sets up `/var/lib/weft`, creates the default configuration in `/etc/weft.zon`, and enables the `weftd.service` systemd daemon.
 
-To view your daemon token:
+To inspect the generated authentication token:
 
 ```bash
 weft daemon token
 ```
 
-To run the daemon in foreground for debugging:
+### 3. Add a Remote Host (Optional)
+
+Install and register a remote server in `~/.config/weft/remotes.zon` over SSH:
 
 ```bash
+# Using SSH alias or hostname (defaults to root):
+weft remote install prod s.prod.example.com
+
+# Specifying custom user, port, and external address:
+weft remote install prod deploy@57.129.106.133:2222 57.129.106.133
+```
+
+### 4. Define Pipelines (`weft.zon`)
+
+Create a `weft.zon` in your repository root:
+
+```zon
+.{
+    .name = "my-service",
+    .workspace = "my-service",
+    .pipelines = .{
+        .{
+            .name = "build",
+            .inputs = .{
+                .{ .name = "src" },
+            },
+            .outputs = .{
+                .{ .name = "binary" },
+            },
+            .keep = .{
+                .{ "cargo-target", "target/" },
+            },
+        },
+        .{
+            .name = "run",
+            .inputs = .{
+                .{ .name = "binary" },
+            },
+            .outputs = .{},
+            .second_instance = .kill,
+            .env = .{
+                .{ "PORT", "8080" },
+            },
+        },
+    },
+}
+```
+
+### 5. Create Pipeline Scripts (`bin/`)
+
+Pipeline executables live in `./bin/<pipeline-name>` and can be written in any language:
+
+`bin/build`:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+cp -r "$IN/src"/* ./
+cargo build --release
+mkdir -p "$OUT/binary"
+cp target/release/my-service "$OUT/binary/"
+```
+
+`bin/run`:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+cp "$IN/binary/my-service" ./my-service
+chmod +x ./my-service
+exec ./my-service
+```
+
+Make them executable:
+```bash
+chmod +x bin/build bin/run
+```
+
+### 6. Execute
+
+```bash
+# Run build locally:
+weft do .build
+
+# Run build locally and execute service on remote 'prod':
+weft do .build prod.run
+```
+
+---
+
+## Core Concepts
+
+### Pipeline Addressing Syntax
+
+Pipelines are referenced with unambiguous dot-prefixed syntax:
+
+| Target | Description | Example |
+|---|---|---|
+| `.pipeline` | Pipeline executed on the local daemon | `weft do .build` |
+| `remote.pipeline` | Pipeline executed on the specified remote | `weft do prod.run` |
+
+### Pipeline Sandboxing & Environment
+
+When a pipeline task executes inside its transient systemd unit:
+
+- `$IN`: Directory containing input artifacts produced by upstream pipelines (e.g. `$IN/src/`, `$IN/binary/`).
+- `$OUT`: Directory where outputs produced by this pipeline must be placed to be collected and streamed to downstream tasks.
+- `cwd`: Unique transient sandbox created per deployment run.
+- Persistent caches configured via `.keep` are mounted directly into the sandbox directory.
+
+---
+
+## Command Guide
+
+### Executing Deployments (`weft do`)
+
+Run one or more pipeline targets. Upstream dependencies are automatically resolved, built, and streamed across hosts.
+
+```bash
+# Run local build:
+weft do .build
+
+# Build multiple artifacts locally:
+weft do .build-backend .build-frontend
+
+# Build locally and deploy service to remote:
+weft do .build prod.run
+
+# Target multiple remotes simultaneously:
+weft do .build staging.run prod.run
+```
+
+### Resuming & Retrying (`weft retry`)
+
+Retry a previous deployment run or resume from the last failure without rebuilding cached steps:
+
+```bash
+# Retry the latest deployment:
+weft retry
+
+# Retry a specific deployment by ID or prefix:
+weft retry 2947MsUl
+```
+
+### Monitoring & Inspections
+
+#### Deployment History (`weft list`)
+
+Inspect recent deployment runs, statuses, run times, and commit identifiers:
+
+```bash
+weft list
+```
+
+#### Live Task Logs (`weft follow`)
+
+Follow live streaming stdout and stderr logs for a specific pipeline task:
+
+```bash
+# Follow task from the latest deployment:
+weft follow .run
+
+# Follow remote task from a specific deployment:
+weft follow 2947MsUl.prod.run
+```
+
+#### Real-time Host Monitor (`weft monitor`)
+
+Open an interactive TUI dashboard displaying host utilization metrics:
+
+```bash
+# Monitor default / local host:
+weft monitor
+
+# Monitor a specific remote server:
+weft monitor prod
+```
+
+Metrics tracked in real-time include:
+- Total CPU utilization percentage and frequency across cores
+- Memory usage (used vs total)
+- Disk usage and disk I/O rates
+- Network traffic (RX / TX transfer rates)
+- Active and failed systemd service units
+
+### Process Control (`weft kill`)
+
+Terminate running tasks by specifying `[deployment.]pipeline`:
+
+```bash
+# Kill a running pipeline task in the latest deployment:
+weft kill .run
+
+# Kill a remote pipeline task in the latest deployment:
+weft kill .prod.run
+
+# Kill a pipeline task in a specific deployment:
+weft kill 2947MsUl.run
+
+# Kill a remote pipeline task in a specific deployment:
+weft kill 2947MsUl.prod.run
+```
+
+When the deployment identifier is omitted, the leading dot (`.`) targets the latest deployment. The remote host is automatically extracted from deployment targets.
+
+### Garbage Collection (`weft gc`)
+
+Prune stale deployment artifacts, old logs, and unused sandbox directories locally or remotely:
+
+```bash
+# Garbage collect locally (preserves the 5 most recent deployments):
+weft gc
+
+# Dry run to preview disk space reclaimed without deleting files:
+weft gc --dry-run
+
+# Prune on a remote server, retaining only the 3 most recent deployments:
+weft gc prod --keep 3
+
+# Remove artifacts older than a given timeframe:
+weft gc --older-than 7d
+```
+
+### Remote Server Management (`weft remote`)
+
+Manage registered servers stored in `~/.config/weft/remotes.zon`:
+
+```bash
+# Install daemon on remote over SSH and register it locally:
+weft remote install prod user@57.129.106.133
+
+# List all registered remotes:
+weft remote list
+
+# Deregister a remote:
+weft remote remove prod
+```
+
+### Daemon Management (`weft daemon`)
+
+Manage the local host runner daemon:
+
+```bash
+# Install systemd service and initialize directories:
+sudo weft daemon install
+
+# Display the daemon authentication secret:
+weft daemon token
+
+# Run daemon in the foreground (useful for development and debugging):
 sudo weft daemon run
 ```
 
 ---
 
-## Remote Management
+## Configuration Reference (`weft.zon`)
 
-Weft manages remote servers in `~/.config/weft/remotes.zon`.
-
-### Add & Install a Remote
-
-To upload the `weft` binary to a remote server, install the daemon systemd service, configure its secret, and register the remote locally:
-
-```bash
-# Using an SSH alias or hostname (defaults to root@):
-weft remote install bellacall s.bellacall
-
-# With custom SSH user or port:
-weft remote install prod user@57.129.106.133:2222
-
-# Specifying a different public host address for the weft daemon:
-weft remote install prod root@10.0.0.5 57.129.106.133
-```
-
-- If no user is specified, `remote install` defaults to `root@`.
-- If a custom SSH port is given (`host:port`), `scp` and `ssh` connect using that port.
-- If the remote is already registered, existing host addresses and custom daemon ports are preserved.
-
----
-
-## Pipeline Configuration (`weft.zon`)
-
-Place a `weft.zon` in your project root:
+Every Weft project defines its graph in `weft.zon` at the project root:
 
 ```zon
 .{
@@ -119,7 +325,7 @@ Place a `weft.zon` in your project root:
     .workspace = "bellacall",
     .pipelines = .{
         .{
-            .name = "build-backend-release",
+            .name = "build-backend",
             .inputs = .{
                 .{ .name = "src" },
             },
@@ -127,44 +333,13 @@ Place a `weft.zon` in your project root:
                 .{ .name = "backend-release" },
             },
             .keep = .{
-                .{ "backend-target", "backend/target/" },
+                .{ "cargo-target", "backend/target/" },
             },
-        },
-        .{
-            .name = "build-frontend-web",
-            .inputs = .{
-                .{ .name = "src" },
-            },
-            .outputs = .{
-                .{ .name = "frontend-web" },
-            },
-            .keep = .{
-                .{ "flutter-tool", "frontend/.dart_tool/" },
-                .{ "flutter-build", "frontend/build/" },
-            },
-        },
-        .{
-            .name = "build-release",
-            .inputs = .{
-                .{ .name = "backend-release" },
-                .{ .name = "frontend-web" },
-            },
-            .outputs = .{},
-        },
-        .{
-            .name = "build",
-            .inputs = .{
-                .{ .name = "backend-release" },
-                .{ .name = "frontend-web" },
-            },
-            .outputs = .{},
-            .script = "build-release",
         },
         .{
             .name = "run",
             .inputs = .{
                 .{ .name = "backend-release" },
-                .{ .name = "frontend-web" },
             },
             .outputs = .{},
             .second_instance = .kill,
@@ -172,173 +347,64 @@ Place a `weft.zon` in your project root:
                 .{ "PORT", "3000" },
                 .{ "DATABASE_URL", "postgresql://user:pass@127.0.0.1:5432/db" },
             },
+            .script = "run-service",
         },
     },
 }
 ```
 
-### Pipeline Fields
+### Top-Level Fields
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | `[]const u8` | Unique pipeline name. |
-| `inputs` | `[]Input` | Artifacts needed before this pipeline can run (`src` represents the repository snapshot). |
-| `outputs` | `[]Output` | Artifacts produced by this pipeline to store and pass downstream. |
-| `keep` | `[]Keep` | Tuple of `.{ "cache-name", "path/relative/to/cwd/" }` mounted into the sandbox and preserved across runs. |
-| `second_instance` | `.kill` \| `.ignore` | When set to `.kill`, kills sibling running tasks from previous deployments of the same pipeline. |
-| `env` | `[][2][]const u8` | Environment key-value pairs injected into the running task. |
-| `script` | `?[]const u8` | Executable script inside `bin/` (defaults to `bin/<pipeline_name>`). |
+| `name` | `[]const u8` | Project identifier. |
+| `workspace` | `[]const u8` | Isolation namespace for caches and sandboxes. |
+| `pipelines` | `[]Pipeline` | Array of pipeline task definitions. |
+
+### Pipeline Definition Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `name` | `[]const u8` | *required* | Unique pipeline name. |
+| `inputs` | `[]Input` | `.{}` | Artifacts required before task can execute (`src` denotes repository snapshot). |
+| `outputs` | `[]Output` | `.{}` | Artifacts produced by this task to store and pass downstream. |
+| `keep` | `[][2][]const u8` | `.{}` | Cache mappings `.{ "cache-id", "path/relative/to/cwd/" }` retained across runs. |
+| `second_instance` | `.kill` \| `.ignore` | `.ignore` | When set to `.kill`, terminates previous running instances upon deployment. |
+| `env` | `[][2][]const u8` | `.{}` | Environment variables injected into the task process. |
+| `script` | `?[]const u8` | `null` | Script filename inside `bin/` (defaults to pipeline `name`). |
 
 ---
 
-## Pipeline Scripts (`bin/`)
+## Command Reference
 
-Pipeline executables live in `./bin/` relative to `weft.zon`. Scripts can be written in any language (`sh`, `bash`, `nu`, `python`, etc.):
+| Command | Syntax | Description |
+|---|---|---|
+| `do` | `weft do <[remote.]pipeline...>` | Execute build and deployment pipelines across hosts |
+| `retry` | `weft retry [deployment]` | Resume or retry an existing deployment run |
+| `list` | `weft list` | Display recent deployments and their execution statuses |
+| `follow` | `weft follow <[deployment.]pipeline>` | Stream live logs for a running task |
+| `monitor` | `weft monitor [remote]` | Open real-time host metrics dashboard (CPU, memory, I/O, network) |
+| `kill` | `weft kill <[deployment.]pipeline>` | Terminate a running task or deployment |
+| `gc` | `weft gc [remote] [--keep N] [--older-than dur] [--dry-run]` | Garbage collect stale deployment artifacts and sandboxes |
+| `remote install` | `weft remote install <name> <ssh> [host]` | Provision and register a remote server via SSH |
+| `remote list` | `weft remote list` | List registered remote servers |
+| `remote remove` | `weft remote remove <name>` | Remove a registered remote from configuration |
+| `daemon install` | `sudo weft daemon install [--user user]` | Install the systemd daemon service locally |
+| `daemon run` | `sudo weft daemon run` | Run the daemon process in the foreground |
+| `daemon token` | `weft daemon token` | Print the local daemon access secret |
 
-When a task executes:
-- `$IN`: Path to the input artifacts directory (e.g. `$IN/src/`, `$IN/backend-release/`).
-- `$OUT`: Path to the output directory where produced artifacts should be saved (e.g. `$OUT/backend-release/`).
-- Working directory (`cwd`): Isolated sandbox per deployment.
+### Global Flags
 
-### Example Build Script (`bin/build-backend-release`)
+Global options must precede the command:
 
-```nu
-#!/usr/bin/env nu
-
-glob $"($env.IN)/src/*" | each { |f| cp -r $f ./ }
-
-cd backend
-cargo build --release
-
-mkdir $"($env.OUT)/backend-release"
-cp target/release/backend ($env.OUT + "/backend-release/backend")
-```
-
-### Example Service Runner (`bin/run`)
-
-```bash
-#!/usr/bin/env bash
-set -e
-
-cp "$IN/backend-release/backend" ./backend
-chmod +x ./backend
-
-exec ./backend
-```
-
----
-
-## Running Pipelines (`weft do`)
-
-### Local Builds
-
-```bash
-# Run a specific pipeline locally:
-weft do build-backend-release
-
-# Run a composite build:
-weft do build
-```
-
-### Remote Deployments
-
-Target a remote by prefixing the pipeline name with `<remote>.`:
-
-```bash
-# Build locally and run the service on 'bellacall' remote:
-weft do build bellacall.run
-
-# Target multiple remotes or pipelines:
-weft do local.build bellacall.run
-
-# Run directly on remote (dependencies automatically resolve and upload):
-weft do bellacall.run
-```
-
----
-
-## Process Control (`weft kill`)
-
-Terminate running tasks or deployments on a local daemon or remote host:
-
-```bash
-# Kill all running tasks in the latest deployment locally:
-weft kill
-
-# Kill a specific pipeline in the latest deployment:
-weft kill run
-
-# Kill a specific pipeline in a specific deployment:
-weft kill run 2947MsUl
-
-# Kill all pipelines across all deployments on a remote (using '.' as wildcard):
-weft kill . . --remote bellacall
-
-# Target remote via prefix:
-weft kill bellacall.run
-```
-
-- **Remote targeting**: Queries `local` by default. Specify `--remote <name>` or `[remote].<pipeline>` to target a remote.
-- **Deployment selectors**: Defaults to the latest deployment of the project. Pass `.` to target all deployments.
-- **Pipeline selectors**: Pass `.` (or omit) to target all running tasks in the selected deployment.
-
----
-
-## Garbage Collection (`weft gc`)
-
-Clean up old deployment artifacts, temporary build files, and unused sandboxes:
-
-```bash
-# Garbage collect old artifacts locally (keeps last 5 deployments):
-weft gc
-
-# Dry run to see what would be removed without deleting:
-weft gc --dry-run
-
-# Garbage collect on a remote server, keeping only the last 3 deployments:
-weft gc bellacall --keep 3
-
-# Remove artifacts older than a specific duration:
-weft gc --older-than 7d
-```
-
-- **Options**:
-  - `--keep <N>`: Number of recent deployments to retain (default: 5).
-  - `--older-than <dur>`: Remove artifacts older than a duration (e.g. `7d`, `24h`, `30m`).
-  - `--dry-run`: Preview disk space freed and deployments removed without deleting anything.
-
----
-
-## CLI Reference
-
-```
-Usage: weft [options] <command> [args]
-
-Commands:
-  daemon install                      Install the weft daemon locally
-  daemon run                          Run the weft daemon
-  daemon token                        Print the daemon access token
-  do <[remote.]pipeline...>           Start a deployment
-  retry [deployment]                  Retry an existing deployment (defaults to latest)
-  list                                List recent deployments and their status
-  follow <pipeline> [deployment]      Follow a running task
-  monitor [spec]                      Monitor a remote or remote group
-  remote install <name> <ssh> [host]  Install weft on a remote and register it
-  remote list                         List registered remotes
-  remote remove <name>                Remove a remote from remotes.zon
-  kill [pipeline] [deployment]        Kill a running task or deployment
-  gc [remote]                         Garbage collect old artifacts on remotes or locally
-  help [command]                      Show help for weft or a specific command
-
-Options:
-  -q, --quiet                         Only log errors
-  -v, --verbose                       Also log debug messages
-  --no-color                          Disable colored output
-```
+| Flag | Description |
+|---|---|
+| `-q, --quiet` | Silence informational output; log errors only |
+| `-v, --verbose` | Enable verbose debug-level logging |
+| `--no-color` | Disable ANSI terminal color codes |
 
 ---
 
 ## License
 
 MIT / Apache-2.0
-

@@ -4,6 +4,7 @@ const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
+const Step = @import("Step.zig");
 const Task = @import("../daemon/Task.zig");
 const Term = @import("../domain/Term.zig");
 const proto = @import("../domain/proto.zig");
@@ -12,77 +13,64 @@ pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    project: ?Project,
+    project: Project,
     inst: ClientInstall,
-    pipeline_spec: ?[]const u8,
-    deployment_spec: ?[]const u8,
-    remote_spec: ?[]const u8,
+    step: Step,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    var remote_name = remote_spec orelse "local";
-    var pipe_filter: ?[]const u8 = null;
-    var dep_id: ?Deployment.Id = null;
-    var workspace: []const u8 = "";
+    const config = project.get_config(alloc, term, io) catch null;
+    const workspace = if (config) |c| c.workspace else "";
 
-    if (pipeline_spec) |raw_pipe| {
-        if (Task.from_unit_name(raw_pipe)) |unit_task| {
-            workspace = unit_task.id.workspace;
-            dep_id = unit_task.id.deployment;
-            pipe_filter = unit_task.id.pipeline;
-        } else {
-            var raw = raw_pipe;
-            if (std.mem.indexOfScalar(u8, raw, '.')) |dot_idx| {
-                const prefix = raw[0..dot_idx];
-                const remotes = inst.get_remotes(alloc, io, term) catch &.{};
-                for (remotes) |*r| {
-                    if (std.mem.eql(u8, r.get_name(), prefix)) {
-                        remote_name = prefix;
-                        raw = raw[dot_idx + 1 ..];
-                        break;
-                    }
-                }
-            }
-            if (!std.mem.eql(u8, raw, ".")) {
-                pipe_filter = raw;
+    const dep_id = if (std.mem.eql(u8, step.remote, "local"))
+        try project.latest_deployment_id(io) orelse {
+            term.err("no deployments found in .weft", .{});
+            return error.NoDeployments;
+        }
+    else
+        project.find_deployment_id(io, step.remote) catch |err| {
+            term.err("deployment '{s}' not found: {any}", .{ step.remote, err });
+            return error.InvalidDeploymentId;
+        };
+
+    var pipe_filter: []const u8 = step.pipeline;
+    var remote_name: []const u8 = "local";
+
+    const remotes = inst.get_remotes(alloc, io, term) catch &.{};
+
+    if (Task.from_unit_name(step.pipeline)) |unit_task| {
+        pipe_filter = unit_task.id.pipeline;
+    } else if (std.mem.indexOfScalar(u8, step.pipeline, '.')) |dot_idx| {
+        const prefix = step.pipeline[0..dot_idx];
+        for (remotes) |*r| {
+            if (std.mem.eql(u8, r.get_name(), prefix)) {
+                remote_name = prefix;
+                pipe_filter = step.pipeline[dot_idx + 1 ..];
+                break;
             }
         }
     }
 
-    if (project) |prj| {
-        if (workspace.len == 0) {
-            const config = prj.get_config(alloc, term, io) catch null;
-            if (config) |c| workspace = c.workspace;
-        }
-
-        if (dep_id == null) {
-            if (deployment_spec) |dep_str| {
-                if (!std.mem.eql(u8, dep_str, ".")) {
-                    dep_id = prj.find_deployment_id(io, dep_str) catch |err| {
-                        term.err("deployment '{s}' not found: {any}", .{ dep_str, err });
-                        return error.InvalidDeploymentId;
-                    };
+    if (std.mem.eql(u8, remote_name, "local")) {
+        if (project.load_deployment(alloc, io, dep_id)) |depl| {
+            for (depl.targets) |t| {
+                if (std.mem.eql(u8, t.pipeline, pipe_filter)) {
+                    remote_name = t.remote;
+                    break;
                 }
-            } else {
-                dep_id = prj.latest_deployment_id(io) catch null;
+            } else for (depl.running) |r| {
+                if (std.mem.eql(u8, r.pipeline, pipe_filter)) {
+                    remote_name = r.remote;
+                    break;
+                }
             }
-        }
-    } else {
-        if (deployment_spec) |dep_str| {
-            if (!std.mem.eql(u8, dep_str, ".")) {
-                dep_id = Deployment.Id.parse(dep_str) catch |err| {
-                    term.err("invalid deployment id '{s}': {any}", .{ dep_str, err });
-                    return err;
-                };
-            }
-        }
+        } else |_| {}
     }
 
     var killed_count: ?u32 = null;
 
-    const remotes = inst.get_remotes(alloc, io, term) catch &.{};
     const remote = for (remotes) |*r| {
         if (std.mem.eql(u8, r.get_name(), remote_name))
             break r;

@@ -113,13 +113,9 @@ const Argz = union(enum) {
     },
     kill: struct {
         pub const doc = "Kill a running task or deployment";
-        pub const doc_pipeline = "The pipeline name to kill, or [remote].pipeline (use '.' for all pipelines)";
-        pub const doc_deployment = "The deployment id to kill (defaults to latest, use '.' for all deployments)";
-        pub const doc_remote = "The remote to kill the task on (defaults to local)";
+        pub const doc_target = "The deployment and pipeline to kill: [deployment.]pipeline";
 
-        pipeline: ?[]const u8 = null,
-        deployment: ?[]const u8 = null,
-        remote: []const u8 = "local",
+        target: Step,
     },
     gc: struct {
         pub const doc = "Garbage collect old artifacts on remotes or locally";
@@ -303,11 +299,11 @@ pub fn main(init: std.process.Init) !void {
         },
         .kill => |cmd| {
             const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
-            const project_dir = std.Io.Dir.cwd().openDir(init.io, ".", .{}) catch null;
-            defer if (project_dir) |*d| d.close(init.io);
-            const project = if (project_dir) |d| Project.open(d) catch null else null;
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open(project_dir);
 
-            return cmd_kill.run(alloc, init.io, &term, project, installation, cmd.pipeline, cmd.deployment, cmd.remote);
+            return cmd_kill.run(alloc, init.io, &term, project, installation, cmd.target);
         },
         .gc => |cmd| {
             const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
