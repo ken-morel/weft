@@ -293,19 +293,17 @@ pub fn remove(
     var updated_list: std.ArrayList(Remote) = .empty;
     defer updated_list.deinit(arena_alloc);
 
-    var found = false;
     for (remotes) |rem| {
-        if (std.mem.eql(u8, rem.get_name(), name)) {
-            found = true;
-        } else {
-            try updated_list.append(arena_alloc, rem);
-        }
-    }
-
-    if (!found) {
+        if (std.mem.eql(u8, rem.get_name(), name))
+            break;
+    } else {
         term.err("remote '{s}' not found in remotes.zon", .{name});
         return error.RemoteNotFound;
     }
+
+    for (remotes) |rem|
+        if (!std.mem.eql(u8, rem.get_name(), name))
+            try updated_list.append(arena_alloc, rem);
 
     try installation.save_remotes(io, updated_list.items);
     term.success("removed remote '{s}' from remotes.zon", .{name});

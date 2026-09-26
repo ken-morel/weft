@@ -84,14 +84,14 @@ pub inline fn flush(self: *@This()) !void {
     try self.writer().flush();
 }
 
-pub fn setColor(self: *@This(), color: Color) void {
+pub fn set_color(self: *@This(), color: Color) void {
     self.mutex.lockUncancelable(self.io);
     defer self.mutex.unlock(self.io);
-    self.terminal.writer = &self.writer_file.interface;
+
     self.terminal.setColor(color) catch {};
 }
 
-pub fn setReverse(self: *@This(), enable: bool) void {
+pub fn set_reverse(self: *@This(), enable: bool) void {
     if (!self.is_tty or self.terminal.mode != .escape_codes) return;
     self.mutex.lockUncancelable(self.io);
     defer self.mutex.unlock(self.io);

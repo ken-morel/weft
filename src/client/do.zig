@@ -62,6 +62,5 @@ pub fn run(
         project,
         inst,
         &deployment,
-        deployment.env,
     );
 }

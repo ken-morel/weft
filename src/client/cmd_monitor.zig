@@ -59,17 +59,17 @@ fn render_cell(term: *Term, cell: *const [10]u8, filled: u8, color: Term.Color) 
 
     const fill_count = @min(filled, 10);
     if (fill_count > 0) {
-        term.setReverse(true);
-        term.setColor(color);
+        term.set_reverse(true);
+        term.set_color(color);
         term.writer().writeAll(cell[0..fill_count]) catch {};
-        term.setReverse(false);
+        term.set_reverse(false);
     }
     if (fill_count < 10) {
-        term.setColor(.dim);
+        term.set_color(.dim);
         term.writer().writeAll(cell[fill_count..10]) catch {};
-        term.setColor(.reset);
+        term.set_color(.reset);
     } else {
-        term.setColor(.reset);
+        term.set_color(.reset);
     }
 }
 

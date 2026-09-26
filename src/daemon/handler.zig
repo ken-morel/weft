@@ -344,20 +344,21 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
     const io = daemon.io;
 
     const req = try conn.recv_object(ara, proto.task.spawn.Req);
+    const spec = req.spec;
 
-    const deployment = req.task.deployment.to_string();
+    const deployment = spec.task.deployment.to_string();
 
-    const task: Task = .{ .id = req.task };
+    const task: Task = .{ .id = spec.task };
 
     const input_dirs = input_dirs: {
         const input_dirs = try ara.alloc(
             []const u8,
-            req.pipeline.inputs().len,
+            spec.inputs.len,
         );
-        for (req.pipeline.inputs(), input_dirs) |input, *input_dir| {
+        for (spec.inputs, input_dirs) |input, *input_dir| {
             const path = try paths.artifact(
                 ara,
-                req.task.workspace,
+                spec.task.workspace,
                 &deployment,
                 input,
             );
@@ -378,11 +379,11 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
     try std.Io.Dir.cwd().createDirPath(daemon.io, archive_dir_path);
     const log_path = try std.fs.path.join(ara, &.{ archive_dir_path, "log.txt" });
 
-    if (req.pipeline.pkgs.len > 0) {
+    if (spec.pkgs.len > 0) {
         var log_file = try std.Io.Dir.cwd().createFile(daemon.io, log_path, .{ .truncate = false });
         defer log_file.close(io);
 
-        for (req.pipeline.pkgs) |basename| {
+        for (spec.pkgs) |basename| {
             try log_file.writeStreamingAll(io, try std.fmt.allocPrint(ara, "[nix] fetching {s}...\n", .{basename}));
             daemon.store.fetch(io, basename) catch |err| {
                 try log_file.writeStreamingAll(io, try std.fmt.allocPrint(ara, "[nix] failed to fetch {s}: {s}\n", .{ basename, @errorName(err) }));
@@ -406,26 +407,14 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
             .permissions = .executable_file,
         });
         defer script_file.close(io);
-        const buffer = try gpa.alloc(u8, Connection.max_packet_size);
-        defer gpa.free(buffer);
-        while (true) {
-            const data = try conn.recv_buf(buffer);
-            if (data.len < 5 or !std.mem.eql(u8, data[0..4], "pack"))
-                return error.InvalidPack;
-
-            switch (data[4]) {
-                proto.data => try script_file.writeStreamingAll(io, data[5..]),
-                proto.end => break,
-                else => return error.InvalidPack,
-            }
-        }
+        try script_file.writeStreamingAll(io, spec.script);
     }
 
     const runner_user = daemon.config.runner.user orelse "weft-runner";
     const is_default_runner = std.mem.eql(u8, runner_user, "weft-runner");
 
     const home_dir_path = if (is_default_runner)
-        try paths.home(ara, req.task.workspace)
+        try paths.home(ara, spec.task.workspace)
     else
         try std.fmt.allocPrint(ara, "/home/{s}", .{runner_user});
 
@@ -434,14 +423,12 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
 
     const output_dir_path = try std.fs.path.join(ara, &.{ run_dir_path, "out" });
 
-    var out_buf: [1][]const u8 = undefined;
-    const outs = req.pipeline.outputs(&out_buf);
-    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(ara, outs.len + 2);
+    var state_dirs: std.ArrayList([]const u8) = try .initCapacity(ara, spec.outputs.len + 2);
     try state_dirs.append(ara, paths.state_dir(cwd_dir_path));
     if (is_default_runner)
         try state_dirs.append(ara, paths.state_dir(home_dir_path));
 
-    for (outs) |output| {
+    for (spec.outputs) |output| {
         const path = try std.fs.path.join(ara, &.{
             output_dir_path,
             output,
@@ -453,12 +440,12 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
     var bind_paths: std.ArrayList([]const u8) = .empty;
     var bind_paths_read: std.ArrayList([]const u8) = .empty;
 
-    if (req.pipeline.pkgs.len > 0) {
+    if (spec.pkgs.len > 0) {
         try bind_paths_read.append(ara, "/var/lib/weft/store:/nix/store");
         try bind_paths_read.append(ara, "/var/lib/weft/store");
     }
 
-    for (req.pipeline.keep) |keep| {
+    for (spec.keep) |keep| {
         const cache_path = try task.keep_path(ara, keep.@"0");
         const mount_path = try std.fs.path.join(gpa, &.{ cwd_dir_path, keep.@"1" });
         defer gpa.free(mount_path);
@@ -476,7 +463,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         var env: std.ArrayList([]const u8) = .empty;
         const input_dir = try paths.artifacts(
             ara,
-            req.task.workspace,
+            spec.task.workspace,
             &deployment,
         );
         try env.append(ara, try std.fmt.allocPrint(ara, "IN={s}", .{input_dir}));
@@ -485,9 +472,9 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         try env.append(ara, try std.mem.join(ara, "=", &.{ "USER", runner_user }));
         try env.append(ara, try std.mem.join(ara, "=", &.{ "LOGNAME", runner_user }));
 
-        if (req.pipeline.pkgs.len > 0) {
+        if (spec.pkgs.len > 0) {
             var pkg_bin_paths: std.ArrayList([]const u8) = .empty;
-            for (req.pipeline.pkgs) |basename| {
+            for (spec.pkgs) |basename| {
                 const bin_dir = try std.fmt.allocPrint(ara, "/nix/store/{s}/bin", .{basename});
                 try pkg_bin_paths.append(ara, bin_dir);
             }
@@ -495,14 +482,16 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
             try env.append(ara, try std.fmt.allocPrint(ara, "PATH={s}:/usr/local/bin:/usr/bin:/bin", .{joined_bins}));
         }
 
-        for (req.pipeline.env) |pair|
+        for (spec.vars) |pair|
             try env.append(ara, try std.mem.join(ara, "=", &.{ pair.@"0", pair.@"1" }));
         break :bind_env env;
     };
 
-    switch (req.pipeline.second_instance) {
+    switch (spec.second_instance) {
         .ignore => {},
         .kill => {
+            if (try task.is_active(gpa, io))
+                try task.kill(gpa, io);
             var siblings = try task.siblings(gpa, daemon.io);
             defer siblings.deinit(daemon.io);
             while (try siblings.next(io)) |sibling|
@@ -510,6 +499,8 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
                     try sibling.kill(gpa, io);
         },
         .fail => {
+            if (try task.is_active(gpa, io))
+                return error.AlreadyRunning;
             var siblings = try task.siblings(gpa, daemon.io);
             defer siblings.deinit(daemon.io);
             while (try siblings.next(io)) |sibling|
@@ -571,12 +562,12 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
                 .stdout = .{ .append = log_path },
             },
             .resources = .{
-                .memory_max = req.pipeline.memory_max,
-                .memory_high = req.pipeline.memory_high,
-                .cpu_quota = req.pipeline.cpu_quota,
-                .tasks_max = req.pipeline.tasks_max,
-                .io_weight = req.pipeline.io_weight,
-                .timeout = req.pipeline.timeout,
+                .memory_max = spec.memory_max,
+                .memory_high = spec.memory_high,
+                .cpu_quota = spec.cpu_quota,
+                .tasks_max = spec.tasks_max,
+                .io_weight = spec.io_weight,
+                .timeout = spec.timeout,
             },
         },
     );

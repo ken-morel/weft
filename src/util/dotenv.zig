@@ -95,6 +95,20 @@ pub fn load_env(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, env_name:
     return result;
 }
 
+pub fn load_file(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, filename: []const u8) !?DotEnv {
+    var result: DotEnv = .{};
+    errdefer result.deinit(alloc);
+    const content = dir.readFileAllocOptions(io, filename, alloc, .limited(1 << 20), .of(u8), 0) catch |err| {
+        if (err == error.FileNotFound)
+            return null;
+        return err;
+    };
+    try result.contents.append(alloc, content);
+    try parse_into(alloc, &result.map, content);
+    return result;
+}
+
 pub fn load(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !DotEnv {
     return load_env(alloc, io, dir, null);
 }
+

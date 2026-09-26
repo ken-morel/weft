@@ -20,7 +20,7 @@ const Task = @import("daemon/Task.zig");
 const proto = @import("domain/proto.zig");
 const Term = @import("domain/Term.zig");
 const argz = @import("util/argz.zig");
-pub const Monitor = @import("util/Monitor.zig");
+const Monitor = @import("util/Monitor.zig");
 
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
@@ -29,11 +29,6 @@ pub const std_options: std.Options = .{
 const Argz = union(enum) {
     pub const doc =
         \\Weft, a deployment tool
-        \\Options (before the command):
-        \\  -q, --quiet             Only log errors
-        \\  -v, --verbose           Also log debug messages
-        \\  --no-color              Disable colored output
-        \\
     ;
     daemon: union(enum) {
         pub const doc = "Perform actions on the local daemon";
@@ -157,48 +152,32 @@ const Argz = union(enum) {
     },
 };
 
-fn parse_term_options(args: []const []const u8, term: *Term) usize {
-    var idx: usize = 1;
-    while (idx < args.len) : (idx += 1) {
-        const arg = args[idx];
-        if (!std.mem.startsWith(u8, arg, "-"))
-            break;
-        if (std.mem.eql(u8, arg, "-q") or std.mem.eql(u8, arg, "--quiet"))
-            term.log_level = .err
-        else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verbose"))
-            term.log_level = .debug
-        else if (std.mem.eql(u8, arg, "--no-color"))
-            term.is_tty = false
-        else
-            break;
-    }
-    return idx;
-}
-
 pub fn main(init: std.process.Init) !void {
     var allocator: std.heap.DebugAllocator(.{
         .stack_trace_frames = 10,
     }) = .init;
     defer _ = allocator.deinit();
-    const alloc = allocator.allocator();
+    const gpa = allocator.allocator();
 
-    const arena_alloc = init.arena.allocator();
-    const args = try init.minimal.args.toSlice(arena_alloc);
+    const alloc = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(alloc);
 
-    var term = try Term.init(alloc, init.io);
+    var term = try Term.init(gpa, init.io);
     defer {
         _ = term.flush() catch {};
-        term.deinit(alloc, init.io);
+        term.deinit(gpa, init.io);
     }
 
-    const first = parse_term_options(args, &term);
-
-    if (args.len <= first or (args.len > first and (std.mem.eql(u8, args[first], "--help") or std.mem.eql(u8, args[first], "-h")))) {
+    if (args.len <= 1 or
+        (args.len > 1 and
+            (std.mem.eql(u8, args[1], "--help") or
+                std.mem.eql(u8, args[1], "-h"))))
+    {
         argz.help("weft", Argz, .{ .command = &.{} }, &term);
         return;
     }
 
-    const parsed_cmd = argz.parse(Argz, arena_alloc, init.io, args[first..]) catch |err| {
+    const parsed = argz.parse(Argz, alloc, init.io, args[1..]) catch |err| {
         if (err == error.ExpectedCommand or err == error.InvalidCommand) {
             argz.help("weft", Argz, .{ .command = &.{} }, &term);
             return;
@@ -207,37 +186,35 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 
-    switch (parsed_cmd) {
+    switch (parsed) {
         .daemon => |d| switch (d) {
             .install => |i| {
-                try DaemonInstall.install(init.io, alloc, &term, i.user);
-                term.success("weft daemon installed", .{});
+                try DaemonInstall.install(init.io, gpa, &term, i.user);
             },
             .run => {
                 const installation: DaemonInstall = try .init(init.io);
-                var daemon = try Daemon.init(alloc, init.io, installation, &term);
+                var daemon = try Daemon.init(gpa, init.io, installation, &term);
                 defer daemon.deinit();
-                term.info("starting daemon on :{d}", .{daemon.config.port});
                 return daemon.run();
             },
             .token => {
-                const config = try DaemonInstall.read_config(init.io, alloc, &term);
-                defer std.zon.parse.free(alloc, config);
+                const config = try DaemonInstall.read_config(init.io, gpa, &term);
                 term.println("{s}", .{config.secret});
+                std.zon.parse.free(gpa, config);
             },
             .ipc => |i| switch (i) {
                 .completed => |msg| {
-                    try clinternal.task_completed(alloc, init.io, &term, msg.task, msg.code);
+                    try clinternal.task_completed(gpa, init.io, &term, msg.task, msg.code);
                 },
             },
         },
         .check => |cmd| {
-            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{ .iterate = true });
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            cmd_check.run(alloc, init.io, &term, project, installation, cmd.env) catch |err| switch (err) {
+            cmd_check.run(gpa, init.io, &term, project, installation, cmd.env) catch |err| switch (err) {
                 error.ValidationFailed, error.InvalidConfig => return,
                 else => return err,
             };
@@ -247,12 +224,12 @@ pub fn main(init: std.process.Init) !void {
                 term.err("usage: weft do [remote].pipeline [[remote].pipeline ...]", .{});
                 return error.Usage;
             }
-            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            return cmd_do.run(alloc, init.io, &term, project, installation, .{
+            return cmd_do.run(gpa, init.io, &term, project, installation, .{
                 .start = .{
                     .targets = cmd.targets,
                     .env = cmd.env,
@@ -260,7 +237,7 @@ pub fn main(init: std.process.Init) !void {
             });
         },
         .retry => |cmd| {
-            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
@@ -276,46 +253,46 @@ pub fn main(init: std.process.Init) !void {
                     return error.NoDeployments;
                 };
 
-            return cmd_do.run(alloc, init.io, &term, project, installation, .{ .retry = resume_id });
+            return cmd_do.run(gpa, init.io, &term, project, installation, .{ .retry = resume_id });
         },
         .list => {
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            return cmd_list.run(alloc, init.io, &term, project);
+            return cmd_list.run(gpa, init.io, &term, project);
         },
         .follow => |cmd| {
-            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            return cmd_follow.run(alloc, init.io, &term, project, installation, cmd.pipeline, cmd.deployment);
+            return cmd_follow.run(gpa, init.io, &term, project, installation, cmd.pipeline, cmd.deployment);
         },
         .monitor => |cmd| {
-            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
-            return cmd_monitor.run(alloc, init.io, &term, installation, cmd.spec);
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+            return cmd_monitor.run(gpa, init.io, &term, installation, cmd.spec);
         },
         .remote => |r| switch (r) {
             .install => |install| {
-                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
 
                 var extra_list: std.ArrayList([]const u8) = .empty;
-                defer extra_list.deinit(alloc);
+                defer extra_list.deinit(gpa);
                 if (install.user) |user| {
-                    try extra_list.append(alloc, "--user");
-                    try extra_list.append(alloc, user);
+                    try extra_list.append(gpa, "--user");
+                    try extra_list.append(gpa, user);
                 }
                 for (install.extra) |arg| {
-                    try extra_list.append(alloc, arg);
+                    try extra_list.append(gpa, arg);
                 }
 
                 const weft_host: ?[]const u8 = if (install.addr) |a| a.host else null;
                 const weft_port: ?u16 = if (install.addr) |a| a.port else null;
 
                 return cmd_remote.install(
-                    alloc,
+                    gpa,
                     init.io,
                     &term,
                     installation,
@@ -327,39 +304,39 @@ pub fn main(init: std.process.Init) !void {
                 );
             },
             .list => {
-                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
-                return cmd_remote.list(alloc, init.io, &term, installation);
+                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+                return cmd_remote.list(gpa, init.io, &term, installation);
             },
             .remove => |r_rm| {
-                const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
-                return cmd_remote.remove(alloc, init.io, &term, installation, r_rm.name);
+                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+                return cmd_remote.remove(gpa, init.io, &term, installation, r_rm.name);
             },
         },
         .kill => |cmd| {
-            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            return cmd_kill.run(alloc, init.io, &term, project, installation, cmd.deployment, cmd.pipeline);
+            return cmd_kill.run(gpa, init.io, &term, project, installation, cmd.deployment, cmd.pipeline);
         },
         .gc => |cmd| {
-            const installation: ClientInstall = try .init(alloc, init.io, init.environ_map);
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = std.Io.Dir.cwd().openDir(init.io, ".", .{}) catch null;
             defer if (project_dir) |*d| d.close(init.io);
             const project = if (project_dir) |d| Project.open(d) catch null else null;
 
-            return cmd_gc.run(alloc, init.io, &term, project, installation, cmd.remote, cmd.keep, cmd.older_than, cmd.dry_run);
+            return cmd_gc.run(gpa, init.io, &term, project, installation, cmd.remote, cmd.keep, cmd.older_than, cmd.dry_run);
         },
         .nix => |n| switch (n) {
             .show => |cmd| {
                 var client: std.http.Client = .{
                     .io = init.io,
-                    .allocator = alloc,
+                    .allocator = gpa,
                 };
                 defer client.deinit();
 
-                const basename = nix.query_store_basename(alloc, &client, cmd.pkg, "latest") catch |err| {
+                const basename = nix.query_store_basename(gpa, &client, cmd.pkg, "latest") catch |err| {
                     switch (err) {
                         error.PackageNotFound => {
                             term.err("package '{s}' not found on Hydra", .{cmd.pkg});
@@ -371,7 +348,7 @@ pub fn main(init: std.process.Init) !void {
                     _ = term.flush() catch {};
                     std.process.exit(1);
                 };
-                defer alloc.free(basename);
+                defer gpa.free(basename);
 
                 term.println("{s}", .{basename});
             },

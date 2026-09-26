@@ -2,19 +2,11 @@ const std = @import("std");
 
 const Glob = @import("../util/Glob.zig");
 
-pub const EnvBinding = union(enum) {
-    database: []const u8,
-    volume: []const u8,
-    port: []const u8,
-    string: []const u8,
-    env_var: []const u8,
-    interpolate: []const EnvBinding,
-};
-
 pub const Keep = struct {
     []const u8,
     []const u8,
 };
+
 pub const Pipeline = struct {
     const Input = []const u8;
     const Output = []const u8;
@@ -25,7 +17,8 @@ pub const Pipeline = struct {
     };
     pub const Run = union(enum) {
         default,
-        script: []const u8,
+        script: []const []const u8,
+        file: []const u8,
         nothing,
     };
 
@@ -50,14 +43,7 @@ pub const Pipeline = struct {
     second_instance: SecondInstance = .ignore,
     keep: []Keep = &.{},
 
-    required_env: []const []const u8 = &.{},
-
-    databases: []const struct {} = &.{},
-    volumes: []const struct {} = &.{},
-    ports: []const struct {} = &.{},
-    env: []struct { []const u8, []const u8 } = &.{},
-
-    pkgs: []const []const u8 = &.{},
+    uses: []const []const u8 = &.{},
 
     pub fn inputs(self: @This()) []const []const u8 {
         return self.in;
@@ -73,37 +59,51 @@ pub const Pipeline = struct {
         return std.mem.eql(u8, self.name, artifact);
     }
     pub fn outputs(self: *const @This(), buf: *[1][]const u8) []const []const u8 {
-        if (self.out) |o| return o;
+        if (self.out) |o|
+            return o;
         buf[0] = self.name;
         return buf;
     }
 };
 
+environments: []const Env = &.{},
 workspace: []const u8,
 sources: ?[]const struct { []const u8, []const u8 } = null,
 
-databases: []const struct {} = &.{},
-ports: []const struct {} = &.{},
-volumes: []const struct {} = &.{},
-runtimes: []const struct {} = &.{},
-env: []struct { []const u8, []const u8 } = &.{},
-
 pipelines: []const Pipeline = &.{},
-required_env: []const []const u8 = &.{},
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
-    for (self.pipelines) |*pipeline|
+    return for (self.pipelines) |*pipeline| {
         if (std.mem.eql(u8, pipeline.name, name))
-            return pipeline;
-    return null;
+            break pipeline;
+    } else null;
 }
-pub fn get_sources(self: @This()) []const struct { []const u8, []const u8 } {
+pub inline fn get_sources(self: @This()) []const struct { []const u8, []const u8 } {
     return if (self.sources) |s|
         s
     else
         &.{.{ "", "." }};
 }
 
-pub fn is_source_artifact(p: []const u8) bool {
-    return std.mem.startsWith(u8, p, "src.") or std.mem.eql(u8, p, "src");
+pub inline fn is_source_artifact(p: []const u8) bool {
+    return std.mem.eql(u8, p, "src") or std.mem.startsWith(u8, p, "src.");
 }
+
+pub fn get_environment(self: @This(), name: []const u8) ?*const Env {
+    return for (self.environments) |*environment| {
+        if (std.mem.eql(u8, environment.name, name))
+            break environment;
+    } else null;
+}
+
+pub const Env = struct {
+    name: []const u8,
+    uses: []const []const u8 = &.{},
+    vars: []struct { []const u8, ?[]const u8 } = &.{},
+    pkgs: []const []const u8 = &.{},
+    databases: []const Database = &.{},
+    pub const Database = struct {
+        name: []const u8,
+        type: enum { postgres },
+    };
+};

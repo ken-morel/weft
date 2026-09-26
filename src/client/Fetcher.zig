@@ -4,7 +4,6 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const dotenv_mod = @import("../util/dotenv.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");

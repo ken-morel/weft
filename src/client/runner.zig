@@ -1,10 +1,10 @@
 const std = @import("std");
 
+const Task = @import("../daemon/Task.zig");
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const dotenv = @import("../util/dotenv.zig");
 const Connection = @import("../wire/Connection.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
@@ -22,19 +22,9 @@ pub fn run_deployment(
     project: Project,
     inst: ClientInstall,
     deployment: *Deployment,
-    env_name: ?[]const u8,
 ) !void {
     const remotes = try inst.get_remotes(gpa, io, term);
     defer gpa.free(remotes);
-
-    var env = dotenv.load_env(gpa, io, project.dir, env_name) catch |err| {
-        if (err == error.EnvFileNotFound) {
-            term.err("Environment file not found for env '{s}'", .{env_name.?});
-            return err;
-        }
-        return err;
-    };
-    defer env.deinit(gpa);
 
     var state: DeploymentState = .init(gpa, &project);
     defer state.deinit();
@@ -95,7 +85,7 @@ pub fn run_deployment(
                 io,
                 &group,
                 spawn_step,
-                .{ gpa, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, &env, inst.env },
+                .{ gpa, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, inst.env },
             );
         }
 
@@ -224,7 +214,6 @@ pub fn spawn_step(
     pipeline: *const Weft.Pipeline,
     fetcher: *Fetcher,
     step: Deployment.Step,
-    env: *const dotenv.DotEnv,
     env_map: *const std.process.Environ.Map,
 ) !void {
     errdefer if (depl.lock(io)) |_| {
@@ -235,7 +224,7 @@ pub fn spawn_step(
         depl.unlock(io);
     } else |_| {};
 
-    const script_name = switch (pipeline.run) {
+    const script_content = switch (pipeline.run) {
         .nothing => {
             try depl.lock(io);
             defer depl.unlock(io);
@@ -254,74 +243,61 @@ pub fn spawn_step(
             try dep.save(gpa, io, project);
             return;
         },
-        .default => pipeline.name,
-        .script => |s| s,
-    };
-
-    const resolved_env = resolved_env: {
-        var merged_env: std.StringHashMapUnmanaged([]const u8) = .empty;
-        defer merged_env.deinit(gpa);
-
-        for (dep.config.env) |entry|
-            try merged_env.put(gpa, entry.@"0", entry.@"1");
-        for (dep.config.required_env) |key| {
-            if (env.get(key)) |val|
-                try merged_env.put(gpa, key, val)
-            else if (env_map.get(key)) |val|
-                try merged_env.put(gpa, key, val)
-            else {
-                var found_in_workspace = false;
-                for (dep.config.env) |entry| {
-                    if (std.mem.eql(u8, entry.@"0", key)) {
-                        found_in_workspace = true;
-                        break;
-                    }
-                }
-                if (!found_in_workspace) {
-                    term.err("Required env var '{s}' not found in environment or .env file for pipeline {s}", .{ key, pipeline.name });
-                    return error.MissingRequiredEnv;
-                }
+        .script => |lines| inline_script: {
+            if (lines.len == 0) {
+                term.err("pipeline '{s}': .run.script cannot be empty", .{pipeline.name});
+                return error.EmptyScript;
             }
-        }
-        for (pipeline.env) |entry|
-            try merged_env.put(gpa, entry.@"0", entry.@"1");
-        for (pipeline.required_env) |key| {
-            if (env.get(key)) |val|
-                try merged_env.put(gpa, key, val)
-            else if (env_map.get(key)) |val|
-                try merged_env.put(gpa, key, val)
-            else {
-                var found_in_pipeline = false;
-                for (pipeline.env) |entry| {
-                    if (std.mem.eql(u8, entry.@"0", key)) {
-                        found_in_pipeline = true;
-                        break;
-                    }
-                }
-                if (!found_in_pipeline) {
-                    term.err("Required env var '{s}' not found in environment or .env file for pipeline {s}", .{ key, pipeline.name });
-                    return error.MissingRequiredEnv;
-                }
+            if (!std.mem.startsWith(u8, lines[0], "#!")) {
+                term.err("pipeline '{s}': first line of .run.script must be a '#!' shebang", .{pipeline.name});
+                return error.MissingShebang;
             }
-        }
+            var script_buf: std.ArrayList(u8) = .empty;
+            errdefer script_buf.deinit(gpa);
+            for (lines) |line| {
+                try script_buf.appendSlice(gpa, line);
+                try script_buf.append(gpa, '\n');
+            }
+            break :inline_script try script_buf.toOwnedSlice(gpa);
+        },
+        .default, .file => file_script: {
+            const script_name = switch (pipeline.run) {
+                .default => pipeline.name,
+                .file => |f| f,
+                else => unreachable,
+            };
+            const script_path = try project.locate_script(gpa, io, script_name) orelse {
+                term.err("weft folder not found, cannot run pipeline {s}", .{pipeline.name});
+                return error.FileNotFound;
+            };
+            defer gpa.free(script_path);
 
-        var result: std.ArrayList(struct { []const u8, []const u8 }) = .empty;
-        var iter = merged_env.iterator();
-        while (iter.next()) |entry|
-            try result.append(gpa, .{ entry.key_ptr.*, entry.value_ptr.* });
-        break :resolved_env result;
+            break :file_script project.dir.readFileAlloc(io, script_path, gpa, .limited(64 * 1024)) catch |err| {
+                if (err == error.FileNotFound)
+                    term.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name })
+                else if (err == error.FileTooBig)
+                    term.err("Script {s} exceeds 64KB limit for pipeline {s}", .{ script_path, pipeline.name });
+                return err;
+            };
+        },
     };
+    defer gpa.free(script_content);
 
-    var resolved_pipeline = pipeline.*;
-    resolved_pipeline.env = resolved_env.items;
+    var spec = try Task.resolve(
+        gpa,
+        io,
+        term,
+        &dep.config,
+        pipeline,
+        dep.id,
+        project.dir,
+        dep.env,
+        env_map,
+        script_content,
+    );
+    defer spec.deinit(gpa);
 
-    const task_id: proto.task.Id = .{
-        .deployment = dep.id,
-        .pipeline = step.pipeline,
-        .workspace = dep.config.workspace,
-    };
-
-    for (pipeline.inputs()) |input|
+    for (spec.inputs) |input|
         try fetcher.upload(io, remote, input);
 
     const buffer = try gpa.alloc(u8, Connection.max_packet_size);
@@ -335,41 +311,8 @@ pub fn spawn_step(
 
         try client.conn.send_object(buffer, proto.Request, .task_spawn);
         try client.conn.send_object(buffer, proto.task.spawn.Req, .{
-            .task = task_id,
-            .pipeline = resolved_pipeline,
+            .spec = spec,
         });
-
-        const script_path = try project.locate_script(gpa, io, script_name) orelse {
-            term.err("weft folder not found, cannot run pipeline {s}", .{pipeline.name});
-            return error.FileNotFound;
-        };
-
-        defer gpa.free(script_path);
-
-        upload_script: {
-            const script = project.dir.openFile(io, script_path, .{}) catch |err| {
-                if (err == error.FileNotFound)
-                    term.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name });
-                return err;
-            };
-            defer script.close(io);
-
-            while (true) {
-                const size = script.readStreaming(io, &.{buffer[5..]}) catch |err|
-                    if (err == error.EndOfStream)
-                        break
-                    else
-                        return err;
-                if (size == 0) break;
-                @memcpy(buffer[0..4], "pack");
-                buffer[4] = proto.data;
-                try client.conn.send(buffer[0 .. 5 + size]);
-            }
-            @memcpy(buffer[0..4], "pack");
-            buffer[4] = proto.end;
-            try client.conn.send(buffer[0..5]);
-            break :upload_script;
-        }
 
         const res = client.conn.recv_object_buf(
             buffer,

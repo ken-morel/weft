@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Deployment = @import("../client/Deployment.zig");
+const Task = @import("../daemon/Task.zig");
 const Weft = @import("../domain/Weft.zig");
 const zoto = @import("../util/zoto.zig");
 
@@ -76,8 +77,7 @@ pub const task = struct {
 
     pub const spawn = struct {
         pub const Req = struct {
-            task: task.Id,
-            pipeline: Weft.Pipeline,
+            spec: Task.Spec,
         };
         pub const Res = struct {};
     };
