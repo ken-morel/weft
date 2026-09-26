@@ -169,9 +169,8 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[
             .argv = &.{ "systemctl", "restart", "weftd.service" },
         });
         const childr_term = try child_restart.wait(io);
-        if (childr_term != .exited or childr_term != 0) {
+        if (childr_term != .exited or childr_term.exited != 0)
             return error.SystemctlRestartFailed;
-        }
 
         break :setup_service;
     }
@@ -183,10 +182,9 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[
         var child_en = try std.process.spawn(io, .{
             .argv = &.{ "systemd-sysusers", sysusers_config_path },
         });
-        const term = try child_en.wait(io);
-        if (term != .exited or term.exited != 0) {
+        const t = try child_en.wait(io);
+        if (t != .exited or t.exited != 0)
             return error.SystemdFailed;
-        }
 
         break :setup_sysusers;
     }

@@ -179,7 +179,7 @@ pub const Unpacker = struct {
                 try expect(reader, "name", buf);
                 var name_storage: [256]u8 = undefined;
                 const entry_name = try take(reader, &name_storage);
-                try valiate_archive_name(enry_name);
+                try validate_archive_name(entry_name);
                 try expect(reader, "node", buf);
                 try self.unpack_node(io, reader, current_dir, entry_name, buf);
                 try expect(reader, ")", buf);

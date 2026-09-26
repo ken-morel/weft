@@ -88,7 +88,7 @@ fn extract_token(output: []const u8) ?[]const u8 {
 }
 
 pub fn install(
-    alloc: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     io: std.Io,
     term: *Term,
     installation: ClientInstall,
@@ -98,23 +98,23 @@ pub fn install(
     weft_port: ?u16,
     extra_args: []const []const u8,
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(alloc);
+    var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
-    const arena_alloc = arena.allocator();
+    const alloc = arena.allocator();
 
-    const target = try parse_target(arena_alloc, ssh_target);
+    const target = try parse_target(alloc, ssh_target);
 
     const host = if (weft_host) |h|
         h
     else
-        try resolve_host(arena_alloc, io, target.ssh_dest, target.port, target.host);
+        try resolve_host(alloc, io, target.ssh_dest, target.port, target.host);
 
     const port = weft_port orelse 9338;
 
-    const exe_path = try std.process.executablePathAlloc(io, arena_alloc);
+    const exe_path = try std.process.executablePathAlloc(io, alloc);
 
     term.op("uploading weft binary to {s}...", .{target.ssh_dest});
-    const scp_dst = try std.fmt.allocPrint(arena_alloc, "{s}:/tmp/weft", .{target.ssh_dest});
+    const scp_dst = try std.fmt.allocPrint(alloc, "{s}:/tmp/weft", .{target.ssh_dest});
 
     const scp_argv: []const []const u8 = if (target.port) |p|
         &.{ "scp", "-P", p, exe_path, scp_dst }
@@ -135,23 +135,23 @@ pub fn install(
 
     term.op("installing weft daemon on {s}...", .{target.ssh_dest});
     var install_argv: std.ArrayList([]const u8) = .empty;
-    try install_argv.append(arena_alloc, "ssh");
+    try install_argv.append(alloc, "ssh");
     if (target.port) |p| {
-        try install_argv.append(arena_alloc, "-p");
-        try install_argv.append(arena_alloc, p);
+        try install_argv.append(alloc, "-p");
+        try install_argv.append(alloc, p);
     }
-    try install_argv.append(arena_alloc, target.ssh_dest);
-    try install_argv.append(arena_alloc, "sh");
-    try install_argv.append(arena_alloc, "-c");
+    try install_argv.append(alloc, target.ssh_dest);
+    try install_argv.append(alloc, "sh");
+    try install_argv.append(alloc, "-c");
 
     const setup_script = try std.fmt.allocPrint(
-        arena_alloc,
+        alloc,
         "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft",
         .{},
     );
-    try install_argv.append(arena_alloc, setup_script);
+    try install_argv.append(alloc, setup_script);
 
-    const setup_res = try std.process.run(arena_alloc, io, .{
+    const setup_res = try std.process.run(alloc, io, .{
         .argv = install_argv.items,
     });
     if (setup_res.term != .exited or setup_res.term.exited != 0) {
@@ -159,22 +159,22 @@ pub fn install(
         return error.RemoteInstallFailed;
     }
 
-    var daemon_argv = std.ArrayList([]const u8).init(arena_alloc);
-    try daemon_argv.append(arena_alloc, "ssh");
+    var daemon_argv: std.ArrayList([]const u8) = .empty;
+    try daemon_argv.append(alloc, "ssh");
     if (target.port) |p| {
-        try daemon_argv.append(arena_alloc, "-p");
-        try daemon_argv.append(arena_alloc, p);
+        try daemon_argv.append(alloc, "-p");
+        try daemon_argv.append(alloc, p);
     }
-    try daemon_argv.append(arena_alloc, target.ssh_dest);
-    try daemon_argv.append(arena_alloc, "/usr/local/bin/weft");
-    try daemon_argv.append(arena_alloc, "daemon");
-    try daemon_argv.append(arena_alloc, "install");
+    try daemon_argv.append(alloc, target.ssh_dest);
+    try daemon_argv.append(alloc, "/usr/local/bin/weft");
+    try daemon_argv.append(alloc, "daemon");
+    try daemon_argv.append(alloc, "install");
 
     for (extra_args) |arg| {
-        try daemon_argv.append(arena_alloc, arg);
+        try daemon_argv.append(alloc, arg);
     }
 
-    const daemon_res = try std.process.run(arena_alloc, io, .{
+    const daemon_res = try std.process.run(alloc, io, .{
         .argv = daemon_argv.items,
     });
     if (daemon_res.term != .exited or daemon_res.term.exited != 0) {
@@ -182,18 +182,18 @@ pub fn install(
         return error.RemoteInstallFailed;
     }
 
-    var token_argv = std.ArrayList([]const u8).init(arena_alloc);
-    try token_argv.append(arena_alloc, "ssh");
+    var token_argv: std.ArrayList([]const u8) = .empty;
+    try token_argv.append(alloc, "ssh");
     if (target.port) |p| {
-        try token_argv.append(arena_alloc, "-p");
-        try token_argv.append(arena_alloc, p);
+        try token_argv.append(alloc, "-p");
+        try token_argv.append(alloc, p);
     }
-    try token_argv.append(arena_alloc, target.ssh_dest);
-    try token_argv.append(arena_alloc, "/usr/local/bin/weft");
-    try token_argv.append(arena_alloc, "daemon");
-    try token_argv.append(arena_alloc, "token");
+    try token_argv.append(alloc, target.ssh_dest);
+    try token_argv.append(alloc, "/usr/local/bin/weft");
+    try token_argv.append(alloc, "daemon");
+    try token_argv.append(alloc, "token");
 
-    const token_res = try std.process.run(arena_alloc, io, .{
+    const token_res = try std.process.run(alloc, io, .{
         .argv = token_argv.items,
     });
     if (token_res.term != .exited or token_res.term.exited != 0) {
@@ -205,31 +205,31 @@ pub fn install(
         term.err("could not extract daemon token from remote output:\n{s}", .{token_res.stdout});
         return error.TokenNotFound;
     };
-    const existing_remotes = try installation.get_remotes(arena_alloc, io, term);
+    const existing_remotes = try installation.get_remotes(alloc, io, term);
 
     var remotes_list: std.ArrayList(Remote) = .empty;
     var updated = false;
 
     for (existing_remotes) |rem| {
         if (std.mem.eql(u8, rem.get_name(), name)) {
-            try remotes_list.append(arena_alloc, .{
-                .name = try arena_alloc.dupe(u8, name),
+            try remotes_list.append(alloc, .{
+                .name = try alloc.dupe(u8, name),
                 .address = if (weft_host != null or weft_port != null)
-                    .{ try arena_alloc.dupe(u8, host), port }
+                    .{ try alloc.dupe(u8, host), port }
                 else
                     rem.address,
-                .token = try arena_alloc.dupe(u8, token),
+                .token = try alloc.dupe(u8, token),
                 .groups = rem.groups,
             });
             updated = true;
-        } else try remotes_list.append(arena_alloc, rem);
+        } else try remotes_list.append(alloc, rem);
     }
 
     if (!updated)
-        try remotes_list.append(arena_alloc, .{
-            .name = try arena_alloc.dupe(u8, name),
-            .address = .{ try arena_alloc.dupe(u8, host), port },
-            .token = try arena_alloc.dupe(u8, token),
+        try remotes_list.append(alloc, .{
+            .name = try alloc.dupe(u8, name),
+            .address = .{ try alloc.dupe(u8, host), port },
+            .token = try alloc.dupe(u8, token),
             .groups = &.{},
         });
 
