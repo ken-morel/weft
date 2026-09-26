@@ -179,6 +179,7 @@ pub const Unpacker = struct {
                 try expect(reader, "name", buf);
                 var name_storage: [256]u8 = undefined;
                 const entry_name = try take(reader, &name_storage);
+                try valiate_archive_name(enry_name);
                 try expect(reader, "node", buf);
                 try self.unpack_node(io, reader, current_dir, entry_name, buf);
                 try expect(reader, ")", buf);
@@ -221,6 +222,20 @@ pub const Unpacker = struct {
             try expect(reader, ")", buf);
         } else {
             return error.UnknownNodeType;
+        }
+    }
+
+    fn validate_archive_name(name: []const u8) !void {
+        if (name.len == 0) {
+            return error.InvalidArchivePath;
+        }
+
+        if (name[0] == '/' or name[0] == '\\') {
+            return error.InvalidArchivePath;
+        }
+
+        if (std.mem.eql(u8, name, "..") or std.mem.eql(u8, name, ".")) {
+            return error.InvalidArchivePath;
         }
     }
 };
