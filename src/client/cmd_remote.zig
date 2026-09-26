@@ -134,37 +134,77 @@ pub fn install(
     }
 
     term.op("installing weft daemon on {s}...", .{target.ssh_dest});
-    var install_cmd: std.ArrayList([]const u8) = .empty;
-    try install_cmd.append(arena_alloc, "/usr/local/bin/weft daemon install");
-    for (extra_args) |arg| {
-        try install_cmd.append(arena_alloc, arg);
+    var install_argv: std.ArrayList([]const u8) = .empty;
+    try install_argv.append(arena_alloc, "ssh");
+    if (target.port) |p| {
+        try install_argv.append(arena_alloc, "-p");
+        try install_argv.append(arena_alloc, p);
     }
-    const install_cmd_str = try std.mem.join(arena_alloc, " ", install_cmd.items);
+    try install_argv.append(arena_alloc, target.ssh_dest);
+    try install_argv.append(arena_alloc, "sh");
+    try install_argv.append(arena_alloc, "-c");
 
-    const remote_script = try std.fmt.allocPrint(
+    const setup_script = try std.fmt.allocPrint(
         arena_alloc,
-        "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft && {s} && /usr/local/bin/weft daemon token",
-        .{install_cmd_str},
+        "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft",
+        .{},
     );
+    try install_argv.append(arena_alloc, setup_script);
 
-    const ssh_argv: []const []const u8 = if (target.port) |p|
-        &.{ "ssh", "-p", p, target.ssh_dest, remote_script }
-    else
-        &.{ "ssh", target.ssh_dest, remote_script };
-
-    const ssh_res = try std.process.run(arena_alloc, io, .{
-        .argv = ssh_argv,
+    const setup_res = try std.process.run(arena_alloc, io, .{
+        .argv = install_argv.items,
     });
-    if (ssh_res.term != .exited or ssh_res.term.exited != 0) {
-        term.err("remote installation failed (exit code {any}): {s}", .{ ssh_res.term, ssh_res.stderr });
+    if (setup_res.term != .exited or setup_res.term.exited != 0) {
+        term.err("remote setup failed (exit code {any}): {s}", .{ setup_res.term, setup_res.stderr });
         return error.RemoteInstallFailed;
     }
 
-    const token = extract_token(ssh_res.stdout) orelse {
-        term.err("could not extract daemon token from remote output:\n{s}", .{ssh_res.stdout});
+    var daemon_argv = std.ArrayList([]const u8).init(arena_alloc);
+    try daemon_argv.append(arena_alloc, "ssh");
+    if (target.port) |p| {
+        try daemon_argv.append(arena_alloc, "-p");
+        try daemon_argv.append(arena_alloc, p);
+    }
+    try daemon_argv.append(arena_alloc, target.ssh_dest);
+    try daemon_argv.append(arena_alloc, "/usr/local/bin/weft");
+    try daemon_argv.append(arena_alloc, "daemon");
+    try daemon_argv.append(arena_alloc, "install");
+
+    for (extra_args) |arg| {
+        try daemon_argv.append(arena_alloc, arg);
+    }
+
+    const daemon_res = try std.process.run(arena_alloc, io, .{
+        .argv = daemon_argv.items,
+    });
+    if (daemon_res.term != .exited or daemon_res.term.exited != 0) {
+        term.err("remote installation failed (exit code {any}): {s}", .{ daemon_res.term, daemon_res.stderr });
+        return error.RemoteInstallFailed;
+    }
+
+    var token_argv = std.ArrayList([]const u8).init(arena_alloc);
+    try token_argv.append(arena_alloc, "ssh");
+    if (target.port) |p| {
+        try token_argv.append(arena_alloc, "-p");
+        try token_argv.append(arena_alloc, p);
+    }
+    try token_argv.append(arena_alloc, target.ssh_dest);
+    try token_argv.append(arena_alloc, "/usr/local/bin/weft");
+    try token_argv.append(arena_alloc, "daemon");
+    try token_argv.append(arena_alloc, "token");
+
+    const token_res = try std.process.run(arena_alloc, io, .{
+        .argv = token_argv.items,
+    });
+    if (token_res.term != .exited or token_res.term.exited != 0) {
+        term.err("remote token fetch failed (exit code {any}): {s}", .{ token_res.term, token_res.stderr });
+        return error.RemoteInstallFailed;
+    }
+
+    const token = extract_token(token_res.stdout) orelse {
+        term.err("could not extract daemon token from remote output:\n{s}", .{token_res.stdout});
         return error.TokenNotFound;
     };
-
     const existing_remotes = try installation.get_remotes(arena_alloc, io, term);
 
     var remotes_list: std.ArrayList(Remote) = .empty;
