@@ -79,7 +79,10 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[
     var child_stop = try std.process.spawn(io, .{
         .argv = &.{ "systemctl", "stop", "weftd.service" },
     });
-    _ = try child_stop.wait(io);
+    const stop_term = try child_stop.wait(io);
+    if (stop_term != .exited or stop_term.exited != 0) {
+        return error.SystemctlStopFailed;
+    }
 
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);
@@ -157,12 +160,18 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[
         var child_en = try std.process.spawn(io, .{
             .argv = &.{ "systemctl", "enable", "--now", "weftd.service" },
         });
-        _ = try child_en.wait(io);
+        const child_term = try child_en.wait(io);
+        if (child_term != .exited or child_term.exited != 0) {
+            return error.SystemctlEnableFailed;
+        }
 
         var child_restart = try std.process.spawn(io, .{
             .argv = &.{ "systemctl", "restart", "weftd.service" },
         });
-        _ = try child_restart.wait(io);
+        const childr_term = try child_restart.wait(io);
+        if (childr_term != .exited or childr_term != 0) {
+            return error.SystemctlRestartFailed;
+        }
 
         break :setup_service;
     }
@@ -174,7 +183,10 @@ pub fn install(io: std.Io, alloc: std.mem.Allocator, term: *Term, maybe_user: ?[
         var child_en = try std.process.spawn(io, .{
             .argv = &.{ "systemd-sysusers", sysusers_config_path },
         });
-        _ = try child_en.wait(io);
+        const term = try child_en.wait(io);
+        if (term != .exited or term.exited != 0) {
+            return error.SystemdFailed;
+        }
 
         break :setup_sysusers;
     }
