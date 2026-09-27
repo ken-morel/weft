@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build and Test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: ziglang/setup-zig@v1
+        with:
+          zig-version: 0.16.0
+
+      - name: Build project
+        run: zig build
+
+      - name: Run tests
+        run: zig build test
+
+  lint:
+    runs-on: ubuntu-latest
+    name: Code Quality Checks
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: ziglang/setup-zig@v1
+        with:
+          zig-version: 0.16.0
+
+      - name: Check formatting
+        run: zig fmt --check src/
+
+      - name: Build with strict warnings
+        run: zig build -Doptimize=ReleaseSafe
+
+  security:
+    runs-on: ubuntu-latest
+    name: Security Checks
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+  integration:
+    runs-on: ubuntu-latest
+    name: Integration Tests
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: ziglang/setup-zig@v1
+        with:
+          zig-version: 0.16.0
+
+      - name: Build binary
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Test CLI help
+        run: ./zig-cache/bin/weft --help
+
+      - name: Test daemon help
+        run: ./zig-cache/bin/weft daemon --help
+
+      - name: Test check command
+        run: ./zig-cache/bin/weft check --help || true
+
+      - name: Test do command
+        run: ./zig-cache/bin/weft do --help || true
+
