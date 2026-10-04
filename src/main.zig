@@ -1,4 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+const build = @import("build");
 
 const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_check = @import("client/cmd_check.zig");
@@ -50,24 +53,22 @@ const Argz = union(enum) {
             },
         },
     },
+    version: struct {
+        pub const doc = "Display information about the weft build";
+    },
 
     check: struct {
-        pub const doc = "Validate project configuration, pipeline DAG, scripts, and environment";
-        pub const doc_env = "Target extra environments to validate";
-
-        env: []const []const u8 = &.{},
+        pub const doc = "Validate weft.zon";
     },
 
     do: struct {
         pub const doc = "Start a deployment";
         pub const doc_targets = "The different deployment targets";
-        pub const doc_env = "Extra base environments";
 
-        targets: []Step = &.{},
-        env: [][]const u8 = &.{},
+        targets: [][]const u8 = &.{},
     },
-    retry: struct {
-        pub const doc = "Retry an existing deployment";
+    @"resume": struct {
+        pub const doc = "Resume an existing possibly failed deployment";
         pub const doc_deployment = "The id of the deployment, or shortened id containing the last unique letters of the deployment id (defaults to latest)";
 
         deployment: ?[]const u8 = null,
@@ -82,9 +83,9 @@ const Argz = union(enum) {
     },
     monitor: struct {
         pub const doc = "Monitor a remote";
-        pub const doc_spec = "The remote to monitor. If ommited all remotes will be followed";
+        pub const doc_spec = "The remote to monitor. Follows 'local' by default ";
 
-        spec: ?[]const u8 = null,
+        spec: []const u8 = "local",
     },
     remote: union(enum) {
         pub const doc = "Perform actions on a remote";
@@ -103,23 +104,16 @@ const Argz = union(enum) {
             user: ?[]const u8 = null,
             extra: [][]const u8 = &.{},
         },
-        list: struct {
-            pub const doc = "List registered remotes";
-        },
-        remove: struct {
-            pub const doc = "Remove a remote from remotes.zon";
-            pub const doc_name = "The name of the remote to remove";
-
-            name: []const u8,
-        },
     },
     kill: struct {
         pub const doc = "Kill a deployment or a specific pipeline in a deployment";
-        pub const doc_deployment = "The deployment id (defaults to latest)";
-        pub const doc_pipeline = "The pipeline name to kill (omit to kill all pipelines in deployment)";
+        pub const doc_remote = "The remote where to kill the task";
+        pub const doc_deployment = "The deployment id";
+        pub const doc_pipeline = "The pipeline name to kill";
 
-        deployment: ?[]const u8 = null,
-        pipeline: ?[]const u8 = null,
+        remote: []const u8,
+        deployment: []const u8,
+        pipeline: []const u8,
     },
     gc: struct {
         pub const doc = "Garbage collect old artifacts on remotes or locally";
@@ -149,11 +143,7 @@ const Argz = union(enum) {
 };
 
 pub fn main(init: std.process.Init) !void {
-    var allocator: std.heap.DebugAllocator(.{
-        .stack_trace_frames = 10,
-    }) = .init;
-    defer _ = allocator.deinit();
-    const gpa = allocator.allocator();
+    const gpa = init.gpa;
 
     const alloc = init.arena.allocator();
     const args = try init.minimal.args.toSlice(alloc);
@@ -183,6 +173,33 @@ pub fn main(init: std.process.Init) !void {
     };
 
     switch (parsed) {
+        .version => {
+            const es = std.time.epoch.EpochSeconds{ .secs = @intCast(build.build_time_seconds) };
+            const day = es.getDaySeconds();
+            const yd = es.getEpochDay().calculateYearDay();
+            const md = yd.calculateMonthDay();
+            const build_time = try gpa.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} ", .{
+                yd.year,
+                @backingInt(md.month),
+                md.day_index + 1,
+                day.getHoursIntoDay(),
+                day.getMinutesIntoHour(),
+                day.getSecondsIntoMinute(),
+            });
+            defer gpa.free(build_time);
+
+            term.println(
+                \\ Weft
+                \\  version:     v0.1.0-dev1 
+                \\  build time:  {s}
+                \\  build mode:  {s}
+                \\  schema hash: {s}
+            , .{
+                build_time,
+                @tagName(builtin.mode),
+                &std.fmt.hex(proto.hash),
+            });
+        },
         .daemon => |d| switch (d) {
             .install => |i| {
                 try DaemonInstall.install(init.io, gpa, &term, i.user);
@@ -203,22 +220,50 @@ pub fn main(init: std.process.Init) !void {
                 },
             },
         },
-        .check => |cmd| {
+        .check => {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{ .iterate = true });
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            cmd_check.run(gpa, init.io, &term, project, installation, cmd.env) catch |err| switch (err) {
-                error.ValidationFailed, error.InvalidConfig => return,
-                else => return err,
-            };
+            try cmd_check.run(gpa, init.io, &term, project, installation);
         },
         .do => |cmd| {
             if (cmd.targets.len == 0) {
-                term.err("usage: weft do [remote].pipeline [[remote].pipeline ...]", .{});
+                term.err("No targets specified", .{});
                 return error.Usage;
             }
+            const targets: []Step = try gpa.alloc(Step, cmd.targets.len);
+            defer gpa.free(targets);
+            var last_mode: []const u8 = "default";
+            for (cmd.targets, targets) |name, *tgt| {
+                const mode_sep = std.mem.findScalar(u8, name, ':');
+                if (mode_sep) |sep|
+                    last_mode = name[0..sep];
+                const slice = if (mode_sep) |sep|
+                    name[sep + 1 ..]
+                else
+                    name;
+
+                const remote_sep = std.mem.findScalar(u8, slice, '.');
+                const remote = if (remote_sep) |sep|
+                    slice[0..sep]
+                else
+                    "local";
+                const pipeline = if (remote_sep) |sep|
+                    slice[sep + 1 ..]
+                else
+                    slice;
+                if (!Step.is_valid_name(last_mode) or !Step.is_valid_name(remote) or !Step.is_valid_name(pipeline))
+                    return error.InvalidStep;
+
+                tgt.* = .{
+                    .mode = last_mode,
+                    .remote = remote,
+                    .pipeline = pipeline,
+                };
+            }
+
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
@@ -226,12 +271,11 @@ pub fn main(init: std.process.Init) !void {
 
             return cmd_do.run(gpa, init.io, &term, project, installation, .{
                 .start = .{
-                    .targets = cmd.targets,
-                    .extra_env = cmd.env,
+                    .targets = targets,
                 },
             });
         },
-        .retry => |cmd| {
+        .@"resume" => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
@@ -291,14 +335,6 @@ pub fn main(init: std.process.Init) !void {
                     extra_list.items,
                 );
             },
-            .list => {
-                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-                return cmd_remote.list(gpa, init.io, &term, installation);
-            },
-            .remove => |r_rm| {
-                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-                return cmd_remote.remove(gpa, init.io, &term, installation, r_rm.name);
-            },
         },
         .kill => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
@@ -306,7 +342,7 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(project_dir);
 
-            return cmd_kill.run(gpa, init.io, &term, project, installation, cmd.deployment, cmd.pipeline);
+            return try cmd_kill.run(gpa, init.io, &term, project, installation, cmd.pipeline, cmd.remote, cmd.deployment);
         },
         .gc => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
@@ -314,7 +350,7 @@ pub fn main(init: std.process.Init) !void {
             defer if (project_dir) |*d| d.close(init.io);
             const project = if (project_dir) |d| Project.open(d) catch null else null;
 
-            return cmd_gc.run(gpa, init.io, &term, project, installation, cmd.remote, cmd.keep, cmd.older_than, cmd.dry_run);
+            return try cmd_gc.run(gpa, init.io, &term, project, installation, cmd.remote, cmd.keep, cmd.older_than, cmd.dry_run);
         },
         .nix => |n| switch (n) {
             .show => |cmd| {
@@ -324,7 +360,7 @@ pub fn main(init: std.process.Init) !void {
                 };
                 defer client.deinit();
 
-                const basename = nix.query_store_basename(gpa, &client, cmd.pkg, "latest") catch |err| {
+                const basename = nix.query_store_basename(std.heap.page_allocator, &client, cmd.pkg) catch |err| {
                     switch (err) {
                         error.PackageNotFound => {
                             term.err("package '{s}' not found on Hydra", .{cmd.pkg});
@@ -350,4 +386,5 @@ pub fn main(init: std.process.Init) !void {
 
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("util/zoto.zig");
 }

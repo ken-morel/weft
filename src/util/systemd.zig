@@ -276,13 +276,15 @@ pub fn run(
         break :command;
     }
 
-    const argv = try cmd.toOwnedSlice(alloc);
-
-    const all = try std.mem.join(alloc, " ", argv);
-    defer alloc.free(all);
+    {
+        std.debug.print("Running: systemd-run", .{});
+        for (cmd.items) |arg|
+            std.debug.print(" '{s}'", .{arg});
+        std.debug.print("\n", .{});
+    }
 
     return try std.process.spawn(io, .{
-        .argv = argv,
+        .argv = cmd.items,
         .stdin = .ignore,
         .stdout = .inherit,
         .stderr = .inherit,

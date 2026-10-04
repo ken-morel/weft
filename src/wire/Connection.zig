@@ -30,8 +30,12 @@ pub fn init(io: std.Io, secret: *const [32]u8, reader: *std.Io.Reader, writer: *
 
     if (!std.mem.eql(u8, buff[0..4], "weft"))
         return error.InvalidProtocol
-    else if (other_hash != proto.hash)
-        return error.SchemaMismatch;
+    else if (other_hash != proto.hash) {
+        std.log.scoped(.connection).warn(
+            "proto schema hash mismatch. {s} here but {s} there",
+            .{ &std.fmt.hex(proto.hash), &std.fmt.hex(other_hash) },
+        );
+    }
 
     const out_nonce = try Nonce.random(io);
     try out_nonce.write(writer);

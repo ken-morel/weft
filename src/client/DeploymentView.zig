@@ -164,7 +164,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
             }
         }
         self.term.clear_line();
-        self.term.styled_ln(.dim, "{s}", .{rule_buf[0..pos]});
+        self.term.styled_ln(.dim, "{s} {s}", .{ rule_buf[0..pos], &self.deployment_id.to_string() });
         lines_count += 1;
 
         for (self.state.steps.items) |step| {

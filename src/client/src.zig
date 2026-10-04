@@ -9,17 +9,16 @@ const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 const runner = @import("runner.zig");
 
-pub fn create_sources(alloc: std.mem.Allocator, io: std.Io, _: *Term, inst: ClientInstall, project: Project, deployment: *Deployment) !void {
+pub fn create_sources(gpa: std.mem.Allocator, io: std.Io, _: *Term, inst: ClientInstall, project: Project, deployment: *Deployment) !void {
     const sources = deployment.config.get_sources();
 
     source: for (sources) |source| {
-        const source_name = if (source.@"0".len > 0)
-            try std.mem.join(alloc, ".", &.{ "src", source.@"0" })
-        else
-            try alloc.dupe(u8, "src");
-        defer alloc.free(source_name);
-        const source_dir_path = try project.artifact_dir_path(alloc, io, deployment.id, source_name);
-        defer alloc.free(source_dir_path);
+        const source_dir_path = source_dir_path: {
+            const source_name = try std.mem.join(gpa, "", &.{ "-", source.@"1" });
+            defer gpa.free(source_name);
+            break :source_dir_path try project.artifact_dir_path(gpa, io, deployment.id, source_name);
+        };
+        defer gpa.free(source_dir_path);
 
         source_exists: {
             std.Io.Dir.cwd().access(io, source_dir_path, .{}) catch |err|
@@ -33,10 +32,10 @@ pub fn create_sources(alloc: std.mem.Allocator, io: std.Io, _: *Term, inst: Clie
         const temp_dir = try inst.open_temp(io, "sources");
         defer temp_dir.close(io);
 
-        const temp_dir_path = try temp_dir.realPathFileAlloc(io, ".", alloc);
-        defer alloc.free(temp_dir_path);
+        const temp_dir_path = try temp_dir.realPathFileAlloc(io, ".", gpa);
+        defer gpa.free(temp_dir_path);
 
-        var arena: std.heap.ArenaAllocator = .init(alloc);
+        var arena: std.heap.ArenaAllocator = .init(gpa);
         defer arena.deinit();
 
         var walk_root = try project.dir.openDir(io, source.@"1", .{ .iterate = true });
@@ -68,6 +67,6 @@ pub fn create_sources(alloc: std.mem.Allocator, io: std.Io, _: *Term, inst: Clie
             source_dir_path,
             io,
         );
-        try deployment.add_source(alloc, source.@"0");
+        try deployment.add_source(gpa, source.@"0");
     }
 }

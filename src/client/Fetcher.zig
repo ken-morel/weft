@@ -27,7 +27,11 @@ project: *const Project,
 depl: *std.Io.Mutex,
 group: std.Io.Group = .init,
 
-pub fn deinit(self: *@This()) void {
+pub fn deinit(self: *@This(), io: std.Io) void {
+    self.group.cancel(io);
+    self.group.await(io) catch |err| {
+        std.log.scoped(.fetcher_deinit).warn("Fetcher tasks failed to await cleanly during deinit: {any}", .{err});
+    };
     var pushing_iter = self.pushing.iterator();
     while (pushing_iter.next()) |entry| {
         self.alloc.free(entry.key_ptr.*);

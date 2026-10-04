@@ -4,7 +4,7 @@ const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 const epoch_ms: u64 = 1_767_225_600_000;
 
 const decode_table: [128]u8 = blk: {
-    var table: [128]u8 = [_]u8{255} ** 128;
+    var table: [128]u8 = @splat(255);
     for (alphabet, 0..) |c, idx|
         table[c] = @intCast(idx);
 

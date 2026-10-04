@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const endian: std.builtin.Endian = .little;
+const endian: std.lang.Endian = .little;
 
 /// Serialization and deserialization options
 pub const Options = struct {
@@ -26,40 +26,40 @@ pub fn hashType(comptime T: type) u64 {
         .bool => h = (h ^ @as(u64, 1)) *% prime,
         .int => |i| {
             h = (h ^ i.bits) *% prime;
-            h = (h ^ @intFromEnum(i.signedness)) *% prime;
+            h = (h ^ @backingInt(i.signedness)) *% prime;
         },
         .float => |f| h = (f.bits ^ h) *% prime,
         .@"struct" => |s| {
-            for (s.fields) |f| {
-                for (f.name) |char|
+            for (s.field_names, s.field_types) |f_name, f_type| {
+                for (f_name) |char|
                     h = (h ^ char) *% prime;
-                h = (h ^ hashType(f.type)) *% prime;
+                h = (h ^ hashType(f_type)) *% prime;
             }
         },
 
         .@"union" => |u| {
             if (u.tag_type) |tt|
                 h = (h ^ hashType(tt)) *% prime;
-            for (u.fields) |f| {
-                for (f.name) |char|
+            for (u.field_names, u.field_types) |f_name, f_type| {
+                for (f_name) |char|
                     h = (h ^ char) *% prime;
-                h = (h ^ hashType(f.type)) *% prime;
+                h = (h ^ hashType(f_type)) *% prime;
             }
         },
 
         .@"enum" => |e| {
             h = (h ^ hashType(e.tag_type)) *% prime;
-            for (e.fields) |f| {
-                for (f.name) |char|
+            for (e.field_names, e.field_values) |f_name, f_value| {
+                for (f_name) |char|
                     h = (h ^ char) *% prime;
-                h = (h ^ @as(u64, f.value)) *% prime;
+                h = (h ^ @as(u64, f_value)) *% prime;
             }
         },
 
         .pointer => |p| {
             h = (h ^ 0xCAFE) *% prime;
-            h = (h ^ @intFromEnum(p.size)) *% prime;
-            h = (h ^ @as(u64, if (p.is_const) 1 else 0)) *% prime;
+            h = (h ^ @backingInt(p.size)) *% prime;
+            h = (h ^ @as(u64, if (p.attrs.@"const") 1 else 0)) *% prime;
             h = (h ^ hashType(p.child)) *% prime;
         },
 
@@ -74,10 +74,10 @@ pub fn hashType(comptime T: type) u64 {
             h = (h ^ hashType(o.child)) *% prime;
         },
 
-        .error_set => |es| if (es) |fields| {
+        .error_set => |es| if (es.error_names) |fields| {
             h = (h ^ 0xBAEF) *% prime;
             for (fields) |f| {
-                for (f.name) |char|
+                for (f) |char|
                     h = (h ^ char) *% prime;
             }
         },
@@ -106,7 +106,7 @@ fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Wri
     switch (info) {
         inline .int => try writer.writeInt(T, value, endian),
         inline .float => |f| try writer.writeInt(
-            std.meta.Int(.unsigned, f.bits),
+            @Int(.unsigned, f.bits),
             @bitCast(value),
             endian,
         ),
@@ -122,16 +122,16 @@ fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Wri
             try serializeValue(writer, o.child, payload);
         } else try writer.writeByte(std.math.minInt(u8)),
         inline .@"struct" => |s| {
-            inline for (s.fields) |f|
+            inline for (s.field_names, s.field_types) |f_name, f_type|
                 try serializeValue(
                     writer,
-                    f.type,
-                    @field(value, f.name),
+                    f_type,
+                    @field(value, f_name),
                 );
         },
-        inline .@"enum" => try writer.writeByte(@intCast(@intFromEnum(value))),
+        inline .@"enum" => try writer.writeByte(@intCast(@backingInt(value))),
         inline .@"union" => {
-            try writer.writeByte(@intCast(@intFromEnum(std.meta.activeTag(value))));
+            try writer.writeByte(@intCast(@backingInt(std.meta.activeTag(value))));
             switch (value) {
                 inline else => |payload| try serializeValue(
                     writer,
@@ -193,7 +193,7 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
     switch (@typeInfo(T)) {
         inline .int => return try readInt(src, T),
         inline .float => |f| {
-            const IntT = comptime std.meta.Int(.unsigned, f.bits);
+            const IntT = comptime @Int(.unsigned, f.bits);
             const raw_bits = try readInt(src, IntT);
             return @bitCast(raw_bits);
         },
@@ -220,26 +220,26 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
 
         inline .@"struct" => |s| {
             var result: T = undefined;
-            inline for (s.fields) |f|
-                @field(result, f.name) = try deserializeValue(alloc, src, f.type);
+            inline for (s.field_names, s.field_types) |f_name, f_type|
+                @field(result, f_name) = try deserializeValue(alloc, src, f_type);
             return result;
         },
 
-        inline .@"enum" => return @enumFromInt(try readByte(src)),
+        inline .@"enum" => return @fromBackingInt(@intCast(try readByte(src))),
 
         inline .@"union" => |u| {
             const tag_id = try readByte(src);
             const tag_type = u.tag_type orelse @compileError("Union must be tagged for zoto: " ++ @typeName(T));
 
-            inline for (u.fields) |f|
-                if (@intFromEnum(@field(tag_type, f.name)) == tag_id)
+            inline for (u.field_names, u.field_types) |f_name, f_type|
+                if (@backingInt(@field(tag_type, f_name)) == tag_id)
                     return @unionInit(
                         T,
-                        f.name,
-                        if (comptime f.type == anyerror)
+                        f_name,
+                        if (comptime f_type == anyerror)
                             @errorFromInt(try readInt(src, u16))
                         else
-                            try deserializeValue(alloc, src, f.type),
+                            try deserializeValue(alloc, src, f_type),
                     );
 
             return error.InvalidUnionTag;
@@ -311,12 +311,12 @@ fn hasPointers(comptime T: type) bool {
     const info = @typeInfo(T);
     return switch (info) {
         .pointer => true,
-        .@"struct" => |s| inline for (s.fields) |f| {
-            if (hasPointers(f.type))
+        .@"struct" => |s| inline for (s.field_types) |f_type| {
+            if (hasPointers(f_type))
                 break true;
         } else false,
-        .@"union" => |u| inline for (u.fields) |f| {
-            if (hasPointers(f.type))
+        .@"union" => |u| inline for (u.field_types) |f_type| {
+            if (hasPointers(f_type))
                 break true;
         } else false,
         .optional => |o| hasPointers(o.child),

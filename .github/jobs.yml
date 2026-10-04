@@ -18,7 +18,7 @@ jobs:
       - name: Install Zig
         uses: ziglang/setup-zig@v1
         with:
-          zig-version: 0.16.0
+          zig-version: 0.17.0
 
       - name: Build project
         run: zig build
@@ -38,7 +38,7 @@ jobs:
       - name: Install Zig
         uses: ziglang/setup-zig@v1
         with:
-          zig-version: 0.16.0
+          zig-version: 0.17.0
 
       - name: Check formatting
         run: zig fmt --check src/
@@ -82,20 +82,20 @@ jobs:
       - name: Install Zig
         uses: ziglang/setup-zig@v1
         with:
-          zig-version: 0.16.0
+          zig-version: 0.17.0
 
       - name: Build binary
         run: zig build -Doptimize=ReleaseSafe
 
       - name: Test CLI help
-        run: ./zig-cache/bin/weft --help
+        run: ./zig-out/bin/weft --help
 
       - name: Test daemon help
-        run: ./zig-cache/bin/weft daemon --help
+        run: ./zig-out/bin/weft daemon --help
 
       - name: Test check command
-        run: ./zig-cache/bin/weft check --help || true
+        run: ./zig-out/bin/weft check --help || true
 
       - name: Test do command
-        run: ./zig-cache/bin/weft do --help || true
+        run: ./zig-out/bin/weft do --help || true
 

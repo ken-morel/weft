@@ -9,7 +9,6 @@ pub const Step = @import("Step.zig");
 id: Id,
 
 config: Weft,
-extra_env: [][]const u8 = &.{},
 artifacts: []Artifact = &.{},
 sources: [][]const u8 = &.{},
 running: []Step = &.{},
@@ -67,6 +66,7 @@ pub fn next_step(self: @This(), term: *Term) !?Step {
             .needs => |n| .{
                 .remote = target.remote,
                 .pipeline = n,
+                .mode = target.mode,
             },
             .runnable => target.*,
             .done => continue :target,
@@ -138,7 +138,7 @@ pub fn completed(self: @This()) bool {
     return self.next_target() == null;
 }
 
-pub fn init(io: std.Io, config: Weft, targets: []Step, extra_env: [][]const u8) !@This() {
+pub fn init(io: std.Io, config: Weft, targets: []Step) !@This() {
     const id = try Id.now(io);
     return .{
         .id = id,
@@ -146,7 +146,6 @@ pub fn init(io: std.Io, config: Weft, targets: []Step, extra_env: [][]const u8) 
         .artifacts = &.{},
         .running = &.{},
         .targets = targets,
-        .extra_env = extra_env,
     };
 }
 

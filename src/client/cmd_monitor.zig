@@ -28,7 +28,7 @@ fn format_date_only(buf: []u8, ns: i128) []const u8 {
     const md = yd.calculateMonthDay();
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{
         yd.year,
-        @intFromEnum(md.month),
+        @backingInt(md.month),
         md.day_index + 1,
     }) catch "----";
 }
@@ -124,7 +124,7 @@ pub fn run(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const remotes = try inst.get_remotes_leaky(alloc, io, term);
+    const remotes = try inst.get_remotes_leaky(alloc, io);
     if (remotes.len == 0) {
         term.err("no remotes configured. Run 'weft remote install' first.", .{});
         return error.NoRemotes;

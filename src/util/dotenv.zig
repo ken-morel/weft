@@ -50,6 +50,7 @@ pub fn parse(alloc: std.mem.Allocator, content: []const u8) !Map {
     return map;
 }
 
+//TODO: Make DotEnv a struct which will cache the results of this load_env
 pub fn load_env(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, env_name: ?[]const u8) !?DotEnv {
     var result: DotEnv = .{};
     errdefer result.deinit(alloc);
@@ -57,37 +58,35 @@ pub fn load_env(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, env_name:
     if (dir.readFileAllocOptions(io, ".env", alloc, .limited(1 << 20), .of(u8), 0)) |base_content| {
         try result.contents.append(alloc, base_content);
         try parse_into(alloc, &result.map, base_content);
-    } else |err| if (err != error.FileNotFound) {
+    } else |err| if (err != error.FileNotFound)
         return err;
-    }
 
     if (env_name) |name| {
-        if (name.len > 0) {
-            var loaded_override = false;
+        var loaded_override = false;
 
-            if (dir.readFileAllocOptions(io, name, alloc, .limited(1 << 20), .of(u8), 0)) |content| {
+        if (dir.readFileAllocOptions(io, name, alloc, .limited(1 << 20), .of(u8), 0)) |content| {
+            try result.contents.append(alloc, content);
+            try parse_into(alloc, &result.map, content);
+            loaded_override = true;
+        } else |err| {
+            if (err != error.FileNotFound)
+                return err;
+        }
+
+        if (!loaded_override) {
+            const prefixed = try std.fmt.allocPrint(alloc, ".env.{s}", .{name});
+            defer alloc.free(prefixed);
+
+            if (dir.readFileAllocOptions(io, prefixed, alloc, .limited(1 << 20), .of(u8), 0)) |content| {
                 try result.contents.append(alloc, content);
                 try parse_into(alloc, &result.map, content);
                 loaded_override = true;
             } else |err| if (err != error.FileNotFound) {
                 return err;
             }
-
-            if (!loaded_override) {
-                const prefixed = try std.fmt.allocPrint(alloc, ".env.{s}", .{name});
-                defer alloc.free(prefixed);
-
-                if (dir.readFileAllocOptions(io, prefixed, alloc, .limited(1 << 20), .of(u8), 0)) |content| {
-                    try result.contents.append(alloc, content);
-                    try parse_into(alloc, &result.map, content);
-                    loaded_override = true;
-                } else |err| if (err != error.FileNotFound) {
-                    return err;
-                }
-            }
-            if (!loaded_override)
-                return null;
         }
+        if (!loaded_override)
+            return null;
     }
 
     return result;

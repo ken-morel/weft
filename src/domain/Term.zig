@@ -15,7 +15,7 @@ pub const Level = enum(u8) {
     pub fn parse(str: []const u8) ?Level {
         inline for (@typeInfo(Level).@"enum".fields) |f|
             if (std.mem.eql(u8, str, f.name))
-                return @enumFromInt(f.value);
+                return @fromBackingInt(@intCast(f.value));
 
         return null;
     }
@@ -224,7 +224,7 @@ fn write_timestamp_unlocked(self: *@This(), w: *std.Io.Writer) !void {
     self.terminal.setColor(.dim) catch {};
     try w.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} ", .{
         yd.year,
-        @intFromEnum(md.month),
+        @backingInt(md.month),
         md.day_index + 1,
         day.getHoursIntoDay(),
         day.getMinutesIntoHour(),
@@ -295,7 +295,7 @@ pub fn write_event(self: *@This(), tag_color: Color, tag_text: []const u8, compt
 }
 
 pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) void {
-    if (@intFromEnum(level) > @intFromEnum(self.log_level))
+    if (@backingInt(level) > @backingInt(self.log_level))
         return;
     const color, const prefix = switch (level) {
         .quiet => return,
@@ -324,13 +324,13 @@ pub inline fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) voi
 }
 
 pub inline fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level))
+    if (@backingInt(Level.info) > @backingInt(self.log_level))
         return;
     self.write_tag(.bold, ">> ", fmt, args);
 }
 
 pub inline fn success(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    if (@intFromEnum(Level.info) > @intFromEnum(self.log_level))
+    if (@backingInt(Level.info) > @backingInt(self.log_level))
         return;
     self.write_tag(.green, "ok: ", fmt, args);
 }

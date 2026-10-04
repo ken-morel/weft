@@ -5,7 +5,6 @@ const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-pub const Database = Weft.Env.Database;
 const dotenv = @import("../util/dotenv.zig");
 const systemd = @import("../util/systemd.zig");
 
@@ -216,58 +215,16 @@ pub fn kill_matching(
     alloc: std.mem.Allocator,
     io: std.Io,
     req: proto.task.kill.Req,
-) !u32 {
-    var killed_count: u32 = 0;
-
-    var run_dir = std.Io.Dir.cwd().openDir(io, paths.weft_run_dir, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return 0;
-        return err;
-    };
-    defer run_dir.close(io);
-
-    var ws_iter = run_dir.iterate();
-    while (try ws_iter.next(io)) |ws_entry| {
-        if (ws_entry.kind != .directory) continue;
-        if (req.workspace.len > 0 and !std.mem.eql(u8, req.workspace, ws_entry.name)) continue;
-
-        const ws_path = try std.fs.path.join(alloc, &.{ paths.weft_run_dir, ws_entry.name });
-        defer alloc.free(ws_path);
-        var ws_dir = std.Io.Dir.cwd().openDir(io, ws_path, .{ .iterate = true }) catch continue;
-        defer ws_dir.close(io);
-
-        var p_iter = ws_dir.iterate();
-        while (try p_iter.next(io)) |p_entry| {
-            if (p_entry.kind != .directory) continue;
-            if (req.pipeline) |p| {
-                if (!std.mem.eql(u8, p, p_entry.name)) continue;
-            }
-
-            const pipe_path = try std.fs.path.join(alloc, &.{ ws_path, p_entry.name });
-            defer alloc.free(pipe_path);
-            var pipe_dir = std.Io.Dir.cwd().openDir(io, pipe_path, .{ .iterate = true }) catch continue;
-            defer pipe_dir.close(io);
-
-            var d_iter = pipe_dir.iterate();
-            while (try d_iter.next(io)) |d_entry| {
-                if (d_entry.kind != .directory) continue;
-                const dep_id = Deployment.Id.parse(d_entry.name) catch continue;
-                if (req.deployment) |d| {
-                    if (d.raw != dep_id.raw) continue;
-                }
-
-                const t: Task = .{ .id = .{
-                    .workspace = ws_entry.name,
-                    .deployment = dep_id,
-                    .pipeline = p_entry.name,
-                } };
-                if (t.is_active(alloc, io) catch false) {
-                    t.kill(alloc, io) catch {};
-                    killed_count += 1;
-                }
-            }
-        }
-    }
-    return killed_count;
+) !void {
+    try Task.kill(
+        .{ .id = .{
+            .workspace = req.workspace,
+            .deployment = req.deployment,
+            .pipeline = req.pipeline,
+        } },
+        alloc,
+        io,
+    );
 }
 
 pub const Spec = struct {
@@ -276,11 +233,10 @@ pub const Spec = struct {
     script: []const u8,
     vars: []const struct { []const u8, []const u8 } = &.{},
     pkgs: []const []const u8 = &.{},
-    databases: []const Database = &.{},
     inputs: []const []const u8 = &.{},
     outputs: []const []const u8 = &.{},
     keep: []const Weft.Keep = &.{},
-    sibling: Weft.Pipeline.SecondInstance = .{ .then = .ignore },
+    sibling: Weft.Pipeline.HandleSibling = .{ .then = .ignore },
 
     tune: Tune,
     pub const resolve = Task.resolve;
@@ -288,7 +244,6 @@ pub const Spec = struct {
     pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
         alloc.free(self.vars);
         alloc.free(self.pkgs);
-        alloc.free(self.databases);
         alloc.free(self.inputs);
         alloc.free(self.outputs);
     }
@@ -301,8 +256,8 @@ pub fn resolve(
     config: *const Weft,
     pipeline: *const Weft.Pipeline,
     deployment_id: Deployment.Id,
-    project_dir: ?std.Io.Dir,
-    extra_env: []const []const u8,
+    project_dir: std.Io.Dir,
+    mode: []const u8,
     environ: ?*const std.process.Environ.Map,
     script: []const u8,
 ) !Spec {
@@ -319,22 +274,35 @@ pub fn resolve(
             todo.deinit(gpa);
             env_order.deinit(gpa);
         }
-        try todo.appendSlice(gpa, pipeline.uses);
-        try todo.appendSlice(gpa, extra_env);
-        std.mem.reverse([]const u8, todo.items);
-        todo: while (todo.pop()) |env_name| {
-            for (env_order.items) |item| {
-                if (std.mem.eql(u8, item, env_name))
-                    continue :todo;
-            } else try env_order.append(gpa, env_name);
-            const env = config.get_environment(env_name) orelse return error.InvalidEnvornment;
-            env_parent: for (env.uses) |env_parent|
+        for (pipeline.uses) |uses|
+            if (Weft.strip_mode(mode, uses)) |u|
+                try todo.insert(gpa, 0, u);
+
+        todo: while (todo.pop()) |sub_env_name| {
+            if (Weft.strip_mode(mode, sub_env_name)) |env_name| {
                 for (env_order.items) |item| {
-                    if (std.mem.eql(u8, item, env_parent))
-                        continue :env_parent;
-                } else try env_order.append(gpa, env_parent);
+                    if (std.mem.eql(u8, item, env_name))
+                        continue :todo;
+                } else try env_order.append(gpa, env_name);
+                const env = config.get_environment(env_name) orelse return error.InvalidEnvornment;
+                env_parent: for (env.uses) |env_parent|
+                    for (env_order.items) |item| {
+                        if (std.mem.eql(u8, item, env_parent))
+                            continue :env_parent;
+                    } else try env_order.append(gpa, env_parent);
+            }
+        }
+        {
+            const env_list = try std.mem.join(gpa, ", ", env_order.items);
+            defer gpa.free(env_list);
+            term.info("Resolving environment for pipeline {s} in mode {s} as: {s}", .{
+                pipeline.name,
+                mode,
+                env_list,
+            });
         }
         std.mem.reverse([]const u8, env_order.items);
+
         break :env_order try env_order.toOwnedSlice(gpa);
     };
     defer gpa.free(env_order);
@@ -345,15 +313,12 @@ pub fn resolve(
     {
         for (env_order) |env_name| {
             const env = config.get_environment(env_name).?;
-            for (env.pkgs) |pkg|
+            for (env.pkgs) |pkg| //PERF: O(N^2)
                 for (pkgs.items) |item| {
                     if (std.mem.eql(u8, item, pkg))
                         break;
                 } else try pkgs.append(gpa, pkg);
-            const env_dotenv = if (project_dir) |dir|
-                try dotenv.load_env(gpa, io, dir, env_name)
-            else
-                null;
+            const env_dotenv = try dotenv.load_env(gpa, io, project_dir, env_name);
             for (env.vars) |env_var| {
                 const name = env_var.@"0";
 
@@ -370,6 +335,10 @@ pub fn resolve(
                             try env_vars.put(gpa, name, val);
                             continue;
                         };
+                    if (env_vars.get(name)) |_|
+                        continue;
+
+                    term.err("Environment {s} needed variable {s} but found no value", .{ env_name, name });
                     return error.MissingEnviron;
                 }
             }
@@ -397,7 +366,6 @@ pub fn resolve(
         .script = script,
         .vars = vars,
         .pkgs = try pkgs.toOwnedSlice(gpa),
-        .databases = &.{},
         .inputs = try gpa.dupe([]const u8, pipeline.in),
         .outputs = try gpa.dupe([]const u8, outputs),
         .keep = pipeline.keep,

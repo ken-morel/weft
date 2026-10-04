@@ -79,7 +79,10 @@ pub const task = struct {
         pub const Req = struct {
             spec: Task.Spec,
         };
-        pub const Res = struct {};
+        pub const Res = union(enum) {
+            skipped,
+            spawned,
+        };
     };
     pub const poll = struct {
         pub const ItemReq = struct {
@@ -120,11 +123,11 @@ pub const task = struct {
     pub const kill = struct {
         pub const Req = struct {
             workspace: []const u8 = "",
-            deployment: ?Deployment.Id = null,
-            pipeline: ?[]const u8 = null,
+            deployment: Deployment.Id,
+            pipeline: []const u8,
         };
-        pub const Res = struct {
-            killed_count: u32,
+        pub const Res = union(enum) {
+            footer: struct {},
         };
     };
 };

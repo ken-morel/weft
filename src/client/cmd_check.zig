@@ -41,13 +41,12 @@ pub fn run(
     term: *Term,
     project: Project,
     inst: ClientInstall,
-    extra_envs: []const []const u8,
 ) !void {
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const config = project.get_config(alloc, term, io) catch |err| {
+    const config = project.get_config_leaky(alloc, io) catch |err| {
         term.err("failed to parse weft/weft.zon: {s}", .{@errorName(err)});
         return error.InvalidConfig;
     };
@@ -96,14 +95,13 @@ pub fn run(
 
         for (pipeline.uses) |env|
             for (config.environments) |e| {
-                if (std.mem.eql(u8, env, e.name))
+                if (std.mem.eql(u8, Weft.strip_mode(null, env).?, e.name))
                     break;
             } else term.err("pipeline '{s}': Invalid environment: {s}", .{ pipeline.name, env });
     }
 
     for (config.pipelines) |*pipeline|
         switch (pipeline.run) {
-            .nothing => continue,
             .script => |lines| {
                 if (lines.len == 0)
                     term.err("pipeline '{s}': .run.script cannot be empty", .{pipeline.name})
@@ -142,37 +140,27 @@ pub fn run(
             },
         };
 
-    for (extra_envs) |target| {
-        if (config.get_environment(target) == null) {
-            term.err("environment '{s}' not found in weft.zon", .{target});
-            return error.ValidationFailed;
+    const dummy_dep_id: Deployment.Id = .{ .raw = 0 };
+    for (config.modes) |mode| {
+        for (config.pipelines) |*pipeline| {
+            var spec = Task.resolve(
+                alloc,
+                io,
+                term,
+                &config,
+                pipeline,
+                dummy_dep_id,
+                project.dir,
+                mode,
+                inst.env,
+                "",
+            ) catch |err| {
+                term.err("pipeline '{s}' mode '{s}': validation failed: {s}", .{ pipeline.name, mode, @errorName(err) });
+                continue;
+            };
+            spec.deinit(alloc);
         }
     }
-
-    var errors: u32 = 0;
-    const dummy_dep_id: Deployment.Id = .{ .raw = 0 };
-    for (config.pipelines) |*pipeline| {
-        var spec = Task.resolve(
-            alloc,
-            io,
-            term,
-            &config,
-            pipeline,
-            dummy_dep_id,
-            project.dir,
-            extra_envs,
-            inst.env,
-            "",
-        ) catch |err| {
-            errors += 1;
-            term.err("pipeline '{s}': validation failed: {s}", .{ pipeline.name, @errorName(err) });
-            continue;
-        };
-        spec.deinit(alloc);
-    }
-
-    if (errors > 0)
-        return error.ValidationFailed;
 
     term.success("Validation passed: project is ready for deployment", .{});
 }

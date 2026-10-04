@@ -1,23 +1,22 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub fn query_store_basename(gpa: std.mem.Allocator, client: *std.http.Client, name: []const u8, version: []const u8) ![]const u8 {
-    const hydra_url = try std.fmt.allocPrint(
-        gpa,
-        "https://hydra.nixos.org/job/nixpkgs/unstable/{s}.{s}-linux/{s}",
-        .{ name, @tagName(builtin.cpu.arch), version },
+pub fn query_store_basename(gpa: std.mem.Allocator, client: *std.http.Client, name: []const u8) ![]const u8 {
+    const hydra_url = try gpa.print(
+        "https://hydra.nixos.org/job/nixpkgs/unstable/{s}.{s}-linux/latest",
+        .{ name, @tagName(builtin.target.cpu.arch) },
     );
     defer gpa.free(hydra_url);
 
-    var buf: [16 << 10]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var allocating: std.Io.Writer.Allocating = .init(gpa);
+    defer allocating.deinit();
     const res = try client.fetch(
         .{
             .location = .{ .url = hydra_url },
             .extra_headers = &.{
                 .{ .name = "Accept", .value = "application/json" },
             },
-            .response_writer = &writer,
+            .response_writer = &allocating.writer,
         },
     );
     switch (res.status) {
@@ -25,7 +24,6 @@ pub fn query_store_basename(gpa: std.mem.Allocator, client: *std.http.Client, na
         .not_found => return error.PackageNotFound,
         else => return error.InvalidHttpResponse,
     }
-    const written = buf[0..writer.end];
     const job = try std.json.parseFromSlice(struct {
         job: []const u8,
         buildstatus: u16,
@@ -34,7 +32,7 @@ pub fn query_store_basename(gpa: std.mem.Allocator, client: *std.http.Client, na
                 path: []const u8,
             },
         },
-    }, gpa, written, .{
+    }, gpa, allocating.written(), .{
         .ignore_unknown_fields = true,
     });
     defer job.deinit();
@@ -106,32 +104,70 @@ pub const NarInfo = struct {
 };
 
 pub fn fetch_narinfo(gpa: std.mem.Allocator, client: *std.http.Client, hash: []const u8) !NarInfo {
-    const url = try std.fmt.allocPrint(gpa, "https://cache.nixos.org/{s}.narinfo", .{hash});
+    const url = try gpa.print("https://cache.nixos.org/{s}.narinfo", .{hash});
     defer gpa.free(url);
 
-    var buf: [4 << 10]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var allocating: std.Io.Writer.Allocating = .init(gpa);
+    defer allocating.deinit();
     const res = try client.fetch(
         .{
             .location = .{ .url = url },
-            .response_writer = &writer,
+            .response_writer = &allocating.writer,
         },
     );
     switch (res.status) {
         .ok => {},
         else => return error.InvalidHttpResponse,
     }
-    const data = try gpa.dupe(u8, buf[0..writer.end]);
+    const data = try allocating.toOwnedSlice();
+    errdefer gpa.free(data);
     return NarInfo.parse(data) orelse error.InvalidNarInfo;
 }
 
-pub const Unpacker = struct {
-    root: std.Io.Dir,
+pub fn fetch(
+    gpa: std.mem.Allocator,
+    client: *std.http.Client,
+    io: std.Io,
+    nar_url: []const u8,
+    dest_path: []const u8,
+) !void {
+    const url = try gpa.print("https://cache.nixos.org/{s}", .{nar_url});
+    defer gpa.free(url);
 
+    const uri = try std.Uri.parse(url);
+    var req = try client.request(.GET, uri, .{
+        .redirect_behavior = @fromBackingInt(@intCast(3)),
+    });
+    defer req.deinit();
+
+    try req.sendBodiless();
+
+    const redirect_buf = try gpa.alloc(u8, 8 << 10);
+    defer gpa.free(redirect_buf);
+    var resp = try req.receiveHead(redirect_buf);
+    switch (resp.head.status) {
+        .ok => {},
+        else => return error.InvalidHttpResponse,
+    }
+
+    const transfer_buf = try gpa.alloc(u8, 4 << 10);
+    const http_reader = resp.reader(transfer_buf);
+
+    const zstd_buf = try gpa.alloc(u8, std.compress.zstd.default_window_len + std.compress.zstd.block_size_max);
+    defer gpa.free(zstd_buf);
+    var decompress = std.compress.zstd.Decompress.init(http_reader, zstd_buf, .{});
+
+    try Nar.unpack(gpa, io, dest_path, &decompress.reader);
+}
+
+pub const Nar = struct {
     fn take(reader: *std.Io.Reader, buf: []u8) ![]const u8 {
         const len = try reader.takeInt(u64, .little);
-        if (len > buf.len) return error.TokenTooLong;
+        if (len > buf.len)
+            return error.TokenTooLong;
+
         const len_usize: usize = @intCast(len);
+
         try reader.readSliceAll(buf[0..len_usize]);
         const pad = (8 - (len_usize % 8)) % 8;
         try reader.discardAll(pad);
@@ -143,134 +179,119 @@ pub const Unpacker = struct {
         if (!std.mem.eql(u8, tok, expected)) return error.UnexpectedToken;
     }
 
-    pub fn init(dir: std.Io.Dir) Unpacker {
-        return .{ .root = dir };
-    }
-
-    pub fn unpack(self: *Unpacker, io: std.Io, reader: *std.Io.Reader) !void {
-        var tok_buf: [512]u8 = undefined;
-        try expect(reader, "nix-archive-1", &tok_buf);
-        try self.unpack_node(io, reader, self.root, "", &tok_buf);
-    }
-
-    fn unpack_node(self: *Unpacker, io: std.Io, reader: *std.Io.Reader, dir: std.Io.Dir, name: []const u8, buf: []u8) !void {
-        try expect(reader, "(", buf);
-        try expect(reader, "type", buf);
-        const type_str = try take(reader, buf);
-
-        if (std.mem.eql(u8, type_str, "directory")) {
-            var current_dir: std.Io.Dir = undefined;
-            var must_close = false;
-            if (name.len == 0) {
-                current_dir = dir;
-            } else {
-                try dir.createDirPath(io, name);
-                current_dir = try dir.openDir(io, name, .{});
-                must_close = true;
-            }
-            defer if (must_close) current_dir.close(io);
-
-            while (true) {
-                const tok = try take(reader, buf);
-                if (std.mem.eql(u8, tok, ")")) break;
-                if (!std.mem.eql(u8, tok, "entry")) return error.UnexpectedToken;
-
-                try expect(reader, "(", buf);
-                try expect(reader, "name", buf);
-                var name_storage: [256]u8 = undefined;
-                const entry_name = try take(reader, &name_storage);
-                try validate_archive_name(entry_name);
-                try expect(reader, "node", buf);
-                try self.unpack_node(io, reader, current_dir, entry_name, buf);
-                try expect(reader, ")", buf);
-            }
-        } else if (std.mem.eql(u8, type_str, "regular")) {
-            var is_exec = false;
-            var next_tok = try take(reader, buf);
-            if (std.mem.eql(u8, next_tok, "executable")) {
-                try expect(reader, "", buf);
-                is_exec = true;
-                next_tok = try take(reader, buf);
-            }
-            if (!std.mem.eql(u8, next_tok, "contents")) return error.UnexpectedToken;
-
-            const file_len = try reader.takeInt(u64, .little);
-            var file = try dir.createFile(io, name, .{ .truncate = true });
-            defer file.close(io);
-
-            var copy_buf: [64 << 10]u8 = undefined;
-            var remaining = file_len;
-            while (remaining > 0) {
-                const to_read: usize = @intCast(@min(remaining, copy_buf.len));
-                try reader.readSliceAll(copy_buf[0..to_read]);
-                try file.writeStreamingAll(io, copy_buf[0..to_read]);
-                remaining -= to_read;
-            }
-            const pad = (8 - (file_len % 8)) % 8;
-            try reader.discardAll(pad);
-
-            if (is_exec) {
-                try file.setPermissions(io, .executable_file);
-            }
-
-            try expect(reader, ")", buf);
-        } else if (std.mem.eql(u8, type_str, "symlink")) {
-            try expect(reader, "target", buf);
-            var target_buf: [1024]u8 = undefined;
-            const target = try take(reader, &target_buf);
-            try dir.symLink(io, target, name, .{});
-            try expect(reader, ")", buf);
-        } else {
-            return error.UnknownNodeType;
-        }
-    }
-
-    fn validate_archive_name(name: []const u8) !void {
-        if (name.len == 0) {
+    fn check_name(name: []const u8) !void {
+        if (name.len == 0 or
+            std.mem.findAny(u8, name, &.{ '/', 0 }) != null or
+            std.mem.startsWith(u8, name, "..") or std.mem.eql(u8, name, "."))
+        {
+            std.log.scoped(.nix_nar).err("Invalid archive name: {s}", .{name});
             return error.InvalidArchivePath;
         }
+    }
+    pub fn unpack(
+        gpa: std.mem.Allocator,
+        io: std.Io,
+        root: []const u8,
+        r: *std.Io.Reader,
+    ) !void {
+        const cwd = std.Io.Dir.cwd();
+        const tok_buf = try gpa.alloc(u8, 4 << 10);
+        defer gpa.free(tok_buf);
 
-        if (name[0] == '/' or name[0] == '\\') {
-            return error.InvalidArchivePath;
-        }
+        const copy_buf = try gpa.alloc(u8, 64 << 10);
+        defer gpa.free(copy_buf);
 
-        if (std.mem.eql(u8, name, "..") or std.mem.eql(u8, name, ".")) {
-            return error.InvalidArchivePath;
+        try expect(r, "nix-archive-1", tok_buf);
+
+        var path_buf: [4 << 10]u8 = undefined;
+        var path_len: usize = 0;
+
+        @memcpy(path_buf[0..root.len], root);
+        path_len = root.len;
+
+        const State = struct {
+            ctx: enum { dir_node, entry },
+            prev_len: usize,
+        };
+        var stack: std.ArrayList(State) = .empty;
+        defer stack.deinit(gpa);
+
+        while (true) {
+            const tok = take(r, tok_buf) catch |err| {
+                if (err == error.EndOfStream)
+                    break;
+                return err;
+            };
+
+            if (std.mem.eql(u8, tok, "(")) {
+                const next = try take(r, tok_buf);
+
+                if (std.mem.eql(u8, next, "type")) {
+                    const type_str = try take(r, tok_buf);
+                    const current_path = path_buf[0..path_len];
+
+                    if (std.mem.eql(u8, type_str, "directory")) {
+                        try cwd.createDirPath(io, current_path);
+                        try stack.append(gpa, .{ .ctx = .dir_node, .prev_len = path_len });
+                    } else if (std.mem.eql(u8, type_str, "regular")) {
+                        var next_tok = try take(r, tok_buf);
+
+                        const is_exec = if (std.mem.eql(u8, next_tok, "executable")) blk: {
+                            try expect(r, "", tok_buf);
+                            next_tok = try take(r, tok_buf);
+                            break :blk true;
+                        } else false;
+                        if (!std.mem.eql(u8, next_tok, "contents"))
+                            return error.UnexpectedToken;
+
+                        const file_len = try r.takeInt(u64, .little);
+
+                        var file = try cwd.createFile(io, current_path, .{ .truncate = true });
+                        defer file.close(io);
+
+                        var remaining = file_len;
+                        while (remaining > 0) {
+                            const to_read: usize = @intCast(@min(remaining, copy_buf.len));
+                            try r.readSliceAll(copy_buf[0..to_read]);
+                            try file.writeStreamingAll(io, copy_buf[0..to_read]);
+                            remaining -= to_read;
+                        }
+
+                        const pad = (8 - (file_len % 8)) % 8;
+                        try r.discardAll(pad);
+
+                        if (is_exec)
+                            try file.setPermissions(io, .executable_file);
+
+                        try expect(r, ")", tok_buf);
+                    } else if (std.mem.eql(u8, type_str, "symlink")) {
+                        try expect(r, "target", tok_buf);
+                        const target = try take(r, copy_buf);
+                        try cwd.symLink(io, target, current_path, .{});
+                        try expect(r, ")", tok_buf);
+                    } else return error.UnknownNodeType;
+                } else if (std.mem.eql(u8, next, "name")) {
+                    try stack.append(gpa, .{ .ctx = .entry, .prev_len = path_len });
+
+                    const start_idx = path_len + 1;
+                    if (start_idx >= path_buf.len) return error.PathTooLong;
+
+                    const entry_name = try take(r, path_buf[start_idx..]);
+
+                    try check_name(entry_name);
+                    try expect(r, "node", tok_buf);
+
+                    path_buf[path_len] = '/';
+                    path_len = start_idx + entry_name.len;
+                } else return error.UnexpectedToken;
+            } else if (std.mem.eql(u8, tok, ")")) {
+                if (stack.pop()) |state| {
+                    if (state.ctx == .entry)
+                        path_len = state.prev_len;
+                } else break;
+            } else if (std.mem.eql(u8, tok, "entry")) {
+                // nothing
+            } else return error.UnexpectedToken;
         }
     }
 };
-
-pub fn fetch(
-    gpa: std.mem.Allocator,
-    client: *std.http.Client,
-    io: std.Io,
-    nar_url: []const u8,
-    dest_dir: std.Io.Dir,
-) !void {
-    const url = try std.fmt.allocPrint(gpa, "https://cache.nixos.org/{s}", .{nar_url});
-    defer gpa.free(url);
-
-    const uri = try std.Uri.parse(url);
-    var req = try client.request(.GET, uri, .{
-        .redirect_behavior = @enumFromInt(3),
-    });
-    defer req.deinit();
-
-    try req.sendBodiless();
-
-    var redirect_buf: [8192]u8 = undefined;
-    var resp = try req.receiveHead(&redirect_buf);
-    switch (resp.head.status) {
-        .ok => {},
-        else => return error.InvalidHttpResponse,
-    }
-
-    var transfer_buf: [4096]u8 = undefined;
-    const http_reader = resp.reader(&transfer_buf);
-
-    var zstd_buf: [std.compress.zstd.default_window_len + std.compress.zstd.block_size_max]u8 = undefined;
-    var decompress = std.compress.zstd.Decompress.init(http_reader, &zstd_buf, .{});
-
-    var unp = Unpacker.init(dest_dir);
-    try unp.unpack(io, &decompress.reader);
-}

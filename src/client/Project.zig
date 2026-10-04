@@ -12,7 +12,7 @@ pub inline fn open(dir: std.Io.Dir) !@This() {
     };
 }
 
-pub fn get_config(self: @This(), alloc: std.mem.Allocator, term: ?*Term, io: std.Io) !Weft {
+pub fn get_config_leaky(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
     @setEvalBranchQuota(100_000);
     const content = self.dir.readFileAllocOptions(
         io,
@@ -26,11 +26,11 @@ pub fn get_config(self: @This(), alloc: std.mem.Allocator, term: ?*Term, io: std
             return error.ConfigNotFound
         else
             return err;
-    var diag: std.zon.parse.Diagnostics = .{};
-    defer diag.deinit(alloc);
-    return std.zon.parse.fromSliceAlloc(Weft, alloc, content, &diag, .{}) catch |err| {
-        if (term) |t|
-            diag.format(t.writer()) catch {};
+    var diag: std.zon.parse.Diagnostics = .{
+        .errors = &.{undefined},
+    };
+    return std.zon.parse.fromSlice(Weft, .{ .gpa = alloc, .arena = alloc, .source = content, .diagnostics = &diag }) catch |err| {
+        diag.log("weft/weft.zon");
         return err;
     };
 }
@@ -122,7 +122,7 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
     return match.?;
 }
 
-pub fn load_deployment(self: @This(), alloc: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
+pub fn load_deployment_leaky(self: @This(), alloc: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
     @setEvalBranchQuota(100_000);
     var dep_dir = try self.open_deployment_dir(io, id);
     defer dep_dir.close(io);
@@ -145,8 +145,9 @@ pub fn load_deployment(self: @This(), alloc: std.mem.Allocator, io: std.Io, id: 
     const zon_content = content orelse return error.DeploymentNotFound;
     const null_terminated = try alloc.dupeSentinel(u8, zon_content, 0);
     defer alloc.free(null_terminated);
+    var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
 
-    var deployment = try std.zon.parse.fromSliceAlloc(Deployment, alloc, null_terminated, null, .{});
+    var deployment = try std.zon.parse.fromSlice(Deployment, .{ .gpa = alloc, .arena = alloc, .source = null_terminated, .diagnostics = &diag });
     deployment.id = id;
     deployment.running = &.{};
     return deployment;

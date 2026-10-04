@@ -23,7 +23,7 @@ pub fn run_deployment(
     inst: ClientInstall,
     deployment: *Deployment,
 ) !void {
-    const remotes = try inst.get_remotes_leaky(gpa, io, term);
+    const remotes = try inst.get_remotes_leaky(gpa, io);
     defer gpa.free(remotes);
 
     var state: DeploymentState = .init(gpa, &project);
@@ -39,15 +39,15 @@ pub fn run_deployment(
         .term = term,
         .state = &state,
     };
-    defer fetcher.deinit();
+    defer fetcher.deinit(io);
 
     var group: std.Io.Group = .init;
     var view: DeploymentView = .init(gpa, term, &state, deployment.id);
     defer view.deinit();
     errdefer {
         view.update(io) catch {};
-        term.err("Deployment failed... cancelling tasks", .{});
-        group.cancel(io);
+        term.err("Deployment failed", .{});
+        group.await(io) catch {};
     }
 
     const log_buffer = try gpa.alloc(u8, Connection.max_packet_size);
@@ -215,24 +215,10 @@ pub fn spawn_step(
         depl.unlock(io);
     } else |_| {};
 
-    const script_content = switch (pipeline.run) {
-        .nothing => {
-            try depl.lock(io);
-            defer depl.unlock(io);
+    if (!dep.config.has_mode(step.mode))
+        return error.InvalidMode;
 
-            for (pipeline.out orelse &.{pipeline.name}) |output| {
-                try dep.add_artifact(gpa, .{
-                    .remote = step.remote,
-                    .pipeline = step.pipeline,
-                    .name = output,
-                });
-                try fetcher.spawn_fetch(io, output);
-            }
-            dep.remove_running(gpa, step.remote, step.pipeline);
-            state.completed(io, step.remote, step.pipeline);
-            try dep.save(gpa, io, project);
-            return;
-        },
+    const script_content = switch (pipeline.run) {
         .script => |lines| inline_script: {
             if (lines.len == 0) {
                 term.err("pipeline '{s}': .run.script cannot be empty", .{pipeline.name});
@@ -262,11 +248,11 @@ pub fn spawn_step(
             };
             defer gpa.free(script_path);
 
-            break :file_script project.dir.readFileAlloc(io, script_path, gpa, .limited(64 * 1024)) catch |err| {
+            break :file_script project.dir.readFileAlloc(io, script_path, gpa, .limited(60 * 1024)) catch |err| {
                 if (err == error.FileNotFound)
                     term.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name })
                 else if (err == error.FileTooBig)
-                    term.err("Script {s} exceeds 64KB limit for pipeline {s}", .{ script_path, pipeline.name });
+                    term.err("Script {s} exceeds 60KB limit for pipeline {s}", .{ script_path, pipeline.name });
                 return err;
             };
         },
@@ -281,7 +267,7 @@ pub fn spawn_step(
         pipeline,
         dep.id,
         project.dir,
-        dep.extra_env,
+        step.mode,
         env_map,
         script_content,
     );

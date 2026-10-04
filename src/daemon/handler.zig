@@ -376,22 +376,21 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
     const archive_dir_path = try task.archive(alloc);
     try std.Io.Dir.cwd().createDirPath(daemon.io, archive_dir_path);
     const log_path = try std.fs.path.join(alloc, &.{ archive_dir_path, "log.txt" });
-    var log_file: ?std.Io.File = try std.Io.Dir.cwd().createFile(daemon.io, log_path, .{ .truncate = false });
-    errdefer if (log_file) |f|
-        f.close(io);
+    var log_file = try std.Io.Dir.cwd().createFile(daemon.io, log_path, .{ .truncate = false });
+    defer log_file.close(io);
 
     // vehement leak, but it's just a few bytes
-    try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] Installing packages\n", .{}));
+    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] Installing packages\n", .{}));
     for (spec.pkgs) |basename| {
-        try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] intalling {s}...\n", .{basename}));
+        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] installing {s}...\n", .{basename}));
         daemon.store.fetch(io, basename) catch |err| {
-            try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] failed to fetch {s}: {s}\n", .{ basename, @errorName(err) }));
+            try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] failed to fetch {s}: {s}\n", .{ basename, @errorName(err) }));
             return err;
         };
-        try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] installed {s}\n", .{basename}));
+        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] installed {s}\n", .{basename}));
     }
-    try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] done\n", .{}));
-    try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] setting up environment\n", .{}));
+    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::pkg] done\n", .{}));
+    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] setting up environment\n", .{}));
 
     const run_dir_path = try task.run_dir_path(alloc);
 
@@ -411,7 +410,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
     }
 
     const runner_user = daemon.config.runner_user orelse "weft-runner";
-    try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] running task as {s}\n", .{runner_user}));
+    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] running task as {s}\n", .{runner_user}));
     const is_default_runner = std.mem.eql(u8, runner_user, "weft-runner");
 
     const home_dir_path = if (is_default_runner)
@@ -488,8 +487,8 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         break :bind_env env;
     };
 
-    handle_siblings: {
-        try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] handling sibling instances(second_instance = {any})\n", .{spec.sibling}));
+    const skip = handle_siblings: {
+        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] handling sibling instances(second_instance = {any})\n", .{spec.sibling}));
         const do_sibling = spec.sibling;
         if (do_sibling.poll <= 0)
             return error.InvalidSiblingConfig;
@@ -498,50 +497,71 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         while (waited < do_sibling.wait) : (waited += do_sibling.poll) {
             var sibling_iter = try task.siblings(
                 gpa,
-                daemon.io,
+                io,
                 false,
             );
-            defer sibling_iter.deinit(daemon.io);
-            while (try sibling_iter.next(daemon.io)) |_|
-                break
-            else
-                break;
-            try std.Io.sleep(daemon.io, .fromSeconds(do_sibling.poll), .awake);
+            defer sibling_iter.deinit(io);
+            const sibling: Task = while (try sibling_iter.next(io)) |sibl| {
+                if (try sibl.is_active(gpa, io))
+                    break sibl;
+            } else break;
+
+            const unit = try sibling.unit_name(gpa);
+            defer gpa.free(unit);
+            try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] Waiting {d}s for sibling instance {s}\n", .{ do_sibling.wait - waited, unit }));
+            try std.Io.sleep(io, .fromSeconds(do_sibling.poll), .awake);
         }
 
+        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] Looking for siblings...", .{}));
         switch (spec.sibling.then) {
             .ignore => {},
             .kill => {
-                var siblings = try task.siblings(gpa, daemon.io, false);
-                defer siblings.deinit(daemon.io);
+                var siblings = try task.siblings(gpa, io, false);
+                defer siblings.deinit(io);
                 while (try siblings.next(io)) |sibling|
                     if (try sibling.is_active(gpa, io)) {
-                        try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] killing sibling task from {s}\n", .{&sibling.id.deployment.to_string()}));
+                        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] killing sibling task from {s}\n", .{&sibling.id.deployment.to_string()}));
                         try sibling.kill(gpa, io);
                     };
             },
             .fail => {
-                var siblings = try task.siblings(gpa, daemon.io, false);
-                defer siblings.deinit(daemon.io);
+                var siblings = try task.siblings(gpa, io, false);
+                defer siblings.deinit(io);
                 while (try siblings.next(io)) |sibling|
                     if (try sibling.is_active(gpa, io)) {
-                        try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] found sibling {s}; failing\n", .{&sibling.id.deployment.to_string()}));
+                        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] found sibling {s}; failing\n", .{&sibling.id.deployment.to_string()}));
                         return error.AlreadyRunning;
                     };
             },
-        }
-        try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] Spawning systemd-run for task {s} \n", .{unit_name}));
-        break :handle_siblings;
-    }
+            .skip => {
+                var siblings = try task.siblings(gpa, io, false);
+                defer siblings.deinit(io);
 
-    log_file.?.close(io);
-    log_file = null;
+                break :handle_siblings while (try siblings.next(io)) |sibling| {
+                    if (try sibling.is_active(gpa, io))
+                        break true;
+                } else false;
+            },
+        }
+
+        break :handle_siblings false;
+    };
+    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, " do stuff with siblings", .{}));
+
+    {
+        const msg = if (skip)
+            try std.fmt.allocPrint(alloc, "[weft::spawner] Task will be skipped \n", .{})
+        else
+            try std.fmt.allocPrint(alloc, "[weft::spawner] Spawning systemd-run for task {s} \n", .{unit_name});
+        defer alloc.free(msg);
+        try log_file.writeStreamingAll(io, msg);
+    }
     var child = try systemd.run(
         gpa,
         io,
         unit_name,
         .{
-            .cmd = &.{script_path},
+            .cmd = if (!skip) &.{script_path} else &.{ "/usr/bin/echo", "[weft] Pipeline skipped" },
             .raw = &.{},
             .unit = .{
                 .type = .exec,
@@ -598,11 +618,11 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         },
     );
     const term = try child.wait(daemon.io);
-    try log_file.?.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] exited with: {any} \n", .{term}));
+    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] exited with: {any} \n", .{term}));
     if (term.exited != 0) {
         daemon.term.err("Systemd task launch failed: {any}", .{term});
         return error.SpawnFailed;
-    } else return .{};
+    } else return .spawned;
 }
 
 const max_log_pack_size = 32 << 10;
@@ -711,8 +731,8 @@ fn handle_task_kill(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Con
     const io = daemon.io;
 
     const req = try conn.recv_object(ara, proto.task.kill.Req);
-    const killed_count = try Task.kill_matching(ara, io, req);
-    return .{ .killed_count = killed_count };
+    try Task.kill_matching(ara, io, req);
+    return .{ .footer = .{} };
 }
 
 fn handle_gc(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.gc.Res) {

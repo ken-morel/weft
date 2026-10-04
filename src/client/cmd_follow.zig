@@ -35,12 +35,12 @@ pub fn run(
             return error.NoDeployments;
         };
 
-    var deployment = project.load_deployment(alloc, io, dep_id) catch |err| {
+    var deployment = project.load_deployment_leaky(alloc, io, dep_id) catch |err| {
         term.err("failed to load deployment: {any}", .{err});
         return err;
     };
 
-    const remotes = try inst.get_remotes_leaky(alloc, io, term);
+    const remotes = try inst.get_remotes_leaky(alloc, io);
 
     const pipeline_name = if (pipeline_spec.len > 0 and pipeline_spec[0] == '.')
         pipeline_spec[1..]

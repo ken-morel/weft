@@ -4,7 +4,7 @@ const Term = @import("../domain/Term.zig");
 const Deployment = @import("Deployment.zig");
 pub const Remote = @import("Remote.zig");
 
-pub const read_only_user_permissions = @as(std.Io.File.Permissions, @enumFromInt(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)));
+pub const read_only_user_permissions = @as(std.Io.File.Permissions, @fromBackingInt(@intCast(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR))));
 pub const read_only_user_mode = read_only_user_permissions.toMode();
 pub const remotes_zon_file_name = "remotes.zon";
 
@@ -60,7 +60,7 @@ pub fn open_data_dir(gpa: std.mem.Allocator, io: std.Io, env: *const std.process
     return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
 }
 
-pub fn get_remotes_leaky(self: @This(), gpa: std.mem.Allocator, io: std.Io, term: *Term) ![]Remote {
+pub fn get_remotes_leaky(self: @This(), gpa: std.mem.Allocator, io: std.Io) ![]Remote {
     const content = self.config_dir.readFileAllocOptions(
         io,
         remotes_zon_file_name,
@@ -74,11 +74,15 @@ pub fn get_remotes_leaky(self: @This(), gpa: std.mem.Allocator, io: std.Io, term
         else
             err;
     defer gpa.free(content);
-    var diag: std.zon.parse.Diagnostics = .{};
+    var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
 
-    return std.zon.parse.fromSliceAlloc([]Remote, gpa, content, &diag, .{}) catch |err| {
-        try diag.format(term.writer());
-        term.flush() catch {};
+    return std.zon.parse.fromSlice([]Remote, .{
+        .gpa = gpa,
+        .arena = gpa,
+        .source = content,
+        .diagnostics = &diag,
+    }) catch |err| {
+        diag.log(remotes_zon_file_name);
         return err;
     };
 }

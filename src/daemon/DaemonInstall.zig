@@ -8,8 +8,6 @@ const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 
-const config_size_limit: std.Io.Limit = .limited(10 << 10);
-
 pub const Config = struct {
     runner_user: ?[]const u8 = null,
     secret: []const u8,
@@ -56,7 +54,7 @@ pub fn open_temp(io: std.Io, sub: []const u8) !std.Io.Dir {
     var tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(
         io,
         paths.weft_tmp_dir,
-        .{ .open_options = .{ .iterate = true } },
+        .{ .open_options = .{} },
     );
     defer tmp_dir.close(io);
 
@@ -64,14 +62,14 @@ pub fn open_temp(io: std.Io, sub: []const u8) !std.Io.Dir {
     var sub_dir = try tmp_dir.createDirPathOpen(io, sub, .{});
     defer sub_dir.close(io);
 
-    return try sub_dir.createDirPathOpen(io, &uuid, .{});
+    return try sub_dir.createDirPathOpen(io, &uuid, .{ .open_options = .{ .iterate = true } });
 }
 
 pub fn install(io: std.Io, gpa: std.mem.Allocator, term: *Term, maybe_user: ?[]const u8) !void {
-    const cwd = std.Io.Dir.cwd();
-
     var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
     const alloc = arena.allocator();
+    const cwd = std.Io.Dir.cwd();
 
     var child_stop = try std.process.spawn(io, .{
         .argv = &.{ "systemctl", "stop", "weftd.service" },
@@ -81,8 +79,7 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, term: *Term, maybe_user: ?[]c
         return error.SystemctlStopFailed;
 
     install_exe: {
-        const exe_path = try std.process.executablePathAlloc(io, gpa);
-        defer gpa.free(exe_path);
+        const exe_path = try std.process.executablePathAlloc(io, alloc);
 
         if (!std.mem.eql(u8, exe_path, "/usr/local/bin/weft")) {
             const bin_dir = try cwd.openDir(io, "/usr/local/bin", .{});
@@ -96,8 +93,6 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, term: *Term, maybe_user: ?[]c
 
     write_config: {
         const current_config: ?Config = read_config_leaky(io, alloc, null) catch null;
-        defer if (current_config) |c|
-            std.zon.parse.free(gpa, c);
 
         var secret_hex = secret_hex: {
             var stack_secret: [64]u8 = undefined;
@@ -209,17 +204,16 @@ pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator, term: ?*Term) !Conf
     var reader = file.reader(io, &buff);
     const content: [:0]const u8 = try reader.interface.allocRemainingAlignedSentinel(
         gpa,
-        config_size_limit,
+        .unlimited,
         .of(u8),
         0,
     );
-    defer gpa.free(content);
 
-    return try std.zon.parse.fromSliceAlloc(
-        Config,
-        gpa,
-        content,
-        null,
-        .{},
-    );
+    var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
+    return try std.zon.parse.fromSlice(Config, .{
+        .arena = gpa,
+        .gpa = gpa,
+        .source = content,
+        .diagnostics = &diag,
+    });
 }

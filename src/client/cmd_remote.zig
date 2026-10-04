@@ -121,15 +121,11 @@ pub fn install(
         try install_argv.append(alloc, p);
     }
     try install_argv.append(alloc, target.ssh_dest);
-    try install_argv.append(alloc, "sh");
-    try install_argv.append(alloc, "-c");
 
-    const setup_script = try std.fmt.allocPrint(
+    try install_argv.append(
         alloc,
-        "cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft",
-        .{},
+        "sh -c 'cp /tmp/weft /usr/local/bin/weft.new && chmod +x /usr/local/bin/weft.new && mv -f /usr/local/bin/weft.new /usr/local/bin/weft && rm -f /tmp/weft'",
     );
-    try install_argv.append(alloc, setup_script);
 
     const setup_res = try std.process.run(alloc, io, .{
         .argv = install_argv.items,
@@ -182,11 +178,11 @@ pub fn install(
     }
 
     const token = std.mem.trim(u8, token_res.stdout, " \n");
-    if (token.len != 32) {
+    if (token.len != 64) {
         term.err("remote token fetch failed, could not parse token from output: '{s}'. ('{s}')", .{ token_res.stdout, token_res.stderr });
         return error.RemoteInstallFailed;
     }
-    const existing_remotes = try installation.get_remotes_leaky(alloc, io, term);
+    const existing_remotes = try installation.get_remotes_leaky(alloc, io);
 
     var remotes_list: std.ArrayList(Remote) = .empty;
     var updated = false;
@@ -220,72 +216,4 @@ pub fn install(
         if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"0" else host,
         if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"1" else port,
     });
-}
-
-pub fn list(
-    alloc: std.mem.Allocator,
-    io: std.Io,
-    term: *Term,
-    installation: ClientInstall,
-) !void {
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    const remotes = try installation.get_remotes_leaky(arena_alloc, io, term);
-    if (remotes.len == 0) {
-        term.println("No remotes registered in remotes.zon", .{});
-        return;
-    }
-
-    term.println("Registered remotes:", .{});
-    for (remotes) |rem| {
-        const name = rem.get_name();
-        const host = rem.address.@"0";
-        const port = rem.address.@"1";
-        if (rem.groups.len > 0) {
-            var groups_buf: std.ArrayList([]const u8) = .empty;
-            defer groups_buf.deinit(arena_alloc);
-            for (rem.groups) |g| try groups_buf.append(arena_alloc, g);
-            const groups_str = try std.mem.join(arena_alloc, ", ", groups_buf.items);
-            term.print("  ", .{});
-            term.styled(.bold, "{s}", .{name});
-            term.println(" -> {s}:{d} (groups: {s})", .{ host, port, groups_str });
-        } else {
-            term.print("  ", .{});
-            term.styled(.bold, "{s}", .{name});
-            term.println(" -> {s}:{d}", .{ host, port });
-        }
-    }
-}
-
-pub fn remove(
-    alloc: std.mem.Allocator,
-    io: std.Io,
-    term: *Term,
-    installation: ClientInstall,
-    name: []const u8,
-) !void {
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    const remotes = try installation.get_remotes_leaky(arena_alloc, io, term);
-    var updated_list: std.ArrayList(Remote) = .empty;
-    defer updated_list.deinit(arena_alloc);
-
-    for (remotes) |rem| {
-        if (std.mem.eql(u8, rem.get_name(), name))
-            break;
-    } else {
-        term.err("remote '{s}' not found in remotes.zon", .{name});
-        return error.RemoteNotFound;
-    }
-
-    for (remotes) |rem|
-        if (!std.mem.eql(u8, rem.get_name(), name))
-            try updated_list.append(arena_alloc, rem);
-
-    try installation.save_remotes(io, updated_list.items);
-    term.success("removed remote '{s}' from remotes.zon", .{name});
 }

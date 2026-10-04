@@ -17,7 +17,7 @@
     .fingerprint = 0xfd7f37f6c6be10f2, // Changing this has security and trust implications.
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
 
     .paths = .{
         "build.zig",

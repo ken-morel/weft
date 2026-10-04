@@ -29,8 +29,8 @@ pub fn deinit(self: *@This()) void {
     self.server.deinit(self.io);
     self.pressor.deinit(self.gpa);
     self.stats_server.deinit();
-    std.zon.parse.free(self.gpa, self.config);
     self.store.deinit();
+    self.arena.deinit();
 }
 pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
     var arena: std.heap.ArenaAllocator = .init(gpa);

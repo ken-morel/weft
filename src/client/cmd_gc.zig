@@ -1,13 +1,14 @@
 const std = @import("std");
+
+const gc_core = @import("../daemon/gc.zig");
+const proto = @import("../domain/proto.zig");
+const Term = @import("../domain/Term.zig");
+const format_bytes = @import("../util/sizes.zig").format_bytes;
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 const Remote = @import("Remote.zig");
-const gc_core = @import("../daemon/gc.zig");
-const Term = @import("../domain/Term.zig");
-const proto = @import("../domain/proto.zig");
-const format_bytes = @import("../util/sizes.zig").format_bytes;
 
 pub fn run(
     allocator: std.mem.Allocator,
@@ -25,11 +26,11 @@ pub fn run(
     const alloc = arena.allocator();
 
     const older_than_ms = if (older_than_str) |s| gc_core.parse_duration(s) else null;
-    const remotes = inst.get_remotes_leaky(alloc, io, term) catch &.{};
+    const remotes = inst.get_remotes_leaky(alloc, io) catch &.{};
 
     var workspace: ?[]const u8 = null;
     if (project) |prj| {
-        const config = prj.get_config(alloc, term, io) catch null;
+        const config = prj.get_config_leaky(alloc, io) catch null;
         if (config) |c| workspace = c.workspace;
     }
 
