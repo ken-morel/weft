@@ -256,15 +256,18 @@ pub const Spec = struct {
                 parents.appendAssumeCapacity(use);
             }
         }
-        var pkgs: std.ArrayList([]const u8) = .empty;
+        var pkgs: std.ArrayList([]const u8) = try .initCapacity(gpa, env.pkgs.len);
         defer pkgs.deinit(gpa);
-        try pkgs.appendSlice(gpa, env.pkgs);
+        for (env.pkgs) |pkg|
+            if (Weft.strip_mode(mode, pkg)) |p|
+                pkgs.appendAssumeCapacity(p);
         for (parents.items) |parent|
             for (parent.pkgs) |pkg|
-                for (pkgs.items) |item| {
-                    if (std.mem.eql(u8, item, pkg))
-                        break;
-                } else try pkgs.append(gpa, try ara.dupe(u8, pkg));
+                if (Weft.strip_mode(mode, pkg)) |p|
+                    for (pkgs.items) |item| {
+                        if (std.mem.eql(u8, item, p))
+                            break;
+                    } else try pkgs.append(gpa, try ara.dupe(u8, p));
 
         var env_vars: std.StringHashMapUnmanaged([]const u8) = .empty;
         defer env_vars.deinit(gpa);
