@@ -52,7 +52,7 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This()
         .server = server,
         .pressor = try .init(gpa, io),
         .stats_server = try .init(gpa, io),
-        .store = .init(gpa),
+        .store = .init(gpa, config.max_nix_workers),
     };
 }
 

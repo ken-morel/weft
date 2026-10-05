@@ -7,11 +7,12 @@ const DaemonInstall = @import("DaemonInstall.zig");
 const nix = @import("nix.zig");
 
 gpa: std.mem.Allocator,
-mutex: std.Io.Mutex = .init,
+permits: std.Io.Semaphore,
 
-pub fn init(gpa: std.mem.Allocator) @This() {
+pub fn init(gpa: std.mem.Allocator, max_fetches: u32) @This() {
     return .{
         .gpa = gpa,
+        .permits = .{ .permits = max_fetches },
     };
 }
 
@@ -20,8 +21,6 @@ pub fn deinit(_: *@This()) void {}
 pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
     const l = log(.nix_fetch);
     const gpa = self.gpa;
-    try self.mutex.lock(io);
-    defer self.mutex.unlock(io);
 
     const cwd = std.Io.Dir.cwd();
 
@@ -64,6 +63,9 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             continue;
         } else |err| if (err != error.FileNotFound)
             return err;
+
+        try self.permits.wait(io);
+        defer self.permits.post(io);
 
         const nar_info = try nix.fetch_narinfo(gpa, &client, store_basename[0..32]);
         defer nar_info.deinit(gpa);

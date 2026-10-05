@@ -246,9 +246,18 @@ pub const Spec = struct {
         var parents: std.ArrayList(Env) = try .initCapacity(alloc, env.uses.len);
         for (env.uses) |use_spec| {
             if (Weft.strip_mode(mode, use_spec)) |use_name| {
-                const use: Env = for (envs) |use| {
-                    if (std.mem.eql(u8, use.name, use_name))
-                        break try _resolve_env_leaky(gpa, alloc, io, mode, envs, dotenv, use, level + 1);
+                const use: Env = for (envs) |envs_entry| {
+                    if (std.mem.eql(u8, envs_entry.name, use_name))
+                        break try _resolve_env_leaky(
+                            gpa,
+                            alloc,
+                            io,
+                            mode,
+                            envs,
+                            dotenv,
+                            envs_entry,
+                            level + 1,
+                        );
                 } else {
                     l.err("Environment {s} uses environment {s} which doesn't exist", .{ env.name, use_name });
                     return error.EnvironNotFound;
@@ -256,29 +265,27 @@ pub const Spec = struct {
                 parents.appendAssumeCapacity(use);
             }
         }
-        var pkgs: std.ArrayList([]const u8) = try .initCapacity(gpa, env.pkgs.len);
-        defer pkgs.deinit(gpa);
+        var pkgs: std.ArrayList([]const u8) = try .initCapacity(ara, env.pkgs.len);
         for (env.pkgs) |pkg|
             if (Weft.strip_mode(mode, pkg)) |p|
-                pkgs.appendAssumeCapacity(p);
+                pkgs.appendAssumeCapacity(try ara.dupe(u8, p));
         for (parents.items) |parent|
             for (parent.pkgs) |pkg|
                 if (Weft.strip_mode(mode, pkg)) |p|
                     for (pkgs.items) |item| {
                         if (std.mem.eql(u8, item, p))
                             break;
-                    } else try pkgs.append(gpa, try ara.dupe(u8, p));
+                    } else try pkgs.append(ara, try ara.dupe(u8, p));
 
         var env_vars: std.StringHashMapUnmanaged([]const u8) = .empty;
-        defer env_vars.deinit(gpa);
         for (env.vars) |env_var|
             if (Weft.strip_mode(mode, env_var.@"0")) |name| {
                 if (env_var.@"1" orelse dotenv.get(env.name, name)) |val|
-                    try env_vars.put(gpa, name, val)
+                    try env_vars.put(alloc, name, val)
                 else parent: for (parents.items) |parent| {
                     for (parent.vars) |parent_var|
                         if (std.mem.eql(u8, parent_var.@"0", name)) {
-                            try env_vars.put(gpa, name, try ara.dupe(u8, parent_var.@"1"));
+                            try env_vars.put(alloc, name, parent_var.@"1");
                             break :parent;
                         };
                 } else {
@@ -291,10 +298,9 @@ pub const Spec = struct {
         var env_vars_iter = env_vars.iterator();
         var i: usize = 0;
         while (env_vars_iter.next()) |entry| : (i += 1) {
-            final_vars[i].@"0" = entry.key_ptr.*;
-            final_vars[i].@"1" = entry.value_ptr.*;
+            final_vars[i].@"0" = try ara.dupe(u8, entry.key_ptr.*);
+            final_vars[i].@"1" = try ara.dupe(u8, entry.value_ptr.*);
         }
-        // NOTE: All values from parents have to be duped
         return .{
             .pkgs = try pkgs.toOwnedSlice(ara),
             .vars = final_vars,
@@ -323,11 +329,10 @@ pub const Spec = struct {
         else
             try ara.dupe([]const u8, &.{pipeline.name});
 
-        var keep: std.ArrayList(Weft.Keep) = try .initCapacity(gpa, pipeline.keep.len);
-        defer keep.deinit(gpa);
+        var keep: std.ArrayList(Weft.Keep) = try .initCapacity(ara, pipeline.keep.len);
         for (pipeline.keep) |k|
             if (Weft.strip_mode(mode, k.@"0")) |name|
-                try keep.append(gpa, .{ name, k.@"1" });
+                keep.appendAssumeCapacity(.{ try ara.dupe(u8, name), try ara.dupe(u8, k.@"1") });
 
         return .{
             .task_id = .{

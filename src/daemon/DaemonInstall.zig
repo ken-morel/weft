@@ -13,6 +13,7 @@ pub const Config = struct {
     secret: []const u8,
     port: u16 = 9338,
     max_workers: u32 = 8,
+    max_nix_workers: u32 = 5,
 
     pub fn get_secret(self: @This()) ![32]u8 {
         var secret: [32]u8 = undefined;
