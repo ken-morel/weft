@@ -132,10 +132,8 @@ pub fn run_deployment(
                     .item => |item| {
                         const pipeline_name = item.task.pipeline;
                         if (item.logs) |logs| {
-                            if (logs.data.len > 0) {
-                                const prefix = try std.fmt.allocPrint(poll_arena.allocator(), "{s}.{s}", .{ remote_name, pipeline_name });
-                                view.print_logs(prefix, logs.data);
-                            }
+                            if (logs.data.len > 0)
+                                try view.print_logs(pipeline_name, logs.data);
                             state.set_log_offset(io, remote_name, pipeline_name, logs.end_offset);
                         }
 
@@ -209,9 +207,9 @@ pub fn spawn_step(
     step: Deployment.Step,
 ) !void {
     const l = log(.spawn);
-    // var arena: std.heap.ArenaAllocator = .init(gpa);
-    // defer arena.deinit();
-    // const alloc = arena.allocator();
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
     errdefer if (depl.lock(io)) |_| {
         dep.remove_running(gpa, step.remote, step.pipeline);
         state.err(io, step.remote, step.pipeline, "failed to spawn task");
@@ -259,8 +257,9 @@ pub fn spawn_step(
     };
     defer gpa.free(script_content);
 
-    var spec: Task.Spec = try .resolve(
+    const spec: Task.Spec = try .resolve_leaky(
         gpa,
+        alloc,
         io,
         &dep.config,
         pipeline,
@@ -269,7 +268,6 @@ pub fn spawn_step(
         project.env,
         script_content,
     );
-    defer spec.deinit(gpa);
 
     for (spec.inputs) |input|
         try fetcher.upload(io, remote, input);

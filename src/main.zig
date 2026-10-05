@@ -7,8 +7,8 @@ const build = @import("build");
 
 const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_check = @import("client/cmd_check.zig");
-const cmd_follow = @import("client/cmd_follow.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
+const cmd_logs = @import("client/cmd_logs.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
 const cmd_remote = @import("client/cmd_remote.zig");
 const Deployment = @import("client/Deployment.zig");
@@ -74,13 +74,15 @@ const Argz = union(enum) {
 
         deployment: ?[]const u8 = null,
     },
-    follow: struct {
-        pub const doc = "Follow a running/completed tasks and output logs";
+    logs: struct {
+        pub const doc = "Get the logs for a running/completed pipeline";
         pub const doc_pipeline = "The pipeline name to follow";
         pub const doc_deployment = "The deployment id to follow (defaults to latest)";
+        pub const doc_remote = "The remote to query, defaults to load from deployment configuration";
 
         pipeline: []const u8,
         deployment: ?[]const u8 = null,
+        remote: ?[]const u8 = null,
     },
     monitor: struct {
         pub const doc = "Monitor a remote";
@@ -269,13 +271,21 @@ pub fn main(init: std.process.Init) !void {
 
             return cmd_do.run(gpa, init.io, &term, project, installation, .{ .retry = resume_id });
         },
-        .follow => |cmd| {
+        .logs => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
             const project = try Project.open(alloc, init.io, project_dir);
 
-            return cmd_follow.run(gpa, init.io, &term, project, installation, cmd.pipeline, cmd.deployment);
+            return cmd_logs.run(
+                gpa,
+                init.io,
+                project,
+                installation,
+                cmd.pipeline,
+                cmd.deployment,
+                cmd.remote,
+            );
         },
         .monitor => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);

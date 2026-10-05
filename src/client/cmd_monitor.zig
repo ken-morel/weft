@@ -48,7 +48,7 @@ fn pad_10(buf: *[10]u8, s: []const u8) []const u8 {
 fn format_rate(buf: []u8, rate: u64) []const u8 {
     if (rate == 0) return "0 B/s";
     var b_buf: [32]u8 = undefined;
-    const b_str = format_bytes(&b_buf, rate);
+    const b_str = format_bytes(&b_buf, rate) catch "...";
     return std.fmt.bufPrint(buf, "{s}/s", .{b_str}) catch "0 B/s";
 }
 
@@ -222,13 +222,13 @@ pub fn run(
 
             if (is_first_sample) {
                 var ram_t_buf: [32]u8 = undefined;
-                const ram_t_str = format_bytes(&ram_t_buf, stats.ram.total);
+                const ram_t_str = format_bytes(&ram_t_buf, stats.ram.total) catch "...";
                 var ram_a_buf: [32]u8 = undefined;
-                const ram_a_str = format_bytes(&ram_a_buf, stats.ram.avail);
+                const ram_a_str = format_bytes(&ram_a_buf, stats.ram.avail) catch "...";
                 var swp_t_buf: [32]u8 = undefined;
-                const swp_t_str = format_bytes(&swp_t_buf, stats.swap.total);
+                const swp_t_str = format_bytes(&swp_t_buf, stats.swap.total) catch "...";
                 var disk_t_buf: [32]u8 = undefined;
-                const disk_t_str = format_bytes(&disk_t_buf, stats.disk.total);
+                const disk_t_str = format_bytes(&disk_t_buf, stats.disk.total) catch "...";
 
                 if (term.is_tty) term.clear_line();
                 term.styled(.bold, "remote: ", .{});
@@ -310,7 +310,7 @@ pub fn run(
             } else .green;
 
             var ram_raw_buf: [32]u8 = undefined;
-            const ram_raw_str = format_bytes(&ram_raw_buf, stats.ram.used);
+            const ram_raw_str = format_bytes(&ram_raw_buf, stats.ram.used) catch "...";
             var ram_cell: [10]u8 = undefined;
             _ = pad_10(&ram_cell, ram_raw_str);
             const ram_pct: u64 = if (stats.ram.total > 0) (stats.ram.used * 100) / stats.ram.total else 0;
@@ -332,7 +332,7 @@ pub fn run(
             var swap_color: Term.Color = .dim;
             if (stats.swap.total > 0) {
                 var swap_raw_buf: [32]u8 = undefined;
-                const swap_raw_str = format_bytes(&swap_raw_buf, stats.swap.used);
+                const swap_raw_str = format_bytes(&swap_raw_buf, stats.swap.used) catch "...";
                 _ = pad_10(&swap_cell, swap_raw_str);
                 const swap_pct = (stats.swap.used * 100) / stats.swap.total;
                 swap_filled = @min(10, @as(u8, @intCast((swap_pct * 10 + 50) / 100)));
@@ -351,7 +351,7 @@ pub fn run(
 
             var disk_cell: [10]u8 = undefined;
             var disk_raw_buf: [32]u8 = undefined;
-            const disk_raw_str = format_bytes(&disk_raw_buf, stats.disk.used);
+            const disk_raw_str = format_bytes(&disk_raw_buf, stats.disk.used) catch "...";
             _ = pad_10(&disk_cell, disk_raw_str);
             const disk_pct: u64 = if (stats.disk.total > 0) (stats.disk.used * 100) / stats.disk.total else 0;
             const disk_filled: u8 = @min(10, @as(u8, @intCast((disk_pct * 10 + 50) / 100)));
@@ -496,14 +496,14 @@ pub fn run(
                 var ram_u_buf: [32]u8 = undefined;
                 var ram_t_buf: [32]u8 = undefined;
                 var ram_a_buf: [32]u8 = undefined;
-                const ram_u_str = format_bytes(&ram_u_buf, stats.ram.used);
-                const ram_t_str = format_bytes(&ram_t_buf, stats.ram.total);
-                const ram_a_str = format_bytes(&ram_a_buf, stats.ram.avail);
+                const ram_u_str = format_bytes(&ram_u_buf, stats.ram.used) catch "...";
+                const ram_t_str = format_bytes(&ram_t_buf, stats.ram.total) catch "...";
+                const ram_a_str = format_bytes(&ram_a_buf, stats.ram.avail) catch "...";
 
                 var disk_u_buf: [32]u8 = undefined;
                 var disk_t_buf: [32]u8 = undefined;
-                const disk_u_str = format_bytes(&disk_u_buf, stats.disk.used);
-                const disk_t_str = format_bytes(&disk_t_buf, stats.disk.total);
+                const disk_u_str = format_bytes(&disk_u_buf, stats.disk.used) catch "...";
+                const disk_t_str = format_bytes(&disk_t_buf, stats.disk.total) catch "...";
 
                 term.clear_line();
                 term.styled(.dim, "cpu: ", .{});
@@ -526,8 +526,8 @@ pub fn run(
                 if (stats.swap.total > 0) {
                     var swp_u_buf: [32]u8 = undefined;
                     var swp_t_buf: [32]u8 = undefined;
-                    const swp_u_str = format_bytes(&swp_u_buf, stats.swap.used);
-                    const swp_t_str = format_bytes(&swp_t_buf, stats.swap.total);
+                    const swp_u_str = format_bytes(&swp_u_buf, stats.swap.used) catch "...";
+                    const swp_t_str = format_bytes(&swp_t_buf, stats.swap.total) catch "...";
                     term.styled(.dim, "   swap: ", .{});
                     term.print("{s}/{s}", .{ swp_u_str, swp_t_str });
                 }
@@ -544,8 +544,8 @@ pub fn run(
                     for (stats.services) |svc| {
                         var mem_buf: [32]u8 = undefined;
                         var peak_buf: [32]u8 = undefined;
-                        const mem_str = format_bytes(&mem_buf, svc.memory_bytes);
-                        const peak_str = format_bytes(&peak_buf, svc.memory_peak_bytes);
+                        const mem_str = format_bytes(&mem_buf, svc.memory_bytes) catch "...";
+                        const peak_str = format_bytes(&peak_buf, svc.memory_peak_bytes) catch "...";
                         const cpu_ms = svc.cpu_usage_usec / 1000;
 
                         const task_key = try std.fmt.allocPrint(frame_arena.allocator(), "{s}.{s}", .{ svc.task.id.workspace, svc.task.id.pipeline });

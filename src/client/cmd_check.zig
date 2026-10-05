@@ -140,7 +140,8 @@ pub fn run(
             //TODO: Simplify
             var p_arena: std.heap.ArenaAllocator = .init(gpa);
             defer p_arena.deinit();
-            var spec: Task.Spec = Task.Spec.resolve(
+            _ = Task.Spec.resolve_leaky(
+                gpa,
                 p_arena.allocator(),
                 io,
                 &config,
@@ -149,11 +150,7 @@ pub fn run(
                 mode,
                 project.env,
                 "",
-            ) catch |err| {
-                l.err("pipeline '{s}' mode '{s}': validation failed: {s}", .{ pipeline.name, mode, @errorName(err) });
-                continue;
-            };
-            spec.deinit(alloc);
+            ) catch undefined;
         }
     }
 }

@@ -46,7 +46,7 @@ pub const Pipeline = struct {
     name: []const u8,
     in: []const Input = &.{},
     out: ?[]const Output = null,
-    run: ?Run,
+    run: ?Run = null,
     tune: Tune = .{},
 
     sibling: HandleSibling = .{ .then = .ignore },

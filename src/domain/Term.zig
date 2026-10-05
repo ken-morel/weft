@@ -266,26 +266,55 @@ pub fn task_color(name: []const u8) Color {
     return task_palette[idx % task_palette.len];
 }
 
-pub fn write_task_log(self: *@This(), color: Color, prefix: []const u8, line: []const u8) void {
-    self.mutex.lockUncancelable(self.io);
+pub fn write_task_log(self: *@This(), color: Color, prefix: []const u8, line: []const u8, width: usize) !void {
+    try self.mutex.lock(self.io);
     defer self.mutex.unlock(self.io);
     const w = self.writer();
-    if (self.is_tty) w.writeAll("\x1b[2K\r") catch {};
+    if (self.is_tty)
+        try w.writeAll("\x1b[2K\r");
     self.terminal.writer = &self.writer_file.interface;
-    self.terminal.setColor(color) catch {};
-    w.writeAll(prefix) catch {};
-    w.writeAll(" │ ") catch {};
-    self.terminal.setColor(.reset) catch {};
-    w.writeAll(line) catch {};
-    w.writeByte('\n') catch {};
-    w.flush() catch {};
+    try self.terminal.setColor(color);
+    try w.writeAll(prefix);
+    try w.writeAll(" │ ");
+    try self.terminal.setColor(.reset);
+    const line_width = width - prefix.len - 3;
+    var start: usize = 0;
+    var stop = @min(line_width, line.len);
+    while (start != stop) {
+        if (start != 0) {
+            for (0..prefix.len) |_|
+                try w.writeByte(' ');
+            try w.writeAll(" │ ");
+        }
+        try w.writeAll(line[start..stop]);
+        start = stop;
+        stop = @min(stop + line_width, line.len);
+        try w.writeByte('\n');
+    }
+    try w.flush();
+}
+pub fn print_logs(self: *@This(), task: []const u8, content: []const u8) !void {
+    const color = task_color(task);
+    const width = self.get_size().cols;
+    var lines = std.mem.splitScalar(
+        u8,
+        std.mem.trim(u8, content, "\r\n"),
+        '\n',
+    );
+    while (lines.next()) |line| {
+        const clean_line = std.mem.trimEnd(u8, line, "\r");
+        try self.write_task_log(color, task, clean_line, width);
+    }
+
+    self.flush() catch {};
 }
 
 pub fn write_event(self: *@This(), tag_color: Color, tag_text: []const u8, comptime fmt: []const u8, args: anytype) void {
     self.mutex.lockUncancelable(self.io);
     defer self.mutex.unlock(self.io);
     const w = self.writer();
-    if (self.is_tty) w.writeAll("\x1b[2K\r") catch {};
+    if (self.is_tty)
+        w.writeAll("\x1b[2K\r") catch {};
     self.terminal.writer = &self.writer_file.interface;
     self.terminal.setColor(tag_color) catch {};
     w.writeAll(tag_text) catch {};

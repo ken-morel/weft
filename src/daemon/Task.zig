@@ -228,35 +228,36 @@ pub const Spec = struct {
         pkgs: []const []const u8 = &.{},
     };
 
-    pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
-        alloc.free(self.vars);
-        alloc.free(self.pkgs);
-        alloc.free(self.inputs);
-        alloc.free(self.outputs);
-    }
-    pub fn resolve_env(gpa: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env) !Env {
-        return _resolve_env(gpa, io, mode, envs, dotenv, env, 0);
+    pub fn resolve_env_leaky(gpa: std.mem.Allocator, alloc: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env) !Env {
+        return _resolve_env_leaky(gpa, alloc, io, mode, envs, dotenv, env, 0);
     }
 
-    pub fn _resolve_env(gpa: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env, level: u8) !Env {
+    pub fn _resolve_env_leaky(gpa: std.mem.Allocator, alloc: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env, level: u8) !Env {
         const l = log(.env_resolve);
+        if (level > 100) {
+            l.err("Went more than 100 levels at '{s}' deep while resolving envirnment", .{env.name});
+            return error.EnvCycle;
+        }
 
-        const parents = try gpa.alloc(Env, env.uses.len);
-        defer gpa.free(parents);
-        for (env.uses, parents) |use_name, *parent| {
-            const use: Env = for (envs) |use| {
-                if (std.mem.eql(u8, env.name, use_name))
-                    break try _resolve_env(gpa, io, mode, envs, dotenv, use, level + 1);
-            } else {
-                l.err("Environm {s} uses environ {s} which doesn't exist", .{ env.name, use_name });
-                return error.EnvironNotFound;
-            };
-            parent.* = use;
+        const parents_buf = try gpa.alloc(Env, env.uses.len);
+        defer gpa.free(parents_buf);
+        var parents: std.ArrayList(Env) = .initBuffer(parents_buf);
+        for (env.uses) |use_spec| {
+            if (Weft.strip_mode(mode, use_spec)) |use_name| {
+                const use: Env = for (envs) |use| {
+                    if (std.mem.eql(u8, use.name, use_name))
+                        break try _resolve_env_leaky(gpa, alloc, io, mode, envs, dotenv, use, level + 1);
+                } else {
+                    l.err("Environment {s} uses environment {s} which doesn't exist", .{ env.name, use_name });
+                    return error.EnvironNotFound;
+                };
+                parents.appendAssumeCapacity(use);
+            }
         }
         var pkgs: std.ArrayList([]const u8) = .empty;
         defer pkgs.deinit(gpa);
 
-        for (parents) |parent| {
+        for (parents.items) |parent| {
             for (parent.pkgs) |pkg|
                 for (pkgs.items) |item| {
                     if (std.mem.eql(u8, item, pkg))
@@ -270,7 +271,7 @@ pub const Spec = struct {
                 if (env_var.@"1" orelse dotenv.get(env.name, name)) |val| {
                     try env_vars.put(gpa, name, val);
                 } else {
-                    parent: for (parents) |parent| {
+                    parent: for (parents.items) |parent| {
                         for (parent.vars) |parent_var| {
                             if (std.mem.eql(u8, parent_var.@"0", name)) {
                                 try env_vars.put(gpa, name, parent_var.@"1");
@@ -284,7 +285,7 @@ pub const Spec = struct {
                 }
             }
         }
-        const final_vars = try gpa.alloc(struct { []const u8, []const u8 }, env_vars.size);
+        const final_vars = try alloc.alloc(struct { []const u8, []const u8 }, env_vars.size);
         var env_vars_iter = env_vars.iterator();
         var i: usize = 0;
         while (env_vars_iter.next()) |entry| : (i += 1) {
@@ -292,13 +293,14 @@ pub const Spec = struct {
             final_vars[i].@"1" = entry.value_ptr.*;
         }
         return .{
-            .pkgs = try pkgs.toOwnedSlice(gpa),
+            .pkgs = try pkgs.toOwnedSlice(alloc),
             .vars = final_vars,
         };
     }
 
-    pub fn resolve(
+    pub fn resolve_leaky(
         gpa: std.mem.Allocator,
+        alloc: std.mem.Allocator,
         io: std.Io,
         config: *const Weft,
         pipeline: *const Weft.Pipeline,
@@ -312,11 +314,11 @@ pub const Spec = struct {
             l.err("Large scripts/binaries should be imported as source artifacts", .{});
             return error.ScriptTooLarge;
         }
-        const env = try resolve_env(gpa, io, mode, config.environments, dotenv, pipeline.environ());
+        const env = try resolve_env_leaky(gpa, alloc, io, mode, config.environments, dotenv, pipeline.environ());
         const outputs: []const []const u8 = if (pipeline.out) |o|
             o
         else
-            &.{pipeline.name};
+            try alloc.dupe([]const u8, &.{pipeline.name});
         return .{
             .task_id = .{
                 .deployment = deployment_id,
@@ -326,8 +328,8 @@ pub const Spec = struct {
             .script = script,
             .vars = env.vars,
             .pkgs = env.pkgs,
-            .inputs = try gpa.dupe([]const u8, pipeline.in),
-            .outputs = try gpa.dupe([]const u8, outputs),
+            .inputs = pipeline.in,
+            .outputs = outputs,
             .keep = pipeline.keep,
             .sibling = pipeline.sibling,
             .tune = pipeline.tune,

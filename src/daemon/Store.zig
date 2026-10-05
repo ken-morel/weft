@@ -102,7 +102,7 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             defer cwd.deleteTree(io, temp_dir_path) catch {};
 
             var size_buf: [1 << 6]u8 = undefined;
-            l.info("nix::store downloading {s} ({s})...", .{ store_basename, sizes.format_bytes(&size_buf, nar_info.file_size) });
+            l.info("nix::store downloading {s} ({s})...", .{ store_basename, sizes.format_bytes(&size_buf, nar_info.file_size) catch "..." });
 
             const temp_store_path = try std.fs.path.join(gpa, &.{ temp_dir_path, store_basename });
             defer gpa.free(temp_store_path);

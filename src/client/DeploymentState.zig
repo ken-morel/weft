@@ -21,6 +21,7 @@ pub const Step = struct {
     memory_bytes: ?u64 = null,
     prev_cpu_usec: ?u64 = null,
     last_poll_time: ?std.Io.Timestamp = null,
+    started: std.Io.Timestamp,
     log_offset: u64 = 0,
 };
 pub const Artifact = struct {
@@ -102,6 +103,7 @@ pub fn add(self: *@This(), io: std.Io, remote: *const Remote, pipeline: *const W
         .pipeline = pipeline,
         .status = .preparing,
         .err = null,
+        .started = .now(io, .real),
     });
     return &self.steps.items[self.steps.items.len - 1];
 }
@@ -120,16 +122,20 @@ pub fn initializing(self: *@This(), io: std.Io, remote_name: []const u8, pipelin
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
-    if (self.get_unlocked(remote_name, pipeline_name)) |s|
+    if (self.get_unlocked(remote_name, pipeline_name)) |s| {
         s.status = .initializing;
+        s.started = .now(io, .real);
+    }
 }
 
 pub fn running(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
-    if (self.get_unlocked(remote_name, pipeline_name)) |s|
+    if (self.get_unlocked(remote_name, pipeline_name)) |s| {
         s.status = .running;
+        s.started = .now(io, .real);
+    }
 }
 
 pub fn completed(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
@@ -174,9 +180,8 @@ pub fn set_log_offset(self: *@This(), io: std.Io, remote_name: []const u8, pipel
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
-    if (self.get_unlocked(remote_name, pipeline_name)) |s| {
+    if (self.get_unlocked(remote_name, pipeline_name)) |s|
         s.log_offset = offset;
-    }
 }
 
 pub fn artifact_progress(self: *@This(), io: std.Io, name: []const u8, remote: *const Remote, status: Artifact.Status, percent: f32) !void {

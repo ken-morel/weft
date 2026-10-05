@@ -38,17 +38,8 @@ pub fn deinit(self: *@This()) void {
     self.artifact_history.deinit(self.alloc);
 }
 
-pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) void {
-    const color = Term.task_color(prefix);
-    var lines = std.mem.splitScalar(u8, std.mem.trim(u8, content, "\r\n"), '\n');
-    while (lines.next()) |line| {
-        const clean_line = std.mem.trimEnd(u8, line, "\r");
-        self.term.write_task_log(color, prefix, clean_line);
-    }
-    if (self.term.is_tty)
-        self.term.clear_to_end();
-
-    self.term.flush() catch {};
+pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) !void {
+    try self.term.print_logs(prefix, content);
 }
 
 pub fn update(self: *@This(), io: std.Io) !void {
@@ -56,32 +47,30 @@ pub fn update(self: *@This(), io: std.Io) !void {
     defer self.state.mutex.unlock(io);
 
     for (self.state.steps.items) |step| {
-        const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
-        defer self.alloc.free(key);
-        const color = Term.task_color(key);
+        const color = Term.task_color(step.pipeline.name);
+        const duration_ms: u64 = @intCast(@max(step.started.durationTo(.now(io, .real)).toMilliseconds(), 0));
 
-        if (self.step_history.get(key)) |prev_status| {
+        const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.name orelse "local", step.pipeline.name });
+        if (self.step_history.get(step.pipeline.name)) |prev_status| {
             if (prev_status != step.status) {
                 if (step.status == .running and (prev_status == .preparing or prev_status == .initializing))
                     self.term.write_event(color, "{", " {s}", .{key})
                 else if (step.status == .completed)
-                    self.term.write_event(.green, "}", " {s}", .{key})
+                    self.term.write_event(.green, "}", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
                 else if (step.status == .err)
-                    self.term.write_event(.red, "}", " {s} ({s})", .{ key, step.err orelse "<unknown error>" });
+                    self.term.write_event(.red, "#", " {s} ({d}ms, CPU: {d}ms): {s}", .{ key, duration_ms, step.cpu_ms orelse 0, step.err orelse "<unknown error>" });
 
-                try self.step_history.put(self.alloc, try self.alloc.dupe(u8, key), step.status);
+                try self.step_history.put(self.alloc, step.pipeline.name, step.status);
             }
         } else {
-            if (step.status == .running) {
-                self.term.write_event(color, "{", " {s}", .{key});
-            } else if (step.status == .completed) {
-                self.term.write_event(color, "{", " {s}", .{key});
-                self.term.write_event(.green, "}", " {s}", .{key});
-            } else if (step.status == .err) {
-                self.term.write_event(color, "{", " {s}", .{key});
-                self.term.write_event(.red, "}", " {s} ({s})", .{ key, step.err orelse "<unknown error>" });
-            }
-            try self.step_history.put(self.alloc, try self.alloc.dupe(u8, key), step.status);
+            if (step.status == .running)
+                self.term.write_event(color, "{", " {s}", .{key})
+            else if (step.status == .completed)
+                self.term.write_event(color, "{}", " {s}", .{key})
+            else if (step.status == .err)
+                self.term.write_event(.red, "{}", " {s} {s}", .{ key, step.err orelse "<unknown error>" });
+
+            try self.step_history.put(self.alloc, try self.alloc.dupe(u8, step.pipeline.name), step.status);
         }
     }
 
@@ -115,72 +104,52 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
     var lines_count: u16 = 0;
 
-    var has_active_items = false;
-    for (self.state.steps.items) |step| {
-        if (step.status == .preparing or step.status == .initializing or step.status == .running) {
-            has_active_items = true;
-            break;
-        }
-    }
-    if (!has_active_items) {
-        for (self.state.artifacts.items) |art| {
-            if (art.status == .pulling or art.status == .pushing) {
-                has_active_items = true;
-                break;
-            }
-        }
-    }
+    const has_active_items = for (self.state.steps.items) |step| {
+        if (step.status == .preparing or step.status == .initializing or step.status == .running)
+            break true;
+    } else for (self.state.artifacts.items) |art| {
+        if (art.status == .pulling or art.status == .pushing)
+            break true;
+    } else false;
 
     if (has_active_items) {
-        const term_size = self.term.get_size();
-        const width: usize = @min(@as(usize, term_size.cols), 60);
-        var rule_buf: [256]u8 = undefined;
-        const char = "─";
-        const count = @max(width, 10);
-        var pos: usize = 0;
-        for (0..count) |_| {
-            if (pos + char.len <= rule_buf.len) {
-                @memcpy(rule_buf[pos .. pos + char.len], char);
-                pos += char.len;
-            }
-        }
         self.term.clear_line();
-        self.term.styled_ln(.dim, "{s} {s}", .{ rule_buf[0..pos], &self.deployment_id.to_string() });
+        self.term.styled_ln(.dim, " [{s}] ", .{&self.deployment_id.to_string()});
         lines_count += 1;
 
         for (self.state.steps.items) |step| {
             if (step.status == .preparing) {
                 self.term.clear_line();
-                self.term.styled_ln(.dim, "? {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                self.term.styled_ln(.dim, "  {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
                 lines_count += 1;
             } else if (step.status == .initializing) {
                 self.term.clear_line();
-                self.term.styled_ln(.dim, "# {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                self.term.styled_ln(.dim, "? {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
                 lines_count += 1;
             } else if (step.status == .running) {
-                var stats_buf: [128]u8 = undefined;
-                var stats_str: []const u8 = "";
-                if (step.cpu_ms != null or step.memory_bytes != null) {
-                    var mem_buf: [32]u8 = undefined;
-                    const m_str = if (step.memory_bytes) |mb| format_bytes(&mem_buf, mb) else "--";
-                    if (step.cpu_pct) |pct| {
-                        stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d:.1}% / {d}ms, RAM: {s})", .{
-                            pct,
-                            step.cpu_ms orelse 0,
-                            m_str,
-                        }) catch "";
-                    } else {
-                        stats_str = std.fmt.bufPrint(&stats_buf, " (CPU: {d}ms, RAM: {s})", .{
-                            step.cpu_ms orelse 0,
-                            m_str,
-                        }) catch "";
-                    }
-                }
+                var mem_buf: [32]u8 = undefined;
+                const m_str = if (step.memory_bytes) |mb|
+                    format_bytes(&mem_buf, mb) catch "..."
+                else
+                    "--";
+                const duration = step.started.durationTo(.now(io, .real)).toMilliseconds();
+
                 const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
                 defer self.alloc.free(key);
                 const color = Term.task_color(key);
                 self.term.clear_line();
-                self.term.styled_ln(color, "! {s}{s}", .{ key, stats_str });
+                self.term.styled_ln(
+                    color,
+                    "! {s} ({d}ms, CPU: {d:.1}% / {d}ms, RAM: {s})",
+                    .{
+                        key,
+
+                        duration,
+                        step.cpu_pct orelse 0,
+                        step.cpu_ms orelse 0,
+                        m_str,
+                    },
+                );
                 lines_count += 1;
             }
         }
