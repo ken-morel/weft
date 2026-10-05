@@ -1,11 +1,11 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const Deployment = @import("../client/Deployment.zig");
+const DotEnv = @import("../domain/DotEnv.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
-const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const dotenv = @import("../util/dotenv.zig");
 const systemd = @import("../util/systemd.zig");
 
 const Task = @This();
@@ -211,22 +211,6 @@ pub fn usage(self: @This(), alloc: std.mem.Allocator, io: std.Io) ?proto.task.po
     };
 }
 
-pub fn kill_matching(
-    alloc: std.mem.Allocator,
-    io: std.Io,
-    req: proto.task.kill.Req,
-) !void {
-    try Task.kill(
-        .{ .id = .{
-            .workspace = req.workspace,
-            .deployment = req.deployment,
-            .pipeline = req.pipeline,
-        } },
-        alloc,
-        io,
-    );
-}
-
 pub const Spec = struct {
     pub const Tune = Weft.Pipeline.Tune;
     task_id: proto.task.Id,
@@ -237,9 +221,12 @@ pub const Spec = struct {
     outputs: []const []const u8 = &.{},
     keep: []const Weft.Keep = &.{},
     sibling: Weft.Pipeline.HandleSibling = .{ .then = .ignore },
-
     tune: Tune,
-    pub const resolve = Task.resolve;
+
+    pub const Env = struct {
+        vars: []const struct { []const u8, []const u8 } = &.{},
+        pkgs: []const []const u8 = &.{},
+    };
 
     pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
         alloc.free(self.vars);
@@ -247,129 +234,103 @@ pub const Spec = struct {
         alloc.free(self.inputs);
         alloc.free(self.outputs);
     }
-};
-
-pub fn resolve(
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    term: *Term,
-    config: *const Weft,
-    pipeline: *const Weft.Pipeline,
-    deployment_id: Deployment.Id,
-    project_dir: std.Io.Dir,
-    mode: []const u8,
-    environ: ?*const std.process.Environ.Map,
-    script: []const u8,
-) !Spec {
-    if (script.len > 50 << 10) {
-        term.err("Large scripts/binaries shouldn't be imported as source artifacts", .{});
-        return error.ScriptTooLarge;
+    pub fn resolve_env(gpa: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env) !Env {
+        return _resolve_env(gpa, io, mode, envs, dotenv, env, 0);
     }
-    // Create a list where the first children environments are at the bottom, and the last
-    // parent environments are at the top.
-    const env_order: []const []const u8 = env_order: {
-        var env_order: std.ArrayList([]const u8) = .empty;
-        var todo: std.ArrayList([]const u8) = .empty;
-        defer {
-            todo.deinit(gpa);
-            env_order.deinit(gpa);
-        }
-        for (pipeline.uses) |uses|
-            if (Weft.strip_mode(mode, uses)) |u|
-                try todo.insert(gpa, 0, u);
 
-        todo: while (todo.pop()) |sub_env_name| {
-            if (Weft.strip_mode(mode, sub_env_name)) |env_name| {
-                for (env_order.items) |item| {
-                    if (std.mem.eql(u8, item, env_name))
-                        continue :todo;
-                } else try env_order.append(gpa, env_name);
-                const env = config.get_environment(env_name) orelse return error.InvalidEnvornment;
-                env_parent: for (env.uses) |env_parent|
-                    for (env_order.items) |item| {
-                        if (std.mem.eql(u8, item, env_parent))
-                            continue :env_parent;
-                    } else try env_order.append(gpa, env_parent);
-            }
-        }
-        {
-            const env_list = try std.mem.join(gpa, ", ", env_order.items);
-            defer gpa.free(env_list);
-            term.info("Resolving environment for pipeline {s} in mode {s} as: {s}", .{
-                pipeline.name,
-                mode,
-                env_list,
-            });
-        }
-        std.mem.reverse([]const u8, env_order.items);
+    pub fn _resolve_env(gpa: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env, level: u8) !Env {
+        const l = log(.env_resolve);
 
-        break :env_order try env_order.toOwnedSlice(gpa);
-    };
-    defer gpa.free(env_order);
-    var pkgs: std.ArrayList([]const u8) = .empty;
-    defer pkgs.deinit(gpa);
-    var env_vars: std.StringHashMapUnmanaged([]const u8) = .empty;
-    defer env_vars.deinit(gpa);
-    {
-        for (env_order) |env_name| {
-            const env = config.get_environment(env_name).?;
-            for (env.pkgs) |pkg| //PERF: O(N^2)
+        const parents = try gpa.alloc(Env, env.uses.len);
+        defer gpa.free(parents);
+        for (env.uses, parents) |use_name, *parent| {
+            const use: Env = for (envs) |use| {
+                if (std.mem.eql(u8, env.name, use_name))
+                    break try _resolve_env(gpa, io, mode, envs, dotenv, use, level + 1);
+            } else {
+                l.err("Environm {s} uses environ {s} which doesn't exist", .{ env.name, use_name });
+                return error.EnvironNotFound;
+            };
+            parent.* = use;
+        }
+        var pkgs: std.ArrayList([]const u8) = .empty;
+        defer pkgs.deinit(gpa);
+
+        for (parents) |parent| {
+            for (parent.pkgs) |pkg|
                 for (pkgs.items) |item| {
                     if (std.mem.eql(u8, item, pkg))
                         break;
                 } else try pkgs.append(gpa, pkg);
-            const env_dotenv = try dotenv.load_env(gpa, io, project_dir, env_name);
-            for (env.vars) |env_var| {
-                const name = env_var.@"0";
-
-                if (env_var.@"1") |v|
-                    try env_vars.put(gpa, name, v)
-                else {
-                    if (environ) |env_map|
-                        if (env_map.get(name)) |val| {
-                            try env_vars.put(gpa, name, val);
-                            continue;
-                        };
-                    if (env_dotenv) |dot|
-                        if (dot.get(name)) |val| {
-                            try env_vars.put(gpa, name, val);
-                            continue;
-                        };
-                    if (env_vars.get(name)) |_|
-                        continue;
-
-                    term.err("Environment {s} needed variable {s} but found no value", .{ env_name, name });
-                    return error.MissingEnviron;
+        }
+        var env_vars: std.StringHashMapUnmanaged([]const u8) = .empty;
+        defer env_vars.deinit(gpa);
+        for (env.vars) |env_var| {
+            if (Weft.strip_mode(mode, env_var.@"0")) |name| {
+                if (env_var.@"1" orelse dotenv.get(env.name, name)) |val| {
+                    try env_vars.put(gpa, name, val);
+                } else {
+                    parent: for (parents) |parent| {
+                        for (parent.vars) |parent_var| {
+                            if (std.mem.eql(u8, parent_var.@"0", name)) {
+                                try env_vars.put(gpa, name, parent_var.@"1");
+                                break :parent;
+                            }
+                        }
+                    } else {
+                        l.err("Environment {s} requires variable {s} which couldn't be found in mode {s}", .{ env.name, name, mode });
+                        return error.MissingEnviron;
+                    }
                 }
             }
         }
-    }
-    const vars = try gpa.alloc(struct { []const u8, []const u8 }, env_vars.size);
-    errdefer gpa.free(vars);
-    var env_vars_iter = env_vars.iterator();
-    var idx: usize = 0;
-    while (env_vars_iter.next()) |entry| : (idx += 1) {
-        vars[idx].@"0" = entry.key_ptr.*;
-        vars[idx].@"1" = entry.value_ptr.*;
+        const final_vars = try gpa.alloc(struct { []const u8, []const u8 }, env_vars.size);
+        var env_vars_iter = env_vars.iterator();
+        var i: usize = 0;
+        while (env_vars_iter.next()) |entry| : (i += 1) {
+            final_vars[i].@"0" = entry.key_ptr.*;
+            final_vars[i].@"1" = entry.value_ptr.*;
+        }
+        return .{
+            .pkgs = try pkgs.toOwnedSlice(gpa),
+            .vars = final_vars,
+        };
     }
 
-    const outputs: []const []const u8 = if (pipeline.out) |o|
-        o
-    else
-        &.{pipeline.name};
-    return .{
-        .task_id = .{
-            .deployment = deployment_id,
-            .pipeline = pipeline.name,
-            .workspace = config.workspace,
-        },
-        .script = script,
-        .vars = vars,
-        .pkgs = try pkgs.toOwnedSlice(gpa),
-        .inputs = try gpa.dupe([]const u8, pipeline.in),
-        .outputs = try gpa.dupe([]const u8, outputs),
-        .keep = pipeline.keep,
-        .sibling = pipeline.sibling,
-        .tune = pipeline.tune,
-    };
-}
+    pub fn resolve(
+        gpa: std.mem.Allocator,
+        io: std.Io,
+        config: *const Weft,
+        pipeline: *const Weft.Pipeline,
+        deployment_id: Deployment.Id,
+        mode: []const u8,
+        dotenv: DotEnv,
+        script: []const u8,
+    ) !@This() {
+        const l = log(.task_resolve);
+        if (script.len > 40 << 10) {
+            l.err("Large scripts/binaries should be imported as source artifacts", .{});
+            return error.ScriptTooLarge;
+        }
+        const env = try resolve_env(gpa, io, mode, config.environments, dotenv, pipeline.environ());
+        const outputs: []const []const u8 = if (pipeline.out) |o|
+            o
+        else
+            &.{pipeline.name};
+        return .{
+            .task_id = .{
+                .deployment = deployment_id,
+                .pipeline = pipeline.name,
+                .workspace = config.workspace,
+            },
+            .script = script,
+            .vars = env.vars,
+            .pkgs = env.pkgs,
+            .inputs = try gpa.dupe([]const u8, pipeline.in),
+            .outputs = try gpa.dupe([]const u8, outputs),
+            .keep = pipeline.keep,
+            .sibling = pipeline.sibling,
+            .tune = pipeline.tune,
+        };
+    }
+};

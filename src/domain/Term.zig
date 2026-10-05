@@ -294,35 +294,6 @@ pub fn write_event(self: *@This(), tag_color: Color, tag_text: []const u8, compt
     w.flush() catch {};
 }
 
-pub fn logf(self: *@This(), comptime level: Level, comptime fmt: []const u8, args: anytype) void {
-    if (@backingInt(level) > @backingInt(self.log_level))
-        return;
-    const color, const prefix = switch (level) {
-        .quiet => return,
-        .err => .{ .red, "error: " },
-        .warn => .{ .yellow, "warn: " },
-        .info => .{ .green, "info: " },
-        .debug => .{ .dim, "debug: " },
-    };
-    self.write_tag(color, prefix, fmt, args);
-}
-
-pub inline fn err(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    self.logf(.err, fmt, args);
-}
-
-pub inline fn warn(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    self.logf(.warn, fmt, args);
-}
-
-pub inline fn info(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    self.logf(.info, fmt, args);
-}
-
-pub inline fn debug(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-    self.logf(.debug, fmt, args);
-}
-
 pub inline fn op(self: *@This(), comptime fmt: []const u8, args: anytype) void {
     if (@backingInt(Level.info) > @backingInt(self.log_level))
         return;

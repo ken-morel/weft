@@ -2,6 +2,10 @@ const std = @import("std");
 
 const Glob = @import("../util/Glob.zig");
 
+pub const no_run_script =
+    \\ #!/usr/bin/sh
+    \\ echo 'Doing nothing'
+;
 pub const Keep = struct {
     []const u8,
     []const u8,
@@ -21,9 +25,9 @@ pub const Pipeline = struct {
         poll: u32 = 5,
     };
     pub const Run = union(enum) {
-        default,
         script: []const []const u8,
         file: []const u8,
+        nothing,
     };
     pub const Tune = struct {
         max_ram: ?u64 = null,
@@ -42,14 +46,26 @@ pub const Pipeline = struct {
     name: []const u8,
     in: []const Input = &.{},
     out: ?[]const Output = null,
-    run: Run = .default,
+    run: ?Run,
     tune: Tune = .{},
 
     sibling: HandleSibling = .{ .then = .ignore },
     keep: []Keep = &.{},
 
-    uses: []const []const u8 = &.{},
+    env: struct {
+        uses: []const []const u8 = &.{},
+        vars: []const struct { []const u8, ?[]const u8 } = &.{},
+        pkgs: []const []const u8 = &.{},
+    } = .{},
 
+    pub fn environ(self: @This()) Env {
+        return .{
+            .uses = self.env.uses,
+            .vars = self.env.vars,
+            .pkgs = self.env.pkgs,
+            .name = self.name,
+        };
+    }
     pub fn produces(self: @This(), artifact: []const u8) bool {
         return if (self.out) |outs|
             for (outs) |out| {
@@ -102,10 +118,9 @@ pub fn get_environment(self: @This(), name: []const u8) ?*const Env {
 pub const Env = struct {
     name: []const u8,
     uses: []const []const u8 = &.{},
-    vars: []struct { []const u8, ?[]const u8 } = &.{},
+    vars: []const struct { []const u8, ?[]const u8 } = &.{},
     pkgs: []const []const u8 = &.{},
 };
-
 pub fn has_mode(self: @This(), mode: []const u8) bool {
     return for (self.modes) |m|
         if (std.mem.eql(u8, m, mode))

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
@@ -86,6 +87,7 @@ pub const StepStatus = union(enum) {
 const resolve_pipeline_max_depth: u16 = 100;
 
 pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, depth: u16) !StepStatus {
+    const l = log(.pipeline_resolve);
     if (depth >= resolve_pipeline_max_depth)
         return error.CyclicPipeline;
     const pipeline = self.config.get_pipeline(pipeline_name) orelse return error.InvalidPipeline;
@@ -103,7 +105,7 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
         if (Weft.is_source_artifact(in))
             continue :input;
         const producer = self.config.get_producer(in) orelse {
-            term.err("Pipeline {s} has input {s} not provided by any other pipeline", .{ pipeline_name, in });
+            l.err("Pipeline {s} has input {s} not provided by any other pipeline", .{ pipeline_name, in });
 
             return error.InvalidInput;
         };

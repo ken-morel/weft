@@ -1,7 +1,7 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
-const Term = @import("../domain/Term.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
@@ -11,13 +11,13 @@ const Remote = @import("Remote.zig");
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
-    term: *Term,
     project: Project,
     inst: ClientInstall,
     pipeline: []const u8,
     remote_name: []const u8,
     deployment_spec: []const u8,
 ) !void {
+    const l = log(.kill);
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -28,7 +28,7 @@ pub fn run(
         try Deployment.Id.parse(deployment_spec)
     else
         project.find_deployment_id(io, deployment_spec) catch |err| {
-            term.err("deployment '{s}' not found: {any}", .{ deployment_spec, err });
+            l.err("deployment '{s}' not found: {any}", .{ deployment_spec, err });
             return;
         };
 
@@ -36,7 +36,7 @@ pub fn run(
     const remote = for (remotes) |*r| {
         if (std.mem.eql(u8, r.get_name(), remote_name)) break r;
     } else {
-        term.err("remote '{s}' not configured", .{remote_name});
+        l.err("remote '{s}' not configured", .{remote_name});
         return error.RemoteNotFound;
     };
 
@@ -44,7 +44,7 @@ pub fn run(
     const tok = (remote.get_token() catch null) orelse return error.InvalidRemoteConfig;
 
     const client = Client.connect(alloc, io, addr, &tok) catch |err| {
-        term.err("could not reach remote '{s}': {any}", .{ remote_name, err });
+        l.err("could not reach remote '{s}': {any}", .{ remote_name, err });
         return err;
     };
     defer client.destroy(alloc, io);
@@ -58,7 +58,7 @@ pub fn run(
     });
 
     _ = try client.conn.recv_object(alloc, proto.Res(proto.task.kill.Res)) catch |err| {
-        term.err("remote failed to kill task: {any}", .{err});
+        l.err("remote failed to kill task: {any}", .{err});
         return;
     };
 }

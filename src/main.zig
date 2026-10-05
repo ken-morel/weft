@@ -1,4 +1,6 @@
 const std = @import("std");
+const log = std.log;
+const scoped = log.scoped;
 const builtin = @import("builtin");
 
 const build = @import("build");
@@ -6,7 +8,6 @@ const build = @import("build");
 const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_check = @import("client/cmd_check.zig");
 const cmd_follow = @import("client/cmd_follow.zig");
-const cmd_gc = @import("client/cmd_gc.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
 const cmd_remote = @import("client/cmd_remote.zig");
@@ -115,18 +116,6 @@ const Argz = union(enum) {
         deployment: []const u8,
         pipeline: []const u8,
     },
-    gc: struct {
-        pub const doc = "Garbage collect old artifacts on remotes or locally";
-        pub const doc_remote = "The remote to run gc on (defaults to local)";
-        pub const doc_keep = "Number of recent deployments to keep (default: 5)";
-        pub const doc_older_than = "Remove artifacts older than duration (e.g. 7d, 24h)";
-        pub const doc_dry_run = "Show what would be removed without deleting";
-
-        remote: []const u8 = "local",
-        keep: ?u32 = null,
-        older_than: ?[]const u8 = null,
-        dry_run: bool = false,
-    },
     nix: union(enum) {
         pub const doc = "Perform nix operations";
         show: struct {
@@ -136,7 +125,7 @@ const Argz = union(enum) {
             pkg: []const u8,
         },
     },
-    help: argz.Help,
+    argz_help: argz.Help("weft", @This()),
     nop: struct {
         pub const doc = "nop";
     },
@@ -154,21 +143,8 @@ pub fn main(init: std.process.Init) !void {
         term.deinit(gpa, init.io);
     }
 
-    if (args.len <= 1 or
-        (args.len > 1 and
-            (std.mem.eql(u8, args[1], "--help") or
-                std.mem.eql(u8, args[1], "-h"))))
-    {
-        argz.help("weft", Argz, .{ .command = &.{} }, &term);
-        return;
-    }
-
     const parsed = argz.parse(Argz, alloc, init.io, args[1..]) catch |err| {
-        if (err == error.ExpectedCommand or err == error.InvalidCommand) {
-            argz.help("weft", Argz, .{ .command = &.{} }, &term);
-            return;
-        }
-        term.err("failed to parse arguments: {any}", .{err});
+        log.err("failed to parse arguments: {any}; run `weft help` for help", .{err});
         return err;
     };
 
@@ -178,7 +154,7 @@ pub fn main(init: std.process.Init) !void {
             const day = es.getDaySeconds();
             const yd = es.getEpochDay().calculateYearDay();
             const md = yd.calculateMonthDay();
-            const build_time = try gpa.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} ", .{
+            const build_time = try gpa.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{
                 yd.year,
                 @backingInt(md.month),
                 md.day_index + 1,
@@ -202,35 +178,34 @@ pub fn main(init: std.process.Init) !void {
         },
         .daemon => |d| switch (d) {
             .install => |i| {
-                try DaemonInstall.install(init.io, gpa, &term, i.user);
+                try DaemonInstall.install(init.io, gpa, i.user);
             },
             .run => {
                 const installation: DaemonInstall = try .init(init.io);
-                var daemon = try Daemon.init(gpa, init.io, installation, &term);
+                var daemon = try Daemon.init(gpa, init.io, installation);
                 defer daemon.deinit();
                 return daemon.run();
             },
             .token => {
-                const config = try DaemonInstall.read_config_leaky(init.io, alloc, &term);
+                const config = try DaemonInstall.read_config_leaky(init.io, alloc);
                 term.println("{s}", .{config.secret});
             },
             .ipc => |i| switch (i) {
                 .completed => |msg| {
-                    try clinternal.task_completed(gpa, init.io, &term, msg.task, msg.code);
+                    try clinternal.task_completed(gpa, init.io, msg.task, msg.code);
                 },
             },
         },
         .check => {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{ .iterate = true });
             defer project_dir.close(init.io);
-            const project = try Project.open(project_dir);
+            const project = try Project.open(alloc, init.io, project_dir);
 
-            try cmd_check.run(gpa, init.io, &term, project, installation);
+            try cmd_check.run(gpa, init.io, project);
         },
         .do => |cmd| {
             if (cmd.targets.len == 0) {
-                term.err("No targets specified", .{});
+                log.err("No targets specified", .{});
                 return error.Usage;
             }
             const targets: []Step = try gpa.alloc(Step, cmd.targets.len);
@@ -267,7 +242,7 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(project_dir);
+            const project = try Project.open(alloc, init.io, project_dir);
 
             return cmd_do.run(gpa, init.io, &term, project, installation, .{
                 .start = .{
@@ -279,16 +254,16 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(project_dir);
+            const project = try Project.open(alloc, init.io, project_dir);
 
             const resume_id = if (cmd.deployment) |dep_arg|
                 project.find_deployment_id(init.io, dep_arg) catch {
-                    term.err("deployment '{s}' not found or ambiguous", .{dep_arg});
+                    log.err("deployment '{s}' not found or ambiguous", .{dep_arg});
                     return error.InvalidDeploymentId;
                 }
             else
                 try project.latest_deployment_id(init.io) orelse {
-                    term.err("no deployments found in .weft", .{});
+                    log.err("no deployments found in .weft", .{});
                     return error.NoDeployments;
                 };
 
@@ -298,7 +273,7 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(project_dir);
+            const project = try Project.open(alloc, init.io, project_dir);
 
             return cmd_follow.run(gpa, init.io, &term, project, installation, cmd.pipeline, cmd.deployment);
         },
@@ -340,18 +315,11 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(project_dir);
+            const project = try Project.open(alloc, init.io, project_dir);
 
-            return try cmd_kill.run(gpa, init.io, &term, project, installation, cmd.pipeline, cmd.remote, cmd.deployment);
+            return try cmd_kill.run(gpa, init.io, project, installation, cmd.pipeline, cmd.remote, cmd.deployment);
         },
-        .gc => |cmd| {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = std.Io.Dir.cwd().openDir(init.io, ".", .{}) catch null;
-            defer if (project_dir) |*d| d.close(init.io);
-            const project = if (project_dir) |d| Project.open(d) catch null else null;
 
-            return try cmd_gc.run(gpa, init.io, &term, project, installation, cmd.remote, cmd.keep, cmd.older_than, cmd.dry_run);
-        },
         .nix => |n| switch (n) {
             .show => |cmd| {
                 var client: std.http.Client = .{
@@ -361,25 +329,16 @@ pub fn main(init: std.process.Init) !void {
                 defer client.deinit();
 
                 const basename = nix.query_store_basename(std.heap.page_allocator, &client, cmd.pkg) catch |err| {
-                    switch (err) {
-                        error.PackageNotFound => {
-                            term.err("package '{s}' not found on Hydra", .{cmd.pkg});
-                        },
-                        else => {
-                            term.err("failed to query package '{s}': {s}", .{ cmd.pkg, @errorName(err) });
-                        },
-                    }
-                    _ = term.flush() catch {};
-                    std.process.exit(1);
+                    if (err == error.PackageNotFound)
+                        log.err("package '{s}' not found on Hydra", .{cmd.pkg});
+                    return err;
                 };
                 defer gpa.free(basename);
 
                 term.println("{s}", .{basename});
             },
         },
-        .help => |cmd| {
-            argz.help("weft", Argz, cmd, &term);
-        },
+        .argz_help => |cmd| cmd.handle(),
         .nop => {},
     }
 }
@@ -387,4 +346,5 @@ pub fn main(init: std.process.Init) !void {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("util/zoto.zig");
+    _ = @import("daemon/Task.zig");
 }

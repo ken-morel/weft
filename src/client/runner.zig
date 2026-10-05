@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const Task = @import("../daemon/Task.zig");
 const proto = @import("../domain/proto.zig");
@@ -23,6 +24,7 @@ pub fn run_deployment(
     inst: ClientInstall,
     deployment: *Deployment,
 ) !void {
+    const l = log(.runner);
     const remotes = try inst.get_remotes_leaky(gpa, io);
     defer gpa.free(remotes);
 
@@ -46,7 +48,7 @@ pub fn run_deployment(
     defer view.deinit();
     errdefer {
         view.update(io) catch {};
-        term.err("Deployment failed", .{});
+        l.err("Deployment failed", .{});
         group.await(io) catch {};
     }
 
@@ -64,7 +66,7 @@ pub fn run_deployment(
 
         if (state.has_error(io) and deployment.running.len == 0) {
             try deployment.save(gpa, io, project);
-            term.err("Error during deployment", .{});
+            l.err("Error during deployment", .{});
             try std.Io.sleep(io, .fromSeconds(3), .awake);
             try view.update(io);
             return error.DeploymentFailed;
@@ -85,7 +87,7 @@ pub fn run_deployment(
                 io,
                 &group,
                 spawn_step,
-                .{ gpa, io, &state, term, project, &depl, deployment, remote, pipeline, &fetcher, step, inst.env },
+                .{ gpa, io, &state, project, &depl, deployment, remote, pipeline, &fetcher, step },
             );
         }
 
@@ -198,7 +200,6 @@ pub fn spawn_step(
     gpa: std.mem.Allocator,
     io: std.Io,
     state: *DeploymentState,
-    term: *Term,
     project: Project,
     depl: *std.Io.Mutex,
     dep: *Deployment,
@@ -206,8 +207,11 @@ pub fn spawn_step(
     pipeline: *const Weft.Pipeline,
     fetcher: *Fetcher,
     step: Deployment.Step,
-    env_map: *const std.process.Environ.Map,
 ) !void {
+    const l = log(.spawn);
+    // var arena: std.heap.ArenaAllocator = .init(gpa);
+    // defer arena.deinit();
+    // const alloc = arena.allocator();
     errdefer if (depl.lock(io)) |_| {
         dep.remove_running(gpa, step.remote, step.pipeline);
         state.err(io, step.remote, step.pipeline, "failed to spawn task");
@@ -218,14 +222,14 @@ pub fn spawn_step(
     if (!dep.config.has_mode(step.mode))
         return error.InvalidMode;
 
-    const script_content = switch (pipeline.run) {
+    const script_content = switch (pipeline.run orelse @as(Weft.Pipeline.Run, .{ .file = pipeline.name })) {
         .script => |lines| inline_script: {
             if (lines.len == 0) {
-                term.err("pipeline '{s}': .run.script cannot be empty", .{pipeline.name});
+                l.err("pipeline '{s}': .run.script cannot be empty", .{pipeline.name});
                 return error.EmptyScript;
             }
             if (!std.mem.startsWith(u8, lines[0], "#!")) {
-                term.err("pipeline '{s}': first line of .run.script must be a '#!' shebang", .{pipeline.name});
+                l.err("pipeline '{s}': first line of .run.script must be a '#!' shebang", .{pipeline.name});
                 return error.MissingShebang;
             }
             var script_buf: std.ArrayList(u8) = .empty;
@@ -236,39 +240,33 @@ pub fn spawn_step(
             }
             break :inline_script try script_buf.toOwnedSlice(gpa);
         },
-        .default, .file => file_script: {
-            const script_name = switch (pipeline.run) {
-                .default => pipeline.name,
-                .file => |f| f,
-                else => unreachable,
-            };
+        .file => |script_name| file_script: {
             const script_path = try project.locate_script(gpa, io, script_name) orelse {
-                term.err("weft folder not found, cannot run pipeline {s}", .{pipeline.name});
+                l.err("weft folder not found, cannot run pipeline {s}", .{pipeline.name});
                 return error.FileNotFound;
             };
             defer gpa.free(script_path);
 
             break :file_script project.dir.readFileAlloc(io, script_path, gpa, .limited(60 * 1024)) catch |err| {
                 if (err == error.FileNotFound)
-                    term.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name })
+                    l.err("Script {s} does not exist, cannot run pipeline {s}", .{ script_path, pipeline.name })
                 else if (err == error.FileTooBig)
-                    term.err("Script {s} exceeds 60KB limit for pipeline {s}", .{ script_path, pipeline.name });
+                    l.err("Script {s} exceeds 60KB limit for pipeline {s}", .{ script_path, pipeline.name });
                 return err;
             };
         },
+        .nothing => try gpa.dupe(u8, Weft.no_run_script),
     };
     defer gpa.free(script_content);
 
-    var spec = try Task.resolve(
+    var spec: Task.Spec = try .resolve(
         gpa,
         io,
-        term,
         &dep.config,
         pipeline,
         dep.id,
-        project.dir,
         step.mode,
-        env_map,
+        project.env,
         script_content,
     );
     defer spec.deinit(gpa);

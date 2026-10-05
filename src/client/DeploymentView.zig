@@ -9,7 +9,6 @@ alloc: std.mem.Allocator,
 term: *Term,
 state: *DeploymentState,
 deployment_id: Deployment.Id,
-rendered_lines: u16 = 0,
 step_history: std.StringHashMapUnmanaged(DeploymentState.Step.Status) = .empty,
 artifact_history: std.StringHashMapUnmanaged(DeploymentState.Artifact.Status) = .empty,
 
@@ -19,19 +18,13 @@ pub fn init(alloc: std.mem.Allocator, term: *Term, state: *DeploymentState, depl
         .term = term,
         .state = state,
         .deployment_id = deployment_id,
-        .rendered_lines = 0,
         .step_history = .empty,
         .artifact_history = .empty,
     };
 }
 
 pub fn deinit(self: *@This()) void {
-    if (self.term.is_tty and self.rendered_lines > 0) {
-        self.term.move_up(self.rendered_lines);
-        self.term.clear_to_end();
-        self.term.flush() catch {};
-        self.rendered_lines = 0;
-    }
+    self.term.flush() catch {};
     var step_iter = self.step_history.iterator();
     while (step_iter.next()) |entry|
         self.alloc.free(entry.key_ptr.*);
@@ -46,12 +39,6 @@ pub fn deinit(self: *@This()) void {
 }
 
 pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) void {
-    if (self.term.is_tty and self.rendered_lines > 0) {
-        self.term.move_up(self.rendered_lines);
-        self.term.clear_to_end();
-        self.rendered_lines = 0;
-    }
-
     const color = Term.task_color(prefix);
     var lines = std.mem.splitScalar(u8, std.mem.trim(u8, content, "\r\n"), '\n');
     while (lines.next()) |line| {
@@ -67,12 +54,6 @@ pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) void 
 pub fn update(self: *@This(), io: std.Io) !void {
     self.state.mutex.lockUncancelable(io);
     defer self.state.mutex.unlock(io);
-
-    if (self.term.is_tty and self.rendered_lines > 0) {
-        self.term.move_up(self.rendered_lines);
-        self.term.clear_to_end();
-        self.rendered_lines = 0;
-    }
 
     for (self.state.steps.items) |step| {
         const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
@@ -219,7 +200,10 @@ pub fn update(self: *@This(), io: std.Io) !void {
         }
     }
 
-    self.rendered_lines = lines_count;
-    self.term.clear_to_end();
+    if (self.term.is_tty) {
+        self.term.clear_to_end();
+        if (lines_count > 0)
+            self.term.move_up(lines_count);
+    }
     try self.term.flush();
 }

@@ -131,18 +131,7 @@ pub const task = struct {
         };
     };
 };
-pub const gc = struct {
-    pub const Req = struct {
-        workspace: ?[]const u8 = null,
-        keep: ?u32 = null,
-        older_than_ms: ?u64 = null,
-        dry_run: bool = false,
-    };
-    pub const Res = struct {
-        deployments_removed: u32,
-        bytes_freed: u64,
-    };
-};
+
 pub const system = struct {
     pub const stats = struct {
         pub const Req = struct {
@@ -161,7 +150,6 @@ pub const Request = enum(u8) {
     task_kill,
 
     system_stats,
-    gc,
 };
 
 pub const DaemonMsg = union(enum) {
@@ -186,7 +174,5 @@ poll_req: task.poll.Req,
 poll_res: task.poll.Res,
 kill_req: task.kill.Req,
 kill_res: task.kill.Res,
-gc_req: gc.Req,
-gc_res: gc.Res,
 stats_req: system.stats.Req,
 pub const hash = zoto.hashType(@This());

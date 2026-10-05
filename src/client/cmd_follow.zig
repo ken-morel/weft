@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
@@ -20,23 +21,24 @@ pub fn run(
     pipeline_spec: []const u8,
     deployment_spec: ?[]const u8,
 ) !void {
+    const l = log(.follow);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const alloc = arena.allocator();
 
     const dep_id = if (deployment_spec) |dep_str|
         project.find_deployment_id(io, dep_str) catch |err| {
-            term.err("deployment '{s}' not found or ambiguous: {any}", .{ dep_str, err });
+            l.err("deployment '{s}' not found or ambiguous: {any}", .{ dep_str, err });
             return error.InvalidDeploymentId;
         }
     else
         try project.latest_deployment_id(io) orelse {
-            term.err("no deployments found in .weft", .{});
+            l.err("no deployments found in .weft", .{});
             return error.NoDeployments;
         };
 
     var deployment = project.load_deployment_leaky(alloc, io, dep_id) catch |err| {
-        term.err("failed to load deployment: {any}", .{err});
+        l.err("failed to load deployment: {any}", .{err});
         return err;
     };
 
@@ -48,7 +50,7 @@ pub fn run(
         pipeline_spec;
 
     _ = deployment.config.get_pipeline(pipeline_name) orelse {
-        term.err("pipeline '{s}' not found in deployment {s}", .{ pipeline_name, &deployment.id.to_string() });
+        l.err("pipeline '{s}' not found in deployment {s}", .{ pipeline_name, &deployment.id.to_string() });
         return error.InvalidPipeline;
     };
 
@@ -61,7 +63,7 @@ pub fn run(
         if (std.mem.eql(u8, rem.get_name(), remote_name))
             break rem;
     } else {
-        term.err("remote '{s}' not found in configuration", .{remote_name});
+        l.err("remote '{s}' not found in configuration", .{remote_name});
         return error.InvalidRemote;
     };
 
@@ -87,14 +89,14 @@ pub fn run(
     var last_poll_time: ?std.Io.Timestamp = null;
 
     var client = Client.connect(alloc, io, try remote.get_address(), &try remote.get_token()) catch |e| {
-        term.err("connection to remote '{s}' failed: {any}", .{ remote_name, e });
+        l.err("connection to remote '{s}' failed: {any}", .{ remote_name, e });
         return e;
     };
     defer client.destroy(alloc, io);
 
     while (true) {
         client.conn.send_object(buffer, proto.Request, .task_poll) catch |e| {
-            term.err("failed to send task_poll request: {any}", .{e});
+            l.err("failed to send task_poll request: {any}", .{e});
             return e;
         };
         client.conn.send_object(buffer, proto.task.poll.Req, .{
@@ -105,7 +107,7 @@ pub fn run(
                 }},
             },
         }) catch |e| {
-            term.err("failed to send poll payload: {any}", .{e});
+            l.err("failed to send poll payload: {any}", .{e});
             return e;
         };
 
@@ -114,11 +116,11 @@ pub fn run(
 
         while (true) {
             const reply = client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res)) catch |e| {
-                term.err("failed to receive poll reply: {any}", .{e});
+                l.err("failed to receive poll reply: {any}", .{e});
                 return e;
             };
             const res = reply catch |e| {
-                term.err("poll error from remote: {any}", .{e});
+                l.err("poll error from remote: {any}", .{e});
                 return e;
             };
 
@@ -189,15 +191,15 @@ pub fn run(
                     return;
                 },
                 .failed => |code| {
-                    if (term.is_tty) {
-                        term.err("task {s} failed with exit code {d}", .{ task_key, code });
-                    }
+                    if (term.is_tty)
+                        l.err("task {s} failed with exit code {d}", .{ task_key, code });
+
                     return error.TaskFailed;
                 },
                 .not_found => {
-                    if (term.is_tty) {
-                        term.err("task {s} not found on daemon", .{task_key});
-                    }
+                    if (term.is_tty)
+                        l.err("task {s} not found on daemon", .{task_key});
+
                     return error.TaskNotFound;
                 },
             }
@@ -216,12 +218,12 @@ pub fn run(
             const char = "─";
             const count = @max(width, 10);
             var pos: usize = 0;
-            for (0..count) |_| {
+            for (0..count) |_|
                 if (pos + char.len <= rule_buf.len) {
                     @memcpy(rule_buf[pos .. pos + char.len], char);
                     pos += char.len;
-                }
-            }
+                };
+
             term.clear_line();
             term.styled_ln(.dim, "{s}", .{rule_buf[0..pos]});
 

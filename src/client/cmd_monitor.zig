@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
@@ -97,9 +98,10 @@ fn render_header(term: *Term, date_str: []const u8) void {
     term.println("", .{});
 }
 
-fn connect(alloc: std.mem.Allocator, io: std.Io, term: *Term, remote: Remote) !*Client {
+fn connect(alloc: std.mem.Allocator, io: std.Io, remote: Remote) !*Client {
+    const l = log(.monitor_connect);
     var client = Client.connect(alloc, io, try remote.get_address(), &try remote.get_token()) catch |err| {
-        term.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.get_name(), err });
+        l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.get_name(), err });
         return err;
     };
     errdefer client.destroy(alloc, io);
@@ -120,32 +122,34 @@ pub fn run(
     inst: ClientInstall,
     spec: ?[]const u8,
 ) !void {
+    const l = log(.monitor);
     var arena = std.heap.ArenaAllocator.init(allocator);
+
     defer arena.deinit();
     const alloc = arena.allocator();
 
     const remotes = try inst.get_remotes_leaky(alloc, io);
     if (remotes.len == 0) {
-        term.err("no remotes configured. Run 'weft remote install' first.", .{});
+        l.err("no remotes configured.", .{});
         return error.NoRemotes;
     }
 
     const target_remote: *const Remote = if (spec) |name| remote_find: {
-        for (remotes) |*r| {
+        for (remotes) |*r|
             if (std.mem.eql(u8, r.get_name(), name))
                 break :remote_find r;
-        }
-        term.err("remote '{s}' not found in remotes.zon", .{name});
+
+        l.err("remote '{s}' not found in remotes.zon", .{name});
         return error.InvalidRemote;
     } else &remotes[0];
 
-    term.info("connecting to remote '{s}' at {s}:{d}...", .{ target_remote.get_name(), target_remote.address.@"0", target_remote.address.@"1" });
+    l.info("connecting to remote '{s}' at {s}:{d}...", .{ target_remote.get_name(), target_remote.address.@"0", target_remote.address.@"1" });
 
-    var maybe_client: ?*Client = try connect(alloc, io, term, target_remote.*);
+    var maybe_client: ?*Client = try connect(alloc, io, target_remote.*);
     defer if (maybe_client) |c|
         c.destroy(alloc, io);
 
-    term.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.get_name()});
+    l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.get_name()});
 
     var frame_arena = std.heap.ArenaAllocator.init(allocator);
     defer frame_arena.deinit();
@@ -182,7 +186,7 @@ pub fn run(
     while (true) {
         const client = if (maybe_client) |c| c else {
             try std.Io.sleep(io, .fromSeconds(10), .real);
-            maybe_client = connect(alloc, io, term, target_remote.*) catch null;
+            maybe_client = connect(alloc, io, target_remote.*) catch null;
             continue;
         };
         var iac = [_][]u8{stream_buf[read_pos..]};
@@ -203,7 +207,7 @@ pub fn run(
             var parse_slice = slice;
             const stats = zoto.deserialize(frame_arena.allocator(), &parse_slice, Monitor.Stats, .{ .header = true, .hash = true }) catch |err| {
                 if (err == error.BufferTooSmall or err == error.EndOfStream) break;
-                term.err("failed to decode stats packet: {any}", .{err});
+                l.err("failed to decode stats packet: {any}", .{err});
                 try std.Io.sleep(io, .fromSeconds(2), .real);
                 return err;
             };
@@ -332,23 +336,18 @@ pub fn run(
                 _ = pad_10(&swap_cell, swap_raw_str);
                 const swap_pct = (stats.swap.used * 100) / stats.swap.total;
                 swap_filled = @min(10, @as(u8, @intCast((swap_pct * 10 + 50) / 100)));
-                swap_color = if (prev_swap_used) |ps| color_select: {
-                    const delta_bytes: i128 = @as(i128, stats.swap.used) - @as(i128, ps);
-                    if (delta_bytes >= 50 * 1024 * 1024) {
-                        break :color_select .bright_red;
-                    } else if (delta_bytes >= 10 * 1024 * 1024) {
-                        break :color_select .yellow;
-                    } else if (delta_bytes <= -50 * 1024 * 1024) {
-                        break :color_select .bright_cyan;
-                    } else if (delta_bytes <= -10 * 1024 * 1024) {
-                        break :color_select .cyan;
-                    } else {
-                        break :color_select .green;
-                    }
-                } else .green;
-            } else {
-                _ = pad_10(&swap_cell, "-");
-            }
+                const delta_bytes: i128 = if (prev_swap_used) |ps| @as(i128, stats.swap.used) - @as(i128, ps) else 0;
+                swap_color = if (delta_bytes >= 50 * 1024 * 1024)
+                    .bright_red
+                else if (delta_bytes >= 10 * 1024 * 1024)
+                    .yellow
+                else if (delta_bytes <= -50 * 1024 * 1024)
+                    .bright_cyan
+                else if (delta_bytes <= -10 * 1024 * 1024)
+                    .cyan
+                else
+                    .green;
+            } else _ = pad_10(&swap_cell, "-");
 
             var disk_cell: [10]u8 = undefined;
             var disk_raw_buf: [32]u8 = undefined;

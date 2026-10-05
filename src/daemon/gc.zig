@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const Deployment = @import("../client/Deployment.zig");
 const paths = @import("../domain/paths.zig");
 const Term = @import("../domain/Term.zig");
@@ -115,8 +116,7 @@ fn dep_desc(_: void, a: DepEntry, b: DepEntry) bool {
     return a.dep_id.raw > b.dep_id.raw;
 }
 
-pub fn run(alloc: std.mem.Allocator, io: std.Io, term: ?*Term, opts: GcOptions) !GcResult {
-    _ = term;
+pub fn run(alloc: std.mem.Allocator, io: std.Io, opts: GcOptions) !GcResult {
     paths.ensure_dirs(io);
 
     var res: GcResult = .{};

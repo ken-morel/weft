@@ -1,14 +1,17 @@
 const std = @import("std");
 
+const DotEnv = @import("../domain/DotEnv.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Deployment = @import("Deployment.zig");
 
 dir: std.Io.Dir,
+env: DotEnv,
 
-pub inline fn open(dir: std.Io.Dir) !@This() {
+pub fn open(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() {
     return .{
         .dir = dir,
+        .env = try .load_leaky(alloc, io, dir),
     };
 }
 

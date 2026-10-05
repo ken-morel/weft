@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const Term = @import("../domain/Term.zig");
 const ClientInstall = @import("ClientInstall.zig");
@@ -78,6 +79,7 @@ pub fn install(
     weft_port: ?u16,
     extra_args: []const []const u8,
 ) !void {
+    const l = log(.remote_install);
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -109,7 +111,7 @@ pub fn install(
     });
     const scp_term = try scp_child.wait(io);
     if (scp_term != .exited or scp_term.exited != 0) {
-        term.err("failed to copy binary to remote (exit code {any})", .{scp_term});
+        l.err("failed to copy binary to remote (exit code {any})", .{scp_term});
         return error.ScpFailed;
     }
 
@@ -131,7 +133,7 @@ pub fn install(
         .argv = install_argv.items,
     });
     if (setup_res.term != .exited or setup_res.term.exited != 0) {
-        term.err("remote setup failed (exit code {any}): {s}", .{ setup_res.term, setup_res.stderr });
+        l.err("remote setup failed (exit code {any}): {s}", .{ setup_res.term, setup_res.stderr });
         return error.RemoteInstallFailed;
     }
 
@@ -154,7 +156,7 @@ pub fn install(
         .argv = daemon_argv.items,
     });
     if (daemon_res.term != .exited or daemon_res.term.exited != 0) {
-        term.err("remote installation failed (exit code {any}): {s}", .{ daemon_res.term, daemon_res.stderr });
+        l.err("remote installation failed (exit code {any}): {s}", .{ daemon_res.term, daemon_res.stderr });
         return error.RemoteInstallFailed;
     }
 
@@ -173,13 +175,13 @@ pub fn install(
         .argv = token_argv.items,
     });
     if (token_res.term != .exited or token_res.term.exited != 0) {
-        term.err("remote token fetch failed (exit code {any}): {s}", .{ token_res.term, token_res.stderr });
+        l.err("remote token fetch failed (exit code {any}): {s}", .{ token_res.term, token_res.stderr });
         return error.RemoteInstallFailed;
     }
 
     const token = std.mem.trim(u8, token_res.stdout, " \n");
     if (token.len != 64) {
-        term.err("remote token fetch failed, could not parse token from output: '{s}'. ('{s}')", .{ token_res.stdout, token_res.stderr });
+        l.err("remote token fetch failed, could not parse token from output: '{s}'. ('{s}')", .{ token_res.stdout, token_res.stderr });
         return error.RemoteInstallFailed;
     }
     const existing_remotes = try installation.get_remotes_leaky(alloc, io);

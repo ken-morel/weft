@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
@@ -17,7 +18,6 @@ listeners: std.ArrayList(Listener),
 monitor: Monitor,
 alloc: std.mem.Allocator,
 io: std.Io,
-term: *Term,
 stats_history: []?Monitor.Stats,
 stats_idx: u64,
 lock: std.Io.Mutex,
@@ -53,7 +53,7 @@ pub const StatsIterator = struct {
 
 pub const history_capacity: usize = 120;
 
-pub fn init(alloc: std.mem.Allocator, io: std.Io, term: *Term) !@This() {
+pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
     const history = try alloc.alloc(?Monitor.Stats, history_capacity);
     @memset(history, null);
     return .{
@@ -61,7 +61,6 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io, term: *Term) !@This() {
         .listeners = .empty,
         .alloc = alloc,
         .io = io,
-        .term = term,
         .stats_history = history,
         .stats_idx = 0,
         .lock = .init,
@@ -85,10 +84,11 @@ pub fn iterator(self: *const @This()) StatsIterator {
 }
 
 pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io.Timestamp) !void {
+    const l = log(.stats_server);
     try self.lock.lock(self.io);
     defer self.lock.unlock(self.io);
 
-    self.term.info("daemon::stats_server new listener connected, catchup from timestamp {d}", .{timestamp.nanoseconds});
+    l.info("daemon::stats_server new listener connected, catchup from timestamp {d}", .{timestamp.nanoseconds});
 
     var last_time = timestamp;
     const hist_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
@@ -105,12 +105,12 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
         var w_buf: [256]u8 = undefined;
         var w = stream.writer(self.io, &w_buf);
         w.interface.writeAll(hw.buffered()) catch |err| {
-            self.term.err("daemon::stats_server send catchup error: {any}", .{err});
+            l.err("daemon::stats_server send catchup error: {any}", .{err});
             stream.close(self.io);
             return;
         };
         w.interface.flush() catch |err| {
-            self.term.err("daemon::stats_server flush catchup error: {any}", .{err});
+            l.err("daemon::stats_server flush catchup error: {any}", .{err});
             stream.close(self.io);
             return;
         };
@@ -118,7 +118,7 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
         catchup_count += 1;
     }
 
-    self.term.info("daemon::stats_server sent {d} catchup samples to listener", .{catchup_count});
+    l.info("daemon::stats_server sent {d} catchup samples to listener", .{catchup_count});
 
     if (catchup_count == 0) {
         if (self.monitor.fetch(self.alloc, self.io)) |stats| {
@@ -136,7 +136,7 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
                 last_time = stats.time;
             } else |_| {}
         } else |err| {
-            self.term.err("daemon::stats_server initial fetch error: {any}", .{err});
+            l.err("daemon::stats_server initial fetch error: {any}", .{err});
         }
     }
 
@@ -147,12 +147,13 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
 }
 
 pub fn run(self: *@This()) error{Canceled}!void {
+    const l = log(.stats_server);
     while (true) {
         self._run() catch |err| {
             if (err == error.Canceled)
                 return error.Canceled
             else {
-                self.term.err("daemon::stats_server::run error: {any}", .{err});
+                l.err("daemon::stats_server::run error: {any}", .{err});
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
             }
@@ -161,13 +162,14 @@ pub fn run(self: *@This()) error{Canceled}!void {
 }
 
 fn _run(self: *@This()) !void {
-    self.term.info("daemon::stats_server started background sampling loop", .{});
+    const l = log(.stats_server);
+    l.info("daemon::stats_server started background sampling loop", .{});
     const buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
     defer self.alloc.free(buffer);
 
     while (true) {
         const stats = self.monitor.fetch(self.alloc, self.io) catch |err| {
-            self.term.err("daemon::stats_server fetch error: {any}", .{err});
+            l.err("daemon::stats_server fetch error: {any}", .{err});
             try std.Io.sleep(self.io, .fromSeconds(2), .awake);
             continue;
         };
@@ -189,7 +191,7 @@ fn _run(self: *@This()) !void {
                 if (serialized_len == 0) {
                     var writer: std.Io.Writer = .fixed(buffer);
                     zoto.serialize(&writer, Monitor.Stats, stats, .{ .header = true }) catch |err| {
-                        self.term.err("daemon::stats_server::serialize error: {any}", .{err});
+                        l.err("daemon::stats_server::serialize error: {any}", .{err});
                         break;
                     };
                     serialized_len = writer.buffered().len;
@@ -199,18 +201,18 @@ fn _run(self: *@This()) !void {
                 var w_buf: [256]u8 = undefined;
                 var w = listener.stream.writer(self.io, &w_buf);
                 w.interface.writeAll(buffer[0..serialized_len]) catch |err| {
-                    self.term.err("daemon::stats_server send live stat error: {any}", .{err});
+                    l.err("daemon::stats_server send live stat error: {any}", .{err});
                     send_failed = true;
                 };
                 if (!send_failed) {
                     w.interface.flush() catch |err| {
-                        self.term.err("daemon::stats_server flush live stat error: {any}", .{err});
+                        l.err("daemon::stats_server flush live stat error: {any}", .{err});
                         send_failed = true;
                     };
                 }
 
                 if (send_failed) {
-                    self.term.info("daemon::stats_server listener disconnected, removing", .{});
+                    l.info("daemon::stats_server listener disconnected, removing", .{});
                     listener.stream.close(self.io);
                     _ = self.listeners.swapRemove(idx);
                 } else {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
@@ -83,12 +84,13 @@ fn get_mutex(self: *@This(), io: std.Io, map: *std.StringHashMapUnmanaged(*std.I
 }
 
 pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
+    const l = log(.artifact_fetch);
     if (Weft.is_source_artifact(artifact)) {
         const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
         defer self.alloc.free(artifact_path);
         return std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
-                self.term.err("Source artifact {s} couldn't be found", .{artifact});
+                l.err("Source artifact {s} couldn't be found", .{artifact});
                 return error.InvalidSourceArtifact;
             } else return err;
         };
@@ -328,19 +330,18 @@ pub fn spawn_fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
 }
 
 fn fetch_wrapper(self: *@This(), io: std.Io, key: []const u8) !void {
+    const l = log(.artifact_fetch);
     defer self.alloc.free(key);
-    self.fetch(io, key) catch |e| {
-        self.term.err("failed to fetch artifact {s}: {any}", .{ key, e });
-    };
+    self.fetch(io, key) catch |e|
+        l.err("failed to fetch artifact {s}: {any}", .{ key, e });
 }
 
 pub fn is_idle(self: *@This(), io: std.Io) bool {
     self.state.mutex.lockUncancelable(io);
     defer self.state.mutex.unlock(io);
 
-    for (self.state.artifacts.items) |art|
+    return for (self.state.artifacts.items) |art| {
         if (art.status == .pulling or art.status == .pushing)
-            return false;
-
-    return true;
+            break false;
+    } else true;
 }

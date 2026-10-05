@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const ClientInstall = @import("../client/ClientInstall.zig");
 const read_only_user_permissions = ClientInstall.read_only_user_permissions;
@@ -6,7 +7,6 @@ const read_only_user_mode = ClientInstall.read_only_user_mode;
 const Deployment = @import("../client/Deployment.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
-const Term = @import("../domain/Term.zig");
 
 pub const Config = struct {
     runner_user: ?[]const u8 = null,
@@ -65,7 +65,7 @@ pub fn open_temp(io: std.Io, sub: []const u8) !std.Io.Dir {
     return try sub_dir.createDirPathOpen(io, &uuid, .{ .open_options = .{ .iterate = true } });
 }
 
-pub fn install(io: std.Io, gpa: std.mem.Allocator, term: *Term, maybe_user: ?[]const u8) !void {
+pub fn install(io: std.Io, gpa: std.mem.Allocator, maybe_user: ?[]const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -89,10 +89,11 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, term: *Term, maybe_user: ?[]c
         }
         break :install_exe;
     }
-    term.debug("installed binary to /usr/local/bin/weft", .{});
+
+    log(.daemon_install).debug("installed binary to /usr/local/bin/weft", .{});
 
     write_config: {
-        const current_config: ?Config = read_config_leaky(io, alloc, null) catch null;
+        const current_config: ?Config = read_config_leaky(io, alloc) catch null;
 
         var secret_hex = secret_hex: {
             var stack_secret: [64]u8 = undefined;
@@ -180,15 +181,14 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, term: *Term, maybe_user: ?[]c
     }
 }
 
-pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator, term: ?*Term) !Config {
+pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
     const cwd = std.Io.Dir.cwd();
 
     var file = cwd.openFile(io, "/etc/weft.zon", .{}) catch |err| {
-        if (term) |t|
-            if (err == error.AccessDenied)
-                t.err("cannot read /etc/weft.zon: permission denied (must be run as root)", .{})
-            else if (err == error.FileNotFound)
-                t.err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
+        if (err == error.AccessDenied)
+            log(.config).err("cannot read /etc/weft.zon: permission denied (must be run as root)", .{})
+        else if (err == error.FileNotFound)
+            log(.config).err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
         return err;
     };
     defer file.close(io);
@@ -196,8 +196,7 @@ pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator, term: ?*Term) !Conf
     const stat = try file.stat(io);
 
     if ((stat.permissions.toMode() & 0o777) != read_only_user_mode) {
-        if (term) |t|
-            t.err("/etc/weft.zon has insecure permissions, must be 0600", .{});
+        log(.config).err("/etc/weft.zon has insecure permissions, must be 0600", .{});
         return error.InsecurePermissions;
     }
     var buff: [4 << 10]u8 = undefined;

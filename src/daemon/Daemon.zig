@@ -1,9 +1,9 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
-const Term = @import("../domain/Term.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
@@ -20,7 +20,6 @@ arena: std.heap.ArenaAllocator,
 install: DaemonInstall,
 server: Server,
 config: DaemonInstall.Config,
-term: *Term,
 pressor: SharedPressor,
 stats_server: StatsServer,
 store: Store,
@@ -32,11 +31,11 @@ pub fn deinit(self: *@This()) void {
     self.store.deinit();
     self.arena.deinit();
 }
-pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *Term) !@This() {
+pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This() {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
     const alloc = arena.allocator();
-    const config = try DaemonInstall.read_config_leaky(io, alloc, term);
+    const config = try DaemonInstall.read_config_leaky(io, alloc);
 
     var server = try Server.init(
         io,
@@ -51,15 +50,15 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall, term: *T
         .install = install,
         .config = config,
         .server = server,
-        .term = term,
         .pressor = try .init(gpa, io),
-        .stats_server = try .init(gpa, io, term),
-        .store = Store.init(gpa, term),
+        .stats_server = try .init(gpa, io),
+        .store = .init(gpa),
     };
 }
 
 pub fn run_client_server(self: *@This()) !void {
-    self.term.info("listening on TCP :{d}", .{self.config.port});
+    const log_a = log(.client_server);
+    log_a.info("listening on TCP :{d}", .{self.config.port});
 
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
@@ -73,7 +72,7 @@ pub fn run_client_server(self: *@This()) !void {
             break :req self.server.accept(self.io) catch |err| {
                 if (err == error.Canceled)
                     return;
-                self.term.err("accept error: {any}", .{err});
+                log_a.err("accept error: {any}", .{err});
                 std.Io.sleep(self.io, .fromMilliseconds(100), .awake) catch {};
                 continue :req;
             };
@@ -83,6 +82,7 @@ pub fn run_client_server(self: *@This()) !void {
 }
 
 pub fn run_system_server(self: *@This()) !void {
+    const l = log(.system_server);
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
 
@@ -109,7 +109,7 @@ pub fn run_system_server(self: *@This()) !void {
         done,
         invalid_request: []const u8,
     };
-    self.term.info("listening on socket {s}", .{paths.weft_socket});
+    l.info("listening on socket {s}", .{paths.weft_socket});
     var req_arena: std.heap.ArenaAllocator = .init(self.gpa);
     defer req_arena.deinit();
     run: switch (@as(Run, .accept)) {
@@ -130,7 +130,7 @@ pub fn run_system_server(self: *@This()) !void {
                 proto.DaemonMsg,
                 .{ .header = true },
             );
-            self.term.info("daemon cmd: {any}", .{cmd});
+            l.info("daemon cmd: {any}", .{cmd});
             switch (cmd) {
                 .task_completed => |msg| {
                     try spawn(self.io, &group, finalize_task, .{ self, Task{ .id = try msg.task.dupe(self.gpa) }, msg.status });
@@ -139,7 +139,7 @@ pub fn run_system_server(self: *@This()) !void {
             }
         },
         .invalid_request => |msg| {
-            self.term.err("  invalid request: {s}", .{msg});
+            l.err("  invalid request: {s}", .{msg});
             conn.close(self.io);
         },
         .done => {
@@ -151,7 +151,8 @@ pub fn run_system_server(self: *@This()) !void {
 }
 
 fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
-    std.debug.print("Someone wanted to push us with a {any}, but we're still exiting gracefuly...", .{sig});
+    const l = log(.handle_signal);
+    l.warn("Someone wanted to push us with a {any}, but we're still exiting gracefuly...", .{sig});
 
     std.process.exit(0);
 }
@@ -169,6 +170,7 @@ pub fn run(self: *@This()) !void {
 }
 
 pub fn finalize_task(self: *@This(), task: Task, status: u16) !void {
+    const l = log(.task_finalize);
     defer task.free_duped(self.gpa);
     const cwd = std.Io.Dir.cwd();
     const run_dir_path = try task.run_dir_path(self.gpa);
@@ -180,7 +182,7 @@ pub fn finalize_task(self: *@This(), task: Task, status: u16) !void {
     defer cwd.deleteTree(self.io, run_dir_path) catch {};
 
     if (status != 0) {
-        self.term.warn("task {s} failed with exit code {d}, skipping artifact promotion", .{ task.id.pipeline, status });
+        l.warn("task {s} failed with exit code {d}, skipping artifact promotion", .{ task.id.pipeline, status });
         return;
     }
 

@@ -1,25 +1,24 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
-const Term = @import("../domain/Term.zig");
 const sizes = @import("../util/sizes.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const nix = @import("nix.zig");
 
 gpa: std.mem.Allocator,
-term: *Term,
 mutex: std.Io.Mutex = .init,
 
-pub fn init(gpa: std.mem.Allocator, term: *Term) @This() {
+pub fn init(gpa: std.mem.Allocator) @This() {
     return .{
         .gpa = gpa,
-        .term = term,
     };
 }
 
 pub fn deinit(_: *@This()) void {}
 
 pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
+    const l = log(.nix_fetch);
     const gpa = self.gpa;
     try self.mutex.lock(io);
     defer self.mutex.unlock(io);
@@ -30,12 +29,14 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
     defer gpa.free(root_path);
 
     if (cwd.access(io, root_path, .{})) |_| {
-        self.term.debug("nix::store package {s} already in store", .{basename});
+        l.debug("nix::store package {s} already in store", .{basename});
         return;
-    } else |err| if (err != error.FileNotFound)
+    } else |err| if (err != error.FileNotFound) {
+        l.err("{any}", .{err});
         return err;
+    }
 
-    self.term.info("nix::store fetching {s}...", .{basename});
+    l.info("nix::store fetching {s}...", .{basename});
 
     var client: std.http.Client = .{
         .io = io,
@@ -101,7 +102,7 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             defer cwd.deleteTree(io, temp_dir_path) catch {};
 
             var size_buf: [1 << 6]u8 = undefined;
-            self.term.info("nix::store downloading {s} ({s})...", .{ store_basename, sizes.format_bytes(&size_buf, nar_info.file_size) });
+            l.info("nix::store downloading {s} ({s})...", .{ store_basename, sizes.format_bytes(&size_buf, nar_info.file_size) });
 
             const temp_store_path = try std.fs.path.join(gpa, &.{ temp_dir_path, store_basename });
             defer gpa.free(temp_store_path);
@@ -113,12 +114,12 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             while (try children.next(io)) |entry|
                 try temp_dir.rename(entry.name, store_dir, entry.name, io);
 
-            self.term.info("nix::store installed {s}", .{store_basename});
+            l.info("nix::store installed {s}", .{store_basename});
         }
 
         const popped = backlog.pop().?;
         gpa.free(popped);
     }
 
-    self.term.info("nix::store finished installing {s}", .{basename});
+    l.info("nix::store finished installing {s}", .{basename});
 }

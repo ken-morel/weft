@@ -1,8 +1,8 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
-const Term = @import("../domain/Term.zig");
 const systemd = @import("../util/systemd.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
@@ -15,12 +15,13 @@ const Server = @import("Server.zig");
 const Task = @import("Task.zig");
 
 pub fn handle(daemon: *Daemon, permits: *std.Io.Semaphore, stream: std.Io.net.Stream) !void {
+    const l = log(.client_server);
     defer permits.post(daemon.io);
 
     _run(daemon, stream) catch |err| {
         if (err == error.ReAssigned)
             return;
-        daemon.term.err("worker error: {any}", .{err});
+        l.err("worker error: {any}", .{err});
         if (@errorReturnTrace()) |trace|
             std.debug.dumpErrorReturnTrace(trace);
     };
@@ -29,6 +30,7 @@ pub fn handle(daemon: *Daemon, permits: *std.Io.Semaphore, stream: std.Io.net.St
 }
 
 fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
+    const l = log(.client_server);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -64,7 +66,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handle_artifact_push(daemon, &arena, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                daemon.term.err("daemon::worker::artifact_push {any}", .{err});
+                l.err("daemon::worker::artifact_push {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -73,7 +75,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handle_task_spawn(daemon, &arena, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                daemon.term.err("daemon::worker::task_spawn {any}", .{err});
+                l.err("daemon::worker::task_spawn {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -82,7 +84,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handle_artifact_pull(daemon, &arena, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                daemon.term.err("daemon::worker::artifact_pull {any}", .{err});
+                l.err("daemon::worker::artifact_pull {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -91,7 +93,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handle_task_poll(daemon, &arena, &conn, response_buf) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                daemon.term.err("daemon::worker::task_poll {any}", .{err});
+                l.err("daemon::worker::task_poll {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -100,7 +102,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handle_artifact_has(daemon, &arena, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                daemon.term.err("daemon::worker::artifact_has {any}", .{err});
+                l.err("daemon::worker::artifact_has {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -114,16 +116,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handle_task_kill(daemon, &arena, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                daemon.term.err("daemon::worker::task_kill {any}", .{err});
-                break :err err;
-            };
-            try conn.send_object(response_buf, @TypeOf(res), res);
-        },
-        .gc => {
-            const res = handle_gc(daemon, &arena, &conn) catch |err| err: {
-                if (@errorReturnTrace()) |trace|
-                    std.debug.dumpErrorReturnTrace(trace);
-                daemon.term.err("daemon::worker::gc {any}", .{err});
+                l.err("daemon::worker::task_kill {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -337,6 +330,7 @@ fn handle_artifact_push(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
 }
 
 fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.task.spawn.Res) {
+    const l = log(.handle_task_spawn);
     const alloc = arena.allocator();
     const gpa = daemon.gpa;
     const io = daemon.io;
@@ -620,7 +614,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
     const term = try child.wait(daemon.io);
     try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] exited with: {any} \n", .{term}));
     if (term.exited != 0) {
-        daemon.term.err("Systemd task launch failed: {any}", .{term});
+        l.err("Systemd task launch failed: {any}", .{term});
         return error.SpawnFailed;
     } else return .spawned;
 }
@@ -731,21 +725,11 @@ fn handle_task_kill(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Con
     const io = daemon.io;
 
     const req = try conn.recv_object(ara, proto.task.kill.Req);
-    try Task.kill_matching(ara, io, req);
-    return .{ .footer = .{} };
-}
-
-fn handle_gc(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Connection) proto.Res(proto.gc.Res) {
-    const ara = arena.allocator();
-    const req = try conn.recv_object(ara, proto.gc.Req);
-    const res = try gc.run(daemon.gpa, daemon.io, daemon.term, .{
+    const task: Task = .{ .id = .{
+        .deployment = req.deployment,
+        .pipeline = req.pipeline,
         .workspace = req.workspace,
-        .keep = req.keep,
-        .older_than_ms = req.older_than_ms,
-        .dry_run = req.dry_run,
-    });
-    return .{
-        .deployments_removed = res.deployments_removed,
-        .bytes_freed = res.bytes_freed,
-    };
+    } };
+    try task.kill(ara, io);
+    return .{ .footer = .{} };
 }
