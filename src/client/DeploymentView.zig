@@ -114,8 +114,10 @@ pub fn update(self: *@This(), io: std.Io) !void {
 
     if (has_active_items) {
         self.term.clear_line();
+        self.term.println("", .{});
+        self.term.clear_line();
         self.term.styled_ln(.dim, " [{s}] ", .{&self.deployment_id.to_string()});
-        lines_count += 1;
+        lines_count += 2;
 
         for (self.state.steps.items) |step| {
             if (step.status == .preparing) {

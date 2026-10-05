@@ -222,6 +222,7 @@ pub const Spec = struct {
     keep: []const Weft.Keep = &.{},
     sibling: Weft.Pipeline.HandleSibling = .{ .then = .ignore },
     tune: Tune,
+    mode: []const u8,
 
     pub const Env = struct {
         vars: []const struct { []const u8, []const u8 } = &.{},
@@ -232,16 +233,17 @@ pub const Spec = struct {
         return _resolve_env_leaky(gpa, alloc, io, mode, envs, dotenv, env, 0);
     }
 
-    pub fn _resolve_env_leaky(gpa: std.mem.Allocator, alloc: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env, level: u8) !Env {
+    pub fn _resolve_env_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env, level: u8) !Env {
+        var arena: std.heap.ArenaAllocator = .init(gpa);
+        defer arena.deinit();
+        const alloc = arena.allocator();
         const l = log(.env_resolve);
         if (level > 100) {
-            l.err("Went more than 100 levels at '{s}' deep while resolving envirnment", .{env.name});
+            l.err("Went more than 100 levels deep at '{s}' while resolving envirnment", .{env.name});
             return error.EnvCycle;
         }
 
-        const parents_buf = try gpa.alloc(Env, env.uses.len);
-        defer gpa.free(parents_buf);
-        var parents: std.ArrayList(Env) = .initBuffer(parents_buf);
+        var parents: std.ArrayList(Env) = try .initCapacity(alloc, env.uses.len);
         for (env.uses) |use_spec| {
             if (Weft.strip_mode(mode, use_spec)) |use_name| {
                 const use: Env = for (envs) |use| {
@@ -256,51 +258,49 @@ pub const Spec = struct {
         }
         var pkgs: std.ArrayList([]const u8) = .empty;
         defer pkgs.deinit(gpa);
-
-        for (parents.items) |parent| {
+        try pkgs.appendSlice(gpa, env.pkgs);
+        for (parents.items) |parent|
             for (parent.pkgs) |pkg|
                 for (pkgs.items) |item| {
                     if (std.mem.eql(u8, item, pkg))
                         break;
-                } else try pkgs.append(gpa, pkg);
-        }
+                } else try pkgs.append(gpa, try ara.dupe(u8, pkg));
+
         var env_vars: std.StringHashMapUnmanaged([]const u8) = .empty;
         defer env_vars.deinit(gpa);
-        for (env.vars) |env_var| {
+        for (env.vars) |env_var|
             if (Weft.strip_mode(mode, env_var.@"0")) |name| {
-                if (env_var.@"1" orelse dotenv.get(env.name, name)) |val| {
-                    try env_vars.put(gpa, name, val);
+                if (env_var.@"1" orelse dotenv.get(env.name, name)) |val|
+                    try env_vars.put(gpa, name, val)
+                else parent: for (parents.items) |parent| {
+                    for (parent.vars) |parent_var|
+                        if (std.mem.eql(u8, parent_var.@"0", name)) {
+                            try env_vars.put(gpa, name, try ara.dupe(u8, parent_var.@"1"));
+                            break :parent;
+                        };
                 } else {
-                    parent: for (parents.items) |parent| {
-                        for (parent.vars) |parent_var| {
-                            if (std.mem.eql(u8, parent_var.@"0", name)) {
-                                try env_vars.put(gpa, name, parent_var.@"1");
-                                break :parent;
-                            }
-                        }
-                    } else {
-                        l.err("Environment {s} requires variable {s} which couldn't be found in mode {s}", .{ env.name, name, mode });
-                        return error.MissingEnviron;
-                    }
+                    l.err("Environment {s} requires variable {s} which couldn't be found in mode {s}", .{ env.name, name, mode });
+                    return error.MissingEnviron;
                 }
-            }
-        }
-        const final_vars = try alloc.alloc(struct { []const u8, []const u8 }, env_vars.size);
+            };
+
+        const final_vars = try ara.alloc(struct { []const u8, []const u8 }, env_vars.size);
         var env_vars_iter = env_vars.iterator();
         var i: usize = 0;
         while (env_vars_iter.next()) |entry| : (i += 1) {
             final_vars[i].@"0" = entry.key_ptr.*;
             final_vars[i].@"1" = entry.value_ptr.*;
         }
+        // NOTE: All values from parents have to be duped
         return .{
-            .pkgs = try pkgs.toOwnedSlice(alloc),
+            .pkgs = try pkgs.toOwnedSlice(ara),
             .vars = final_vars,
         };
     }
 
     pub fn resolve_leaky(
         gpa: std.mem.Allocator,
-        alloc: std.mem.Allocator,
+        ara: std.mem.Allocator,
         io: std.Io,
         config: *const Weft,
         pipeline: *const Weft.Pipeline,
@@ -314,11 +314,18 @@ pub const Spec = struct {
             l.err("Large scripts/binaries should be imported as source artifacts", .{});
             return error.ScriptTooLarge;
         }
-        const env = try resolve_env_leaky(gpa, alloc, io, mode, config.environments, dotenv, pipeline.environ());
+        const env = try resolve_env_leaky(gpa, ara, io, mode, config.environments, dotenv, pipeline.environ());
         const outputs: []const []const u8 = if (pipeline.out) |o|
             o
         else
-            try alloc.dupe([]const u8, &.{pipeline.name});
+            try ara.dupe([]const u8, &.{pipeline.name});
+
+        var keep: std.ArrayList(Weft.Keep) = try .initCapacity(gpa, pipeline.keep.len);
+        defer keep.deinit(gpa);
+        for (pipeline.keep) |k|
+            if (Weft.strip_mode(mode, k.@"0")) |name|
+                try keep.append(gpa, .{ name, k.@"1" });
+
         return .{
             .task_id = .{
                 .deployment = deployment_id,
@@ -330,9 +337,10 @@ pub const Spec = struct {
             .pkgs = env.pkgs,
             .inputs = pipeline.in,
             .outputs = outputs,
-            .keep = pipeline.keep,
+            .keep = try keep.toOwnedSlice(ara),
             .sibling = pipeline.sibling,
             .tune = pipeline.tune,
+            .mode = mode,
         };
     }
 };

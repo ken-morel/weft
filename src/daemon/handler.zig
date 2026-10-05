@@ -455,16 +455,27 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
 
     const env = bind_env: {
         var env: std.ArrayList([]const u8) = .empty;
-        const input_dir = try paths.artifacts(
+        const input_dir_path = try paths.artifacts(
             alloc,
             spec.task_id.workspace,
             &deployment,
         );
-        try env.append(alloc, try std.fmt.allocPrint(alloc, "IN={s}", .{input_dir}));
-        try env.append(alloc, try std.fmt.allocPrint(alloc, "OUT={s}", .{output_dir_path}));
-        try env.append(alloc, try std.mem.join(alloc, "=", &.{ "HOME", home_dir_path }));
-        try env.append(alloc, try std.mem.join(alloc, "=", &.{ "USER", runner_user }));
-        try env.append(alloc, try std.mem.join(alloc, "=", &.{ "LOGNAME", runner_user }));
+        const env_vars = [_][2][]const u8{
+            .{ "IN", input_dir_path },
+            .{ "OUT", output_dir_path },
+
+            .{ "HOME", home_dir_path },
+            .{ "USER", runner_user },
+            .{ "LOGNAME", runner_user },
+
+            .{ "WEFT_MODE", spec.mode },
+            .{ "WEFT_PIPELINE", spec.task_id.pipeline },
+            .{ "WEFT_WORKSPACE", spec.task_id.workspace },
+            .{ "WEFT_DEPLOYMENT", &deployment },
+            .{ "WEFT_UNIT", unit_name },
+        };
+        for (&env_vars) |v|
+            try env.append(alloc, try std.mem.join(alloc, "=", &v));
 
         if (spec.pkgs.len > 0) {
             var pkg_bin_paths: std.ArrayList([]const u8) = .empty;
@@ -506,7 +517,6 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
             try std.Io.sleep(io, .fromSeconds(do_sibling.poll), .awake);
         }
 
-        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] Looking for siblings...", .{}));
         switch (spec.sibling.then) {
             .ignore => {},
             .kill => {
@@ -540,7 +550,6 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
 
         break :handle_siblings false;
     };
-    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, " do stuff with siblings", .{}));
 
     {
         const msg = if (skip)
