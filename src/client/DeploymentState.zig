@@ -11,6 +11,8 @@ pub const Step = struct {
         running,
         completed,
         err,
+        skipped,
+        stopped,
     };
     remote: *const Remote,
     pipeline: *const Weft.Pipeline,
@@ -154,6 +156,20 @@ pub fn err(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: [
         s.status = .err;
         s.err = err_msg;
     }
+}
+pub fn stopped(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
+
+    if (self.get_unlocked(remote_name, pipeline_name)) |s|
+        s.status = .stopped;
+}
+pub fn skipped(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8) void {
+    self.mutex.lockUncancelable(io);
+    defer self.mutex.unlock(io);
+
+    if (self.get_unlocked(remote_name, pipeline_name)) |s|
+        s.status = .skipped;
 }
 
 pub fn update_usage(self: *@This(), io: std.Io, remote_name: []const u8, pipeline_name: []const u8, cpu_usec: u64, memory_bytes: u64, now: std.Io.Timestamp) void {

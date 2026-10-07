@@ -25,8 +25,12 @@ pub fn run_deployment(
     deployment: *Deployment,
 ) !void {
     const l = log(.runner);
-    const remotes = try inst.get_remotes_leaky(gpa, io);
-    defer gpa.free(remotes);
+    l.info("Running deployment {s}", .{&deployment.id.to_string()});
+
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const remotes = try inst.get_remotes_leaky(gpa, alloc, io);
 
     var state: DeploymentState = .init(gpa, &project);
     defer state.deinit();
@@ -165,20 +169,23 @@ pub fn run_deployment(
                                 }
 
                                 state.completed(io, remote_name, pipeline_name);
-                                try deployment.save(gpa, io, project);
                             },
                             .failed => |code| {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
                                 const err_msg = try std.fmt.allocPrint(gpa, "task failed with exit code {d}", .{code});
                                 state.err(io, remote_name, pipeline_name, err_msg);
-                                deployment.save(gpa, io, project) catch {};
+                            },
+                            .skipped, .stopped => {
+                                deployment.remove_running(gpa, remote_name, pipeline_name);
+                                const err_msg = try std.fmt.allocPrint(gpa, "task {any}", .{item.status});
+                                state.err(io, remote_name, pipeline_name, err_msg);
                             },
                             .not_found => {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
                                 state.err(io, remote_name, pipeline_name, "task not found on remote");
-                                deployment.save(gpa, io, project) catch {};
                             },
                         }
+                        deployment.save(gpa, io, project) catch {};
                     },
                     .footer => break,
                 }
@@ -253,9 +260,10 @@ pub fn spawn_step(
                 return err;
             };
         },
-        .nothing => try gpa.dupe(u8, Weft.no_run_script),
+        .nothing => null,
     };
-    defer gpa.free(script_content);
+    defer if (script_content) |s|
+        gpa.free(s);
 
     const spec: Task.Spec = try .resolve_leaky(
         gpa,

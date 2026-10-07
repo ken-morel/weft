@@ -58,7 +58,7 @@ pub fn open_data_dir(gpa: std.mem.Allocator, io: std.Io, env: *const std.process
     return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
 }
 
-pub fn get_remotes_leaky(self: @This(), gpa: std.mem.Allocator, io: std.Io) ![]Remote {
+pub fn get_remotes_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) ![]Remote {
     const content = self.config_dir.readFileAllocOptions(
         io,
         remotes_zon_file_name,
@@ -76,7 +76,7 @@ pub fn get_remotes_leaky(self: @This(), gpa: std.mem.Allocator, io: std.Io) ![]R
 
     return std.zon.parse.fromSlice([]Remote, .{
         .gpa = gpa,
-        .arena = gpa,
+        .arena = ara,
         .source = content,
         .diagnostics = &diag,
     }) catch |err| {

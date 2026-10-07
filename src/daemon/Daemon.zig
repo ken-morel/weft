@@ -169,7 +169,7 @@ pub fn run(self: *@This()) !void {
     try group.await(self.io);
 }
 
-pub fn finalize_task(self: *@This(), task: Task, status: u16) !void {
+pub fn finalize_task(self: *@This(), task: Task, status: i32) !void {
     const l = log(.task_finalize);
     defer task.free_duped(self.gpa);
     const cwd = std.Io.Dir.cwd();
@@ -181,7 +181,7 @@ pub fn finalize_task(self: *@This(), task: Task, status: u16) !void {
     defer run_dir.close(self.io);
     defer cwd.deleteTree(self.io, run_dir_path) catch {};
 
-    if (status != 0) {
+    if (status > 0) {
         l.warn("task {s} failed with exit code {d}, skipping artifact promotion", .{ task.id.pipeline, status });
         return;
     }

@@ -42,7 +42,7 @@ pub fn run(
         return err;
     };
 
-    const remotes = try inst.get_remotes_leaky(alloc, io);
+    const remotes = try inst.get_remotes_leaky(gpa, alloc, io);
 
     _ = deployment.config.get_pipeline(pipeline_name) orelse {
         l.err("pipeline '{s}' not found in deployment {s}", .{ pipeline_name, &deployment.id.to_string() });
@@ -144,7 +144,11 @@ pub fn run(
         ),
         .failed => |c| try stdout.writeStreamingAll(
             io,
-            try std.fmt.allocPrint(alloc, "# {s} code {d}", .{ key, c }),
+            try std.fmt.allocPrint(alloc, "#.faied {s} code {d}", .{ key, c }),
+        ),
+        .skipped, .stopped => try stdout.writeStreamingAll(
+            io,
+            try std.fmt.allocPrint(alloc, "#{any} {s} ", .{ status, key }),
         ),
         .not_found => {
             l.err("Task {s} not found", .{key});

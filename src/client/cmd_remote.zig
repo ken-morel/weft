@@ -184,7 +184,7 @@ pub fn install(
         l.err("remote token fetch failed, could not parse token from output: '{s}'. ('{s}')", .{ token_res.stdout, token_res.stderr });
         return error.RemoteInstallFailed;
     }
-    const existing_remotes = try installation.get_remotes_leaky(alloc, io);
+    const existing_remotes = try installation.get_remotes_leaky(gpa, alloc, io);
 
     var remotes_list: std.ArrayList(Remote) = .empty;
     var updated = false;
@@ -215,7 +215,13 @@ pub fn install(
     try installation.save_remotes(io, remotes_list.items);
     term.success("registered remote '{s}' at {s}:{d}", .{
         name,
-        if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"0" else host,
-        if (updated) remotes_list.items[remotes_list.items.len - 1].address.@"1" else port,
+        if (updated)
+            remotes_list.items[remotes_list.items.len - 1].address.@"0"
+        else
+            host,
+        if (updated)
+            remotes_list.items[remotes_list.items.len - 1].address.@"1"
+        else
+            port,
     });
 }

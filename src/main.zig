@@ -50,7 +50,7 @@ const Argz = union(enum) {
             pub const hidden = true;
             completed: struct {
                 task: Task,
-                code: u16,
+                code: ?[]const u8 = null,
             },
         },
     },
@@ -152,31 +152,34 @@ pub fn main(init: std.process.Init) !void {
 
     switch (parsed) {
         .version => {
-            const es = std.time.epoch.EpochSeconds{ .secs = @intCast(build.build_time_seconds) };
-            const day = es.getDaySeconds();
-            const yd = es.getEpochDay().calculateYearDay();
-            const md = yd.calculateMonthDay();
-            const build_time = try gpa.print("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{
-                yd.year,
-                @backingInt(md.month),
-                md.day_index + 1,
-                day.getHoursIntoDay(),
-                day.getMinutesIntoHour(),
-                day.getSecondsIntoMinute(),
-            });
-            defer gpa.free(build_time);
+            const build_time = comptime build_time: {
+                const es = std.time.epoch.EpochSeconds{ .secs = @intCast(build.build_time_seconds) };
+                const day = es.getDaySeconds();
+                const yd = es.getEpochDay().calculateYearDay();
+                const md = yd.calculateMonthDay();
+                break :build_time std.fmt.comptimePrint("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{
+                    yd.year,
+                    @backingInt(md.month),
+                    md.day_index + 1,
+                    day.getHoursIntoDay(),
+                    day.getMinutesIntoHour(),
+                    day.getSecondsIntoMinute(),
+                });
+            };
 
-            term.println(
+            const version_str = std.fmt.comptimePrint(
                 \\ Weft
                 \\  version:     v0.1.0-dev1 
                 \\  build time:  {s}
                 \\  build mode:  {s}
                 \\  schema hash: {s}
-            , .{
-                build_time,
-                @tagName(builtin.mode),
-                &std.fmt.hex(proto.hash),
+            , .{ // so that we can inspect this directly from binary
+                comptime build_time,
+                comptime @tagName(builtin.mode),
+                comptime &std.fmt.hex(proto.hash),
             });
+
+            term.println("{s}", .{version_str});
         },
         .daemon => |d| switch (d) {
             .install => |i| {
@@ -194,7 +197,11 @@ pub fn main(init: std.process.Init) !void {
             },
             .ipc => |i| switch (i) {
                 .completed => |msg| {
-                    try clinternal.task_completed(gpa, init.io, msg.task, msg.code);
+                    const code = if (msg.code) |c|
+                        std.fmt.parseInt(i32, c, 10) catch -3
+                    else
+                        -3;
+                    try clinternal.task_completed(gpa, init.io, msg.task, code);
                 },
             },
         },

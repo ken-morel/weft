@@ -116,19 +116,19 @@ fn connect(alloc: std.mem.Allocator, io: std.Io, remote: Remote) !*Client {
     return client;
 }
 pub fn run(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     io: std.Io,
     term: *Term,
     inst: ClientInstall,
     spec: ?[]const u8,
 ) !void {
     const l = log(.monitor);
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = std.heap.ArenaAllocator.init(gpa);
 
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const remotes = try inst.get_remotes_leaky(alloc, io);
+    const remotes = try inst.get_remotes_leaky(gpa, alloc, io);
     if (remotes.len == 0) {
         l.err("no remotes configured.", .{});
         return error.NoRemotes;
@@ -151,7 +151,7 @@ pub fn run(
 
     l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.get_name()});
 
-    var frame_arena = std.heap.ArenaAllocator.init(allocator);
+    var frame_arena = std.heap.ArenaAllocator.init(gpa);
     defer frame_arena.deinit();
 
     var stream_buf = try alloc.alloc(u8, 64 << 10);

@@ -58,7 +58,11 @@ pub fn update(self: *@This(), io: std.Io) !void {
                 else if (step.status == .completed)
                     self.term.write_event(.green, "}", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
                 else if (step.status == .err)
-                    self.term.write_event(.red, "#", " {s} ({d}ms, CPU: {d}ms): {s}", .{ key, duration_ms, step.cpu_ms orelse 0, step.err orelse "<unknown error>" });
+                    self.term.write_event(.red, "#.err", " {s} ({d}ms, CPU: {d}ms): {s}", .{ key, duration_ms, step.cpu_ms orelse 0, step.err orelse "<unknown error>" })
+                else if (step.status == .skipped)
+                    self.term.write_event(.red, "#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
+                else if (step.status == .stopped)
+                    self.term.write_event(.red, "#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
 
                 try self.step_history.put(self.alloc, step.pipeline.name, step.status);
             }
@@ -68,7 +72,11 @@ pub fn update(self: *@This(), io: std.Io) !void {
             else if (step.status == .completed)
                 self.term.write_event(color, "{}", " {s}", .{key})
             else if (step.status == .err)
-                self.term.write_event(.red, "{}", " {s} {s}", .{ key, step.err orelse "<unknown error>" });
+                self.term.write_event(.red, "{#.err", " {s} {s}", .{ key, step.err orelse "<unknown error>" })
+            else if (step.status == .skipped)
+                self.term.write_event(.red, "{#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
+            else if (step.status == .stopped)
+                self.term.write_event(.red, "{#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
 
             try self.step_history.put(self.alloc, try self.alloc.dupe(u8, step.pipeline.name), step.status);
         }

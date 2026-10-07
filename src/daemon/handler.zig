@@ -8,6 +8,7 @@ const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
+const clinternal = @import("clinternal.zig");
 const Daemon = @import("Daemon.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const gc = @import("gc.zig");
@@ -395,13 +396,14 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
 
     const script_path = try std.fs.path.join(alloc, &.{ run_dir_path, "bin" });
 
-    {
+    const nothing = if (spec.script) |script| script: {
         const script_file = try std.Io.Dir.cwd().createFile(daemon.io, script_path, .{
             .permissions = .executable_file,
         });
         defer script_file.close(io);
-        try script_file.writeStreamingAll(io, spec.script);
-    }
+        try script_file.writeStreamingAll(io, script);
+        break :script false;
+    } else true;
 
     const runner_user = daemon.config.runner_user orelse "weft-runner";
     try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] running task as {s}\n", .{runner_user}));
@@ -551,81 +553,87 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         break :handle_siblings false;
     };
 
-    {
-        const msg = if (skip)
-            try std.fmt.allocPrint(alloc, "[weft::spawner] Task will be skipped \n", .{})
-        else
-            try std.fmt.allocPrint(alloc, "[weft::spawner] Spawning systemd-run for task {s} \n", .{unit_name});
-        defer alloc.free(msg);
-        try log_file.writeStreamingAll(io, msg);
-    }
-    var child = try systemd.run(
-        gpa,
-        io,
-        unit_name,
-        .{
-            .cmd = if (!skip) &.{script_path} else &.{ "/usr/bin/echo", "[weft] Pipeline skipped" },
-            .raw = &.{},
-            .unit = .{
-                .type = .exec,
-                .description = try std.fmt.allocPrint(alloc, "Weft runner", .{}),
-            },
-            .fs = .{
-                .inaccessible = &.{},
-                .private_tmp = true,
-                .protect_system = .strict,
-                .read = input_dirs,
-                .write = &.{},
-                .root_image = null,
-                .tmpfs = &.{},
-                .bind_paths = bind_paths.items,
-                .bind_paths_read = bind_paths_read.items,
-            },
-            .permissions = .{
-                .capability_bounding_set = &.{},
-                .protect_control_groups = true,
-                .private_devices = true,
-                .protect_kernel_modules = true,
-                .protect_kernel_tunables = true,
-                .private_network = spec.tune.disable_network,
-                .no_new_privileges = true,
-            },
-            .run = .{
-                .user = runner_user,
-                .group = null,
-                .wait = false,
-                .collect = true,
-                .cwd = cwd_dir_path,
-                .dynamic_user = false,
-                .state_directories = state_dirs.items,
-                .env = env.items,
-                .hooks = .{
-                    .poststart = try std.fmt.allocPrint(alloc, "+/usr/bin/touch {s}/started", .{run_dir_path}),
-                    .poststop = try std.fmt.allocPrint(
-                        alloc,
-                        "+/usr/local/bin/weft daemon ipc completed {s} $EXIT_STATUS",
-                        .{unit_name},
-                    ),
+    if (skip) {
+        try log_file.writeStreamingAll(io, "[weft::spawner] Task is skipped \n");
+        try clinternal.task_completed(gpa, io, task, -1);
+        return .skipped;
+    } else if (nothing) {
+        try log_file.writeStreamingAll(io, "[weft::spawner] Task runs nothing \n");
+        try clinternal.task_completed(gpa, io, task, -2);
+        return .spawned;
+    } else {
+        try log_file.writeStreamingAll(io, "[weft::spawner] Spawning systemd-run for task ");
+        try log_file.writeStreamingAll(io, unit_name);
+        try log_file.writeStreamingAll(io, "\n");
+
+        var child = try systemd.run(
+            gpa,
+            io,
+            unit_name,
+            .{
+                .cmd = if (!skip) &.{script_path} else &.{ "/usr/bin/echo", "[weft.daemon.runner] Pipeline skipped" },
+                .raw = &.{},
+                .unit = .{
+                    .type = .exec,
+                    .description = try std.fmt.allocPrint(alloc, "Weft runner", .{}),
                 },
-                .stderr = .{ .append = log_path },
-                .stdout = .{ .append = log_path },
+                .fs = .{
+                    .inaccessible = &.{},
+                    .private_tmp = true,
+                    .protect_system = .strict,
+                    .read = input_dirs,
+                    .write = &.{},
+                    .root_image = null,
+                    .tmpfs = &.{},
+                    .bind_paths = bind_paths.items,
+                    .bind_paths_read = bind_paths_read.items,
+                },
+                .permissions = .{
+                    .capability_bounding_set = &.{},
+                    .protect_control_groups = true,
+                    .private_devices = true,
+                    .protect_kernel_modules = true,
+                    .protect_kernel_tunables = true,
+                    .private_network = spec.tune.disable_network,
+                    .no_new_privileges = true,
+                },
+                .run = .{
+                    .user = runner_user,
+                    .group = null,
+                    .wait = false,
+                    .collect = true,
+                    .cwd = cwd_dir_path,
+                    .dynamic_user = false,
+                    .state_directories = state_dirs.items,
+                    .env = env.items,
+                    .hooks = .{
+                        .poststart = try std.fmt.allocPrint(alloc, "+/bin/touch {s}/started", .{run_dir_path}),
+                        .poststop = try std.fmt.allocPrint(
+                            alloc,
+                            "+/usr/local/bin/weft daemon ipc completed {s} $EXIT_STATUS",
+                            .{unit_name},
+                        ),
+                    },
+                    .stderr = .{ .append = log_path },
+                    .stdout = .{ .append = log_path },
+                },
+                .resources = .{
+                    .memory_max = spec.tune.memory_max,
+                    .memory_high = spec.tune.memory_high,
+                    .cpu_quota = spec.tune.cpu_quota,
+                    .tasks_max = spec.tune.tasks_max,
+                    .io_weight = spec.tune.io_weight,
+                    .timeout = spec.tune.timeout,
+                },
             },
-            .resources = .{
-                .memory_max = spec.tune.memory_max,
-                .memory_high = spec.tune.memory_high,
-                .cpu_quota = spec.tune.cpu_quota,
-                .tasks_max = spec.tune.tasks_max,
-                .io_weight = spec.tune.io_weight,
-                .timeout = spec.tune.timeout,
-            },
-        },
-    );
-    const term = try child.wait(daemon.io);
-    try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] exited with: {any} \n", .{term}));
-    if (term.exited != 0) {
-        l.err("Systemd task launch failed: {any}", .{term});
-        return error.SpawnFailed;
-    } else return .spawned;
+        );
+        const term = try child.wait(daemon.io);
+        try log_file.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "[weft::spawner] systemd-run exited with: {any} \n", .{term}));
+        if (term.exited != 0) {
+            l.err("Systemd task launch failed: {any}", .{term});
+            return error.SpawnFailed;
+        } else return .spawned;
+    }
 }
 
 const max_log_pack_size = 32 << 10;
@@ -635,6 +643,7 @@ pub fn handle_task_poll(
     conn: *Connection,
     response_buf: []u8,
 ) proto.Res(proto.task.poll.Res) {
+    const l = log(.handle_task_poll);
     const cwd = std.Io.Dir.cwd();
     const ara = arena.allocator();
     const gpa = daemon.gpa;
@@ -661,19 +670,31 @@ pub fn handle_task_poll(
         };
         defer archive_dir.close(io);
 
-        const status: ?u16 = status: {
-            var buf: [2]u8 = undefined;
-            const file = archive_dir.openFile(io, "status", .{ .allow_directory = false }) catch |err| {
+        const status: ?i32 = status: {
+            var buf: [1 << 3]u8 = undefined;
+            const file = archive_dir.openFile(
+                io,
+                "status",
+                .{ .allow_directory = false },
+            ) catch |err|
                 if (err == error.FileNotFound)
                     break :status null
                 else
                     return err;
-            };
+
             defer file.close(io);
             const s = try file.readStreaming(io, &.{&buf});
-            if (s < 2)
-                break :status null;
-            break :status std.mem.readInt(u16, &buf, .little);
+
+            if (s == 0)
+                break :status null
+            else
+                break :status std.fmt.parseInt(i32, buf[0..s], 10) catch |err| {
+                    l.warn("Could not parse status '{s}': {any}", .{ buf[0..s], err });
+                    if (s != 0)
+                        return err
+                    else
+                        break :status 0;
+                };
         };
 
         const logs: ?proto.task.poll.Logs = if (item_req.logs_offset) |offset| read_logs: {
@@ -710,15 +731,24 @@ pub fn handle_task_poll(
 
         const usage: ?proto.task.poll.TaskUsage = if (status == null) task.usage(gpa, io) else null;
 
+        if (status) |s|
+            if (s < -3 or s > @as(u16, @intCast(std.math.maxInt(u16)))) {
+                l.err("Invalid exit status: {any}", .{s});
+                return error.InvalidStatus;
+            };
         try conn.send_object(response_buf, proto.Res(proto.task.poll.Res), .{
             .item = .{
                 .task = item_req.task,
                 .logs = logs,
-                .status = if (status) |code|
-                    if (code == 0)
+                .status = if (status) |s|
+                    if (s == 0 or s == -2)
                         .success
+                    else if (s == -1)
+                        .skipped
+                    else if (s == -3)
+                        .stopped
                     else
-                        .{ .failed = code }
+                        .{ .failed = @intCast(s) }
                 else
                     .running,
                 .usage = usage,

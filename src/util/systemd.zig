@@ -106,13 +106,13 @@ pub fn run(
     unit: {
         try cmd.append(
             alloc,
-            try std.fmt.allocPrint(alloc, "--unit={s}", .{unit}),
+            try alloc.print("--unit={s}", .{unit}),
         );
 
         if (opts.unit.description) |desc|
             try cmd.append(
                 alloc,
-                try std.fmt.allocPrint(alloc, "--description={s}", .{desc}),
+                try alloc.print("--description={s}", .{desc}),
             );
 
         try cmd.append(
@@ -132,9 +132,9 @@ pub fn run(
     }
     run: {
         if (opts.run.user) |user|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pUser={s}", .{user}));
+            try cmd.append(alloc, try alloc.print("-pUser={s}", .{user}));
         if (opts.run.group) |group|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pGroup={s}", .{group}));
+            try cmd.append(alloc, try alloc.print("-pGroup={s}", .{group}));
 
         if (opts.run.wait)
             try cmd.append(alloc, "--wait");
@@ -150,10 +150,10 @@ pub fn run(
             try cmd.append(alloc, "--remain-after-exit");
 
         for (opts.run.state_directories) |state_dir|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pStateDirectory={s}", .{state_dir}));
+            try cmd.append(alloc, try alloc.print("-pStateDirectory={s}", .{state_dir}));
 
         if (opts.run.cwd) |cwd|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "--working-directory={s}", .{cwd}));
+            try cmd.append(alloc, try alloc.print("--working-directory={s}", .{cwd}));
 
         for (opts.run.env) |env| {
             try cmd.append(alloc, "-E");
@@ -166,11 +166,11 @@ pub fn run(
             try cmd.append(alloc, try stderr.format_property(alloc, "StandardError"));
 
         if (opts.run.hooks.prestart) |hook|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pExecStartPre={s}", .{hook}));
+            try cmd.append(alloc, try alloc.print("-pExecStartPre={s}", .{hook}));
         if (opts.run.hooks.poststart) |hook|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pExecStartPost={s}", .{hook}));
+            try cmd.append(alloc, try alloc.print("-pExecStartPost={s}", .{hook}));
         if (opts.run.hooks.poststop) |hook|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pExecStopPost={s}", .{hook}));
+            try cmd.append(alloc, try alloc.print("-pExecStopPost={s}", .{hook}));
 
         break :run;
     }
@@ -190,27 +190,27 @@ pub fn run(
         }
 
         for (opts.fs.read) |read_path|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pReadOnlyPaths=-{s}", .{read_path}));
+            try cmd.append(alloc, try alloc.print("-pReadOnlyPaths=-{s}", .{read_path}));
 
         for (opts.fs.write) |write_path|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pReadWritePaths={s}", .{write_path}));
+            try cmd.append(alloc, try alloc.print("-pReadWritePaths={s}", .{write_path}));
 
         for (opts.fs.inaccessible) |inaccessible_path|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pInaccessiblePaths={s}", .{inaccessible_path}));
+            try cmd.append(alloc, try alloc.print("-pInaccessiblePaths={s}", .{inaccessible_path}));
 
         if (opts.fs.private_tmp)
             try cmd.append(alloc, "-pPrivateTmp=yes");
 
         for (opts.fs.tmpfs) |spec|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pTemporaryFileSystem={s}", .{spec}));
+            try cmd.append(alloc, try alloc.print("-pTemporaryFileSystem={s}", .{spec}));
 
         if (opts.fs.root_image) |img|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pRootImage={s}", .{img}));
+            try cmd.append(alloc, try alloc.print("-pRootImage={s}", .{img}));
 
         for (opts.fs.bind_paths) |spec|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pBindPaths={s}", .{spec}));
+            try cmd.append(alloc, try alloc.print("-pBindPaths={s}", .{spec}));
         for (opts.fs.bind_paths_read) |spec|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pBindReadOnlyPaths={s}", .{spec}));
+            try cmd.append(alloc, try alloc.print("-pBindReadOnlyPaths={s}", .{spec}));
 
         break :fs;
     }
@@ -225,7 +225,7 @@ pub fn run(
             try cmd.append(alloc, "-pProtectControlGroups=yes");
 
         if (opts.permissions.capability_bounding_set) |cap|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pCapabilityBoundingSet={s}", .{cap}));
+            try cmd.append(alloc, try alloc.print("-pCapabilityBoundingSet={s}", .{cap}));
 
         if (opts.permissions.private_devices)
             try cmd.append(alloc, "-pPrivateDevices=yes");
@@ -235,8 +235,7 @@ pub fn run(
         if (opts.permissions.restrict_address_families) |addr|
             try cmd.append(
                 alloc,
-                try std.fmt.allocPrint(
-                    alloc,
+                try alloc.print(
                     "-pRestrictAddressFamilies={s}",
                     .{try std.mem.join(alloc, " ", addr)},
                 ),
@@ -246,22 +245,22 @@ pub fn run(
     }
     resources: {
         if (opts.resources.memory_max) |memax|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pMemoryMax={d}M", .{memax}));
+            try cmd.append(alloc, try alloc.print("-pMemoryMax={d}M", .{memax}));
 
         if (opts.resources.memory_high) |memhigh|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pMemoryHigh={d}M", .{memhigh}));
+            try cmd.append(alloc, try alloc.print("-pMemoryHigh={d}M", .{memhigh}));
 
         if (opts.resources.cpu_quota) |quota|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pCPUQuota={d}%", .{quota}));
+            try cmd.append(alloc, try alloc.print("-pCPUQuota={d}%", .{quota}));
 
         if (opts.resources.tasks_max) |max_tasks|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pTasksMax={d}", .{max_tasks}));
+            try cmd.append(alloc, try alloc.print("-pTasksMax={d}", .{max_tasks}));
 
         if (opts.resources.io_weight) |io_weight|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pIOWeight={d}", .{io_weight}));
+            try cmd.append(alloc, try alloc.print("-pIOWeight={d}", .{io_weight}));
 
         if (opts.resources.timeout) |timeout|
-            try cmd.append(alloc, try std.fmt.allocPrint(alloc, "-pTimeoutStartSec={d}", .{timeout}));
+            try cmd.append(alloc, try alloc.print("-pTimeoutStartSec={d}", .{timeout}));
 
         break :resources;
     }

@@ -103,6 +103,8 @@ pub const task = struct {
             running,
             success,
             failed: u16,
+            skipped,
+            stopped,
             not_found,
         };
         pub const TaskUsage = struct {
@@ -154,7 +156,7 @@ pub const Request = enum(u8) {
 
 pub const DaemonMsg = union(enum) {
     const TaskCompleted = struct {
-        status: u16,
+        status: i32,
         task: task.Id,
     };
     task_completed: TaskCompleted,

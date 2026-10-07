@@ -14,7 +14,7 @@ pub fn create_sources(gpa: std.mem.Allocator, io: std.Io, _: *Term, inst: Client
 
     source: for (sources) |source| {
         const source_dir_path = source_dir_path: {
-            const source_name = try std.mem.join(gpa, "", &.{ "-", source.@"1" });
+            const source_name = try std.mem.join(gpa, "", &.{ "-", source.@"0" });
             defer gpa.free(source_name);
             break :source_dir_path try project.artifact_dir_path(gpa, io, deployment.id, source_name);
         };

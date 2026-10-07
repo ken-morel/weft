@@ -32,7 +32,7 @@ pub fn run(
             return;
         };
 
-    const remotes = inst.get_remotes_leaky(alloc, io) catch &.{};
+    const remotes = inst.get_remotes_leaky(gpa, alloc, io) catch &.{};
     const remote = for (remotes) |*r| {
         if (std.mem.eql(u8, r.get_name(), remote_name)) break r;
     } else {

@@ -2,10 +2,6 @@ const std = @import("std");
 
 const Glob = @import("../util/Glob.zig");
 
-pub const no_run_script =
-    \\ #!/usr/bin/sh
-    \\ echo 'Doing nothing'
-;
 pub const Keep = struct {
     []const u8,
     []const u8,

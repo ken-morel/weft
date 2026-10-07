@@ -214,7 +214,7 @@ pub fn usage(self: @This(), alloc: std.mem.Allocator, io: std.Io) ?proto.task.po
 pub const Spec = struct {
     pub const Tune = Weft.Pipeline.Tune;
     task_id: proto.task.Id,
-    script: []const u8,
+    script: ?[]const u8,
     vars: []const struct { []const u8, []const u8 } = &.{},
     pkgs: []const []const u8 = &.{},
     inputs: []const []const u8 = &.{},
@@ -316,13 +316,14 @@ pub const Spec = struct {
         deployment_id: Deployment.Id,
         mode: []const u8,
         dotenv: DotEnv,
-        script: []const u8,
+        script: ?[]const u8,
     ) !@This() {
         const l = log(.task_resolve);
-        if (script.len > 40 << 10) {
-            l.err("Large scripts/binaries should be imported as source artifacts", .{});
-            return error.ScriptTooLarge;
-        }
+        if (script) |s|
+            if (s.len > 40 << 10) {
+                l.err("Large scripts/binaries should be imported as source artifacts", .{});
+                return error.ScriptTooLarge;
+            };
         const env = try resolve_env_leaky(gpa, ara, io, mode, config.environments, dotenv, pipeline.environ());
         const outputs: []const []const u8 = if (pipeline.out) |o|
             o
