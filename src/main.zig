@@ -338,7 +338,7 @@ pub fn main(init: std.process.Init) !void {
                 };
                 defer client.deinit();
 
-                const basename = nix.query_store_basename(std.heap.page_allocator, &client, cmd.pkg) catch |err| {
+                const basename = nix.query_store_basename(gpa, &client, cmd.pkg) catch |err| {
                     if (err == error.PackageNotFound)
                         log.err("package '{s}' not found on Hydra", .{cmd.pkg});
                     return err;
