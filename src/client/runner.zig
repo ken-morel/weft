@@ -172,13 +172,16 @@ pub fn run_deployment(
                             },
                             .failed => |code| {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
-                                const err_msg = try std.fmt.allocPrint(gpa, "task failed with exit code {d}", .{code});
+                                const err_msg = try gpa.print("task failed with exit code {d}", .{code});
                                 state.err(io, remote_name, pipeline_name, err_msg);
                             },
-                            .skipped, .stopped => {
+                            .skipped => {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
-                                const err_msg = try std.fmt.allocPrint(gpa, "task {any}", .{item.status});
-                                state.err(io, remote_name, pipeline_name, err_msg);
+                                state.skipped(io, remote_name, pipeline_name);
+                            },
+                            .stopped => {
+                                deployment.remove_running(gpa, remote_name, pipeline_name);
+                                state.stopped(io, remote_name, pipeline_name);
                             },
                             .not_found => {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);

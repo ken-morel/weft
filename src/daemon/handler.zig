@@ -671,7 +671,7 @@ pub fn handle_task_poll(
         defer archive_dir.close(io);
 
         const status: ?i32 = status: {
-            var buf: [1 << 3]u8 = undefined;
+            var buf: [32]u8 = undefined;
             const file = archive_dir.openFile(
                 io,
                 "status",
@@ -683,17 +683,21 @@ pub fn handle_task_poll(
                     return err;
 
             defer file.close(io);
-            const s = try file.readStreaming(io, &.{&buf});
+            const s = file.readPositionalAll(io, &buf, 0) catch |err| {
+                l.warn("Could not read status file: {any}", .{err});
+                return err;
+            };
 
             if (s == 0)
+                break :status null;
+
+            const trimmed = std.mem.trim(u8, buf[0..s], " \r\n\t");
+            if (trimmed.len == 0)
                 break :status null
             else
-                break :status std.fmt.parseInt(i32, buf[0..s], 10) catch |err| {
-                    l.warn("Could not parse status '{s}': {any}", .{ buf[0..s], err });
-                    if (s != 0)
-                        return err
-                    else
-                        break :status 0;
+                break :status std.fmt.parseInt(i32, trimmed, 10) catch |err| {
+                    l.warn("Could not parse status '{s}': {any}", .{ trimmed, err });
+                    return err;
                 };
         };
 
@@ -732,7 +736,7 @@ pub fn handle_task_poll(
         const usage: ?proto.task.poll.TaskUsage = if (status == null) task.usage(gpa, io) else null;
 
         if (status) |s|
-            if (s < -3 or s > @as(u16, @intCast(std.math.maxInt(u16)))) {
+            if (s < -3 or s > std.math.maxInt(u16)) {
                 l.err("Invalid exit status: {any}", .{s});
                 return error.InvalidStatus;
             };

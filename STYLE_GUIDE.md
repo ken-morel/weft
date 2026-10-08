@@ -65,6 +65,10 @@ fn load_config_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator) Config {
 }
 ```
 
+## Functions taking an `ara` must have the `_leaky` suffix
+
+if a function makes non-tracable allocations which need to be freed, and thus takes an `ara`, then it should have the `_leaky` suffix.
+
 ## specify the type in the type annotations, not the value
 
 an example here
@@ -126,5 +130,73 @@ if(foo) ... else ...;
 ```
 The only exception is for small `orelse` and `catch` clauses with little content. like `catch foo.bar()` or `orelse 5`.
 
-## use alloc.print instead of std.fmt.allocPrint (... in progress)
+## Use alloc.print instead of std.fmt.allocPrint
+Just a note because we're in zig 0.17 which adds this new method.
+
+
+```zig
+// GOOD
+const str = try alloc.print("hello {s}", .{name});
+
+// BAD
+const str = try std.fmt.allocPrint(alloc, "hello {s}", .{name});
+```
+
 ## Use only unmanaged hashmaps and array lists
+
+Avoid managed container types where the allocator is stored inside the container struct. Use unmanaged containers and pass the allocator explicitly on each operation:
+
+```zig
+{
+  // GOOD
+  var list: std.ArrayListUnmanaged(u8) = .empty;
+  defer list.deinit(gpa);
+  try list.append(gpa, 42);
+
+  var map: std.StringHashMapUnmanaged(Item) = .empty;
+  defer map.deinit(gpa);
+}
+```
+
+
+
+## Avoid comments
+
+Avoid comments please, we always prefare descriptive variable names, closing expressions in a `blk: {break :blk;}` block.
+Doc comments are acceptable though, but even those should be avoided as in this stage that's just more work.
+
+
+## Avoid mutable variables
+
+Instead of flags, try to use builtin `for else` or a block and break:
+
+```zig
+const status = status: {
+  var temp = ...;
+
+  break :status tmp;
+};
+```
+
+## Name loop labels as you name the variable
+
+If you have a `for` loop, name the loop label after the **captured variable** (e.g. `|bar|`). Same for assignments: name the block label after the variable to which it is assigned.
+
+```zig
+bar: for (foo) |bar|
+  break :bar;
+
+const status = status: {
+  ...
+  break :status tmp;
+};
+```
+
+## Avoid returning inside control flows
+
+When possible, it is better to return the `for` or `if` or `while` rather than having several return statements.
+This rules applies in other places too, prefare using the control flow as an expression than doing the same return/call at the end of each branch.
+
+## Always pass io
+
+`io`, just like `gpa` and `ara` should always be passed as a function argument, and not be stored in the object, the object usually only need to store a fixedbuffer allocator or an arena allocator.

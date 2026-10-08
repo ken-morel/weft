@@ -5,16 +5,16 @@ const format_bytes = @import("../util/sizes.zig").format_bytes;
 const Deployment = @import("Deployment.zig");
 const DeploymentState = @import("DeploymentState.zig");
 
-alloc: std.mem.Allocator,
+gpa: std.mem.Allocator,
 term: *Term,
 state: *DeploymentState,
 deployment_id: Deployment.Id,
 step_history: std.StringHashMapUnmanaged(DeploymentState.Step.Status) = .empty,
 artifact_history: std.StringHashMapUnmanaged(DeploymentState.Artifact.Status) = .empty,
 
-pub fn init(alloc: std.mem.Allocator, term: *Term, state: *DeploymentState, deployment_id: Deployment.Id) @This() {
+pub fn init(gpa: std.mem.Allocator, term: *Term, state: *DeploymentState, deployment_id: Deployment.Id) @This() {
     return .{
-        .alloc = alloc,
+        .gpa = gpa,
         .term = term,
         .state = state,
         .deployment_id = deployment_id,
@@ -27,15 +27,15 @@ pub fn deinit(self: *@This()) void {
     self.term.flush() catch {};
     var step_iter = self.step_history.iterator();
     while (step_iter.next()) |entry|
-        self.alloc.free(entry.key_ptr.*);
+        self.gpa.free(entry.key_ptr.*);
 
-    self.step_history.deinit(self.alloc);
+    self.step_history.deinit(self.gpa);
 
     var art_iter = self.artifact_history.iterator();
     while (art_iter.next()) |entry|
-        self.alloc.free(entry.key_ptr.*);
+        self.gpa.free(entry.key_ptr.*);
 
-    self.artifact_history.deinit(self.alloc);
+    self.artifact_history.deinit(self.gpa);
 }
 
 pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) !void {
@@ -50,7 +50,9 @@ pub fn update(self: *@This(), io: std.Io) !void {
         const color = Term.task_color(step.pipeline.name);
         const duration_ms: u64 = @intCast(@max(step.started.durationTo(.now(io, .real)).toMilliseconds(), 0));
 
-        const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.name orelse "local", step.pipeline.name });
+        const key = try self.gpa.print("{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+        defer self.gpa.free(key);
+
         if (self.step_history.get(step.pipeline.name)) |prev_status| {
             if (prev_status != step.status) {
                 if (step.status == .running and (prev_status == .preparing or prev_status == .initializing))
@@ -60,11 +62,12 @@ pub fn update(self: *@This(), io: std.Io) !void {
                 else if (step.status == .err)
                     self.term.write_event(.red, "#.err", " {s} ({d}ms, CPU: {d}ms): {s}", .{ key, duration_ms, step.cpu_ms orelse 0, step.err orelse "<unknown error>" })
                 else if (step.status == .skipped)
-                    self.term.write_event(.red, "#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
+                    self.term.write_event(.green, "#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
                 else if (step.status == .stopped)
                     self.term.write_event(.red, "#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
 
-                try self.step_history.put(self.alloc, step.pipeline.name, step.status);
+                if (self.step_history.getPtr(step.pipeline.name)) |ptr|
+                    ptr.* = step.status;
             }
         } else {
             if (step.status == .running)
@@ -74,17 +77,17 @@ pub fn update(self: *@This(), io: std.Io) !void {
             else if (step.status == .err)
                 self.term.write_event(.red, "{#.err", " {s} {s}", .{ key, step.err orelse "<unknown error>" })
             else if (step.status == .skipped)
-                self.term.write_event(.red, "{#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
+                self.term.write_event(.green, "{#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
             else if (step.status == .stopped)
                 self.term.write_event(.red, "{#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
 
-            try self.step_history.put(self.alloc, try self.alloc.dupe(u8, step.pipeline.name), step.status);
+            try self.step_history.put(self.gpa, try self.gpa.dupe(u8, step.pipeline.name), step.status);
         }
     }
 
     for (self.state.artifacts.items) |art| {
-        const key = try std.fmt.allocPrint(self.alloc, "{s}@{s}", .{ art.name, art.remote.get_name() });
-        defer self.alloc.free(key);
+        const key = try self.gpa.print("{s}@{s}", .{ art.name, art.remote.get_name() });
+        defer self.gpa.free(key);
 
         if (self.artifact_history.get(key)) |prev_status| {
             if (prev_status != art.status) {
@@ -93,7 +96,8 @@ pub fn update(self: *@This(), io: std.Io) !void {
                 } else if (art.status == .pushing and prev_status != .pushing) {
                     self.term.write_event(.yellow, ">", " {s}", .{key});
                 }
-                _ = self.artifact_history.put(self.alloc, try self.alloc.dupe(u8, key), art.status) catch {};
+                if (self.artifact_history.getPtr(key)) |ptr|
+                    ptr.* = art.status;
             }
         } else {
             if (art.status == .pulling) {
@@ -101,7 +105,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
             } else if (art.status == .pushing) {
                 self.term.write_event(.yellow, ">", " {s}", .{key});
             }
-            try self.artifact_history.put(self.alloc, try self.alloc.dupe(u8, key), art.status);
+            try self.artifact_history.put(self.gpa, try self.gpa.dupe(u8, key), art.status);
         }
     }
 
@@ -144,8 +148,8 @@ pub fn update(self: *@This(), io: std.Io) !void {
                     "--";
                 const duration = step.started.durationTo(.now(io, .real)).toMilliseconds();
 
-                const key = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
-                defer self.alloc.free(key);
+                const key = try self.gpa.print("{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                defer self.gpa.free(key);
                 const color = Term.task_color(key);
                 self.term.clear_line();
                 self.term.styled_ln(

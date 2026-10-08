@@ -222,7 +222,7 @@ pub fn has_error(self: *@This(), io: std.Io) bool {
     defer self.mutex.unlock(io);
 
     for (self.steps.items) |s|
-        if (s.status == .err)
+        if (s.status == .err or s.status == .stopped)
             return true;
 
     return false;
