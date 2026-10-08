@@ -50,7 +50,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
         const color = Term.task_color(step.pipeline.name);
         const duration_ms: u64 = @intCast(@max(step.started.durationTo(.now(io, .real)).toMilliseconds(), 0));
 
-        const key = try self.gpa.print("{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+        const key = try self.gpa.print("{s}.{s}", .{ step.remote.@"0", step.pipeline.name });
         defer self.gpa.free(key);
 
         if (self.step_history.get(step.pipeline.name)) |prev_status| {
@@ -86,7 +86,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
     }
 
     for (self.state.artifacts.items) |art| {
-        const key = try self.gpa.print("{s}@{s}", .{ art.name, art.remote.get_name() });
+        const key = try self.gpa.print("{s}@{s}", .{ art.name, art.remote.@"0" });
         defer self.gpa.free(key);
 
         if (self.artifact_history.get(key)) |prev_status| {
@@ -134,11 +134,11 @@ pub fn update(self: *@This(), io: std.Io) !void {
         for (self.state.steps.items) |step| {
             if (step.status == .preparing) {
                 self.term.clear_line();
-                self.term.styled_ln(.dim, "  {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                self.term.styled_ln(.dim, "  {s}.{s}", .{ step.remote.@"0", step.pipeline.name });
                 lines_count += 1;
             } else if (step.status == .initializing) {
                 self.term.clear_line();
-                self.term.styled_ln(.dim, "? {s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                self.term.styled_ln(.dim, "? {s}.{s}", .{ step.remote.@"0", step.pipeline.name });
                 lines_count += 1;
             } else if (step.status == .running) {
                 var mem_buf: [32]u8 = undefined;
@@ -148,7 +148,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
                     "--";
                 const duration = step.started.durationTo(.now(io, .real)).toMilliseconds();
 
-                const key = try self.gpa.print("{s}.{s}", .{ step.remote.get_name(), step.pipeline.name });
+                const key = try self.gpa.print("{s}.{s}", .{ step.remote.@"0", step.pipeline.name });
                 defer self.gpa.free(key);
                 const color = Term.task_color(key);
                 self.term.clear_line();
@@ -172,12 +172,12 @@ pub fn update(self: *@This(), io: std.Io) !void {
             if (art.status == .pulling) {
                 const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
                 self.term.clear_line();
-                self.term.styled_ln(.cyan, "< .{s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
+                self.term.styled_ln(.cyan, "< .{s}@{s} {d}%", .{ art.name, art.remote.@"0", pct });
                 lines_count += 1;
             } else if (art.status == .pushing) {
                 const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
                 self.term.clear_line();
-                self.term.styled_ln(.yellow, "> {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
+                self.term.styled_ln(.yellow, "> {s}@{s} {d}%", .{ art.name, art.remote.@"0", pct });
                 lines_count += 1;
             }
         }

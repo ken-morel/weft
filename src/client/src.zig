@@ -9,7 +9,7 @@ const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 const runner = @import("runner.zig");
 
-pub fn create_sources(gpa: std.mem.Allocator, io: std.Io, _: *Term, inst: ClientInstall, project: Project, deployment: *Deployment) !void {
+pub fn create_sources(gpa: std.mem.Allocator, io: std.Io, _: *Term, inst: *const ClientInstall, project: Project, deployment: *Deployment) !void {
     const sources = deployment.config.get_sources();
 
     source: for (sources) |source| {

@@ -1,13 +1,8 @@
-const Weft = @import("../domain/Weft.zig");
+const std = @import("std");
 
-secret: [32]u8,
 listener: std.Io.net.Server,
 
-pub fn init(
-    io: std.Io,
-    secret: *const [32]u8,
-    port: u16,
-) !@This() {
+pub fn init(io: std.Io, port: u16) !@This() {
     const addr = try std.Io.net.IpAddress.parse("0.0.0.0", port);
     const tcp_listener = try addr.listen(
         io,
@@ -16,7 +11,6 @@ pub fn init(
     errdefer tcp_listener.deinit(io);
     return .{
         .listener = tcp_listener,
-        .secret = secret.*,
     };
 }
 
@@ -29,7 +23,3 @@ pub fn accept(self: *@This(), io: std.Io) !std.Io.net.Stream {
 pub fn deinit(self: *@This(), io: std.Io) void {
     self.listener.deinit(io);
 }
-
-const std = @import("std");
-const Connection = @import("../wire/Connection.zig");
-const Server = @This();

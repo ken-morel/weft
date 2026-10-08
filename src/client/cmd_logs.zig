@@ -4,25 +4,25 @@ const log = std.log.scoped;
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
+const Remote = Weft.Remote;
 const format_bytes = @import("../util/sizes.zig").format_bytes;
 const Connection = @import("../wire/Connection.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const Remote = @import("Remote.zig");
 
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
     project: Project,
-    inst: ClientInstall,
+    inst: *const ClientInstall,
     pipeline_name: []const u8,
     deployment_spec: ?[]const u8,
     remote_spec: ?[]const u8,
 ) !void {
     const l = log(.follow);
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
 
@@ -42,7 +42,7 @@ pub fn run(
         return err;
     };
 
-    const remotes = try inst.get_remotes_leaky(gpa, alloc, io);
+    const remotes = deployment.config.remotes;
 
     _ = deployment.config.get_pipeline(pipeline_name) orelse {
         l.err("pipeline '{s}' not found in deployment {s}", .{ pipeline_name, &deployment.id.to_string() });
@@ -63,14 +63,14 @@ pub fn run(
     };
 
     const remote: *const Remote = for (remotes) |*rem| {
-        if (std.mem.eql(u8, rem.get_name(), remote_name))
+        if (std.mem.eql(u8, rem.@"0", remote_name))
             break rem;
     } else {
         l.err("remote '{s}' not found", .{remote_name});
         return error.InvalidRemote;
     };
 
-    const key = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ remote_name, pipeline_name });
+    const key = try alloc.print("{s}.{s}", .{ remote_name, pipeline_name });
 
     const task_id: proto.task.Id = .{
         .workspace = deployment.config.workspace,
@@ -85,8 +85,8 @@ pub fn run(
     var client = Client.connect(
         alloc,
         io,
-        try remote.get_address(),
-        &try remote.get_token(),
+        try Weft.parse_remote_address(remote.*),
+        inst.identity,
     ) catch |e| {
         l.err("connection to remote '{s}' failed: {any}", .{ remote_name, e });
         return e;
@@ -100,7 +100,7 @@ pub fn run(
     var status: proto.task.poll.Status = .not_found;
     const stdout: std.Io.File = .stdout();
 
-    try stdout.writeStreamingAll(io, try std.fmt.allocPrint(alloc, "{s} {s}", .{ "{", key }));
+    try stdout.writeStreamingAll(io, try alloc.print("{s} {s}", .{ "{", key }));
 
     while (true) : (_ = req_arena.reset(.retain_capacity)) {
         try client.conn.send_object(buffer, proto.Request, .task_poll);
@@ -119,12 +119,14 @@ pub fn run(
         ) catch |e| {
             l.err("failed to receive poll reply: {any}", .{e});
             return e;
-        } catch |e| {
+        };
+
+        const poll_res = res catch |e| {
             l.err("poll error from remote: {any}", .{e});
             return e;
         };
 
-        switch (res) {
+        switch (poll_res) {
             .item => |item| {
                 if (item.logs) |logs| {
                     try stdout.writeStreamingAll(io, logs.data);
@@ -140,15 +142,15 @@ pub fn run(
     switch (status) {
         .success => try stdout.writeStreamingAll(
             io,
-            try std.fmt.allocPrint(alloc, "{s} {s}", .{ "}", key }),
+            try alloc.print("{s} {s}", .{ "}", key }),
         ),
         .failed => |c| try stdout.writeStreamingAll(
             io,
-            try std.fmt.allocPrint(alloc, "#.faied {s} code {d}", .{ key, c }),
+            try alloc.print("#.faied {s} code {d}", .{ key, c }),
         ),
         .skipped, .stopped => try stdout.writeStreamingAll(
             io,
-            try std.fmt.allocPrint(alloc, "#{any} {s} ", .{ status, key }),
+            try alloc.print("#{any} {s} ", .{ status, key }),
         ),
         .not_found => {
             l.err("Task {s} not found", .{key});

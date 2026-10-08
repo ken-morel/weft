@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Weft = @import("../domain/Weft.zig");
 const Project = @import("Project.zig");
-const Remote = @import("Remote.zig");
+const Remote = Weft.Remote;
 
 pub const Step = struct {
     pub const Status = enum {
@@ -64,7 +64,7 @@ fn get_unlocked(self: *@This(), remote_name: []const u8, pipeline_name: []const 
     return for (self.steps.items) |*s| {
         if (std.mem.eql(
             u8,
-            s.remote.get_name(),
+            s.remote.@"0",
             remote_name,
         ) and
             std.mem.eql(
@@ -85,7 +85,7 @@ fn artifact_unlocked(self: *@This(), name: []const u8, remote: []const u8) ?*Art
         ) and
             std.mem.eql(
                 u8,
-                a.remote.get_name(),
+                a.remote.@"0",
                 remote,
             ))
             return a;
@@ -97,7 +97,7 @@ pub fn add(self: *@This(), io: std.Io, remote: *const Remote, pipeline: *const W
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
-    if (self.get_unlocked(remote.get_name(), pipeline.name)) |s|
+    if (self.get_unlocked(remote.@"0", pipeline.name)) |s|
         return s;
 
     try self.steps.append(self.gpa, .{
@@ -204,7 +204,7 @@ pub fn artifact_progress(self: *@This(), io: std.Io, name: []const u8, remote: *
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
-    if (self.artifact_unlocked(name, remote.get_name())) |a| {
+    if (self.artifact_unlocked(name, remote.@"0")) |a| {
         a.status = status;
         a.percent = percent;
     } else {

@@ -6,9 +6,11 @@ const Term = @import("../domain/Term.zig");
 const Monitor = @import("../util/Monitor.zig");
 const format_bytes = @import("../util/sizes.zig").format_bytes;
 const zoto = @import("../util/zoto.zig");
+const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
-const Remote = @import("Remote.zig");
+const Weft = @import("../domain/Weft.zig");
+const Remote = Weft.Remote;
 
 fn format_time_only(buf: *[8]u8, ns: i128) []const u8 {
     const epoch_seconds: u64 = if (ns > 0) @intCast(@divTrunc(ns, std.time.ns_per_s)) else 0;
@@ -75,9 +77,11 @@ fn render_cell(term: *Term, cell: *const [10]u8, filled: u8, color: Term.Color) 
 }
 
 fn render_header(term: *Term, date_str: []const u8) void {
-    if (term.is_tty) term.clear_line();
-    term.styled(.dim, "─── {s} ──────────────────────────────────────────────────────────\n", .{date_str});
-    if (term.is_tty) term.clear_line();
+    if (term.is_tty)
+        term.clear_line();
+    term.styled(.dim, "─── {s} ──────────────────────────────────────────────────────────────────────────────────────────\n", .{date_str});
+    if (term.is_tty)
+        term.clear_line();
     term.styled(.bold, "   TIME   ", .{});
     term.print("  ", .{});
     term.styled(.bold, "   CPU    ", .{});
@@ -98,10 +102,10 @@ fn render_header(term: *Term, date_str: []const u8) void {
     term.println("", .{});
 }
 
-fn connect(alloc: std.mem.Allocator, io: std.Io, remote: Remote) !*Client {
+fn connect(alloc: std.mem.Allocator, io: std.Io, remote: Remote, identity: Identity) !*Client {
     const l = log(.monitor_connect);
-    var client = Client.connect(alloc, io, try remote.get_address(), &try remote.get_token()) catch |err| {
-        l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.get_name(), err });
+    var client = Client.connect(alloc, io, try Weft.parse_remote_address(remote), identity) catch |err| {
+        l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.@"0", err });
         return err;
     };
     errdefer client.destroy(alloc, io);
@@ -119,37 +123,37 @@ pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    inst: ClientInstall,
+    inst: *const ClientInstall,
+    remotes: []const Remote,
     spec: ?[]const u8,
 ) !void {
     const l = log(.monitor);
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
 
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const remotes = try inst.get_remotes_leaky(gpa, alloc, io);
     if (remotes.len == 0) {
-        l.err("no remotes configured.", .{});
+        l.err("no remotes configured in weft/weft.zon.", .{});
         return error.NoRemotes;
     }
 
     const target_remote: *const Remote = if (spec) |name| remote_find: {
         for (remotes) |*r|
-            if (std.mem.eql(u8, r.get_name(), name))
+            if (std.mem.eql(u8, r.@"0", name))
                 break :remote_find r;
 
-        l.err("remote '{s}' not found in remotes.zon", .{name});
+        l.err("remote '{s}' not found in weft/weft.zon", .{name});
         return error.InvalidRemote;
     } else &remotes[0];
 
-    l.info("connecting to remote '{s}' at {s}:{d}...", .{ target_remote.get_name(), target_remote.address.@"0", target_remote.address.@"1" });
+    l.info("connecting to remote '{s}' at {s}...", .{ target_remote.@"0", target_remote.@"1" });
 
-    var maybe_client: ?*Client = try connect(alloc, io, target_remote.*);
+    var maybe_client: ?*Client = try connect(alloc, io, target_remote.*, inst.identity);
     defer if (maybe_client) |c|
         c.destroy(alloc, io);
 
-    l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.get_name()});
+    l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.@"0"});
 
     var frame_arena = std.heap.ArenaAllocator.init(gpa);
     defer frame_arena.deinit();
@@ -186,7 +190,7 @@ pub fn run(
     while (true) {
         const client = if (maybe_client) |c| c else {
             try std.Io.sleep(io, .fromSeconds(10), .real);
-            maybe_client = connect(alloc, io, target_remote.*) catch null;
+            maybe_client = connect(alloc, io, target_remote.*, inst.identity) catch null;
             continue;
         };
         var iac = [_][]u8{stream_buf[read_pos..]};
@@ -232,7 +236,7 @@ pub fn run(
 
                 if (term.is_tty) term.clear_line();
                 term.styled(.bold, "remote: ", .{});
-                term.styled(.cyan, "{s}", .{target_remote.get_name()});
+                term.styled(.cyan, "{s}", .{target_remote.@"0"});
                 term.styled(.dim, "   cpu: ", .{});
                 term.print("{s} ({d}@{d}MHz)", .{ stats.cpu.model, stats.cpu.cores, stats.cpu.freq });
                 term.styled(.dim, "   ram: ", .{});
@@ -538,7 +542,7 @@ pub fn run(
 
                 if (stats.services.len == 0) {
                     term.clear_line();
-                    term.styled_ln(.dim, "  (no active tasks on {s})", .{target_remote.get_name()});
+                    term.styled_ln(.dim, "  (no active tasks on {s})", .{target_remote.@"0"});
                     lines_count += 1;
                 } else {
                     for (stats.services) |svc| {

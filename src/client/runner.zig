@@ -14,14 +14,14 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Fetcher = @import("Fetcher.zig");
 const Project = @import("Project.zig");
-const Remote = @import("Remote.zig");
+const Remote = Weft.Remote;
 
 pub fn run_deployment(
     gpa: std.mem.Allocator,
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: ClientInstall,
+    inst: *const ClientInstall,
     deployment: *Deployment,
 ) !void {
     const l = log(.runner);
@@ -29,8 +29,8 @@ pub fn run_deployment(
 
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const alloc = arena.allocator();
-    const remotes = try inst.get_remotes_leaky(gpa, alloc, io);
+    const remotes = deployment.config.remotes;
+    const identity = inst.identity;
 
     var state: DeploymentState = .init(gpa, &project);
     defer state.deinit();
@@ -40,6 +40,7 @@ pub fn run_deployment(
         .alloc = gpa,
         .dep = deployment,
         .depl = &depl,
+        .identity = identity,
         .project = &project,
         .remotes = remotes,
         .term = term,
@@ -78,7 +79,7 @@ pub fn run_deployment(
 
         while (try deployment.next_step(term)) |step| {
             const remote: *const Remote = remote: for (remotes) |*remote| {
-                if (std.mem.eql(u8, remote.get_name(), step.remote))
+                if (std.mem.eql(u8, remote.@"0", step.remote))
                     break :remote remote;
             } else return error.InvalidRemote;
 
@@ -96,7 +97,7 @@ pub fn run_deployment(
         }
 
         for (remotes) |*remote| {
-            const remote_name = remote.get_name();
+            const remote_name = remote.@"0";
             var batch_tasks: std.ArrayList(proto.task.poll.ItemReq) = .empty;
             defer batch_tasks.deinit(poll_arena.allocator());
 
@@ -117,9 +118,8 @@ pub fn run_deployment(
 
             if (batch_tasks.items.len == 0) continue;
 
-            const addr = remote.get_address() catch continue;
-            const token = remote.get_token() catch continue;
-            var poll_client = Client.connect(gpa, io, addr, &token) catch continue;
+            const addr = Weft.parse_remote_address(remote.*) catch continue;
+            var poll_client = Client.connect(gpa, io, addr, identity) catch continue;
             defer poll_client.destroy(gpa, io);
 
             poll_client.conn.send_object(log_buffer, proto.Request, .task_poll) catch continue;
@@ -289,7 +289,7 @@ pub fn spawn_step(
     state.initializing(io, step.remote, step.pipeline);
 
     spawn_task: {
-        const client = try Client.connect(gpa, io, try remote.get_address(), &try remote.get_token());
+        const client = try Client.connect(gpa, io, try Weft.parse_remote_address(remote.*), fetcher.identity);
         defer client.destroy(gpa, io);
 
         try client.conn.send_object(buffer, proto.Request, .task_spawn);

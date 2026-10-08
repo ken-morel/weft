@@ -2,23 +2,23 @@ const std = @import("std");
 const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
+const Weft = @import("../domain/Weft.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const Remote = @import("Remote.zig");
 
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
     project: Project,
-    inst: ClientInstall,
+    inst: *const ClientInstall,
     pipeline: []const u8,
     remote_name: []const u8,
     deployment_spec: []const u8,
 ) !void {
     const l = log(.kill);
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
 
@@ -32,18 +32,17 @@ pub fn run(
             return;
         };
 
-    const remotes = inst.get_remotes_leaky(gpa, alloc, io) catch &.{};
+    const remotes = config.remotes;
     const remote = for (remotes) |*r| {
-        if (std.mem.eql(u8, r.get_name(), remote_name)) break r;
+        if (std.mem.eql(u8, r.@"0", remote_name)) break r;
     } else {
         l.err("remote '{s}' not configured", .{remote_name});
         return error.RemoteNotFound;
     };
 
-    const addr = (remote.get_address() catch null) orelse return error.InvalidRemoteConfig;
-    const tok = (remote.get_token() catch null) orelse return error.InvalidRemoteConfig;
+    const addr = (Weft.parse_remote_address(remote.*) catch null) orelse return error.InvalidRemoteConfig;
 
-    const client = Client.connect(alloc, io, addr, &tok) catch |err| {
+    const client = Client.connect(alloc, io, addr, inst.identity) catch |err| {
         l.err("could not reach remote '{s}': {any}", .{ remote_name, err });
         return err;
     };

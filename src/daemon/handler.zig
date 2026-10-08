@@ -18,6 +18,7 @@ const Task = @import("Task.zig");
 pub fn handle(daemon: *Daemon, permits: *std.Io.Semaphore, stream: std.Io.net.Stream) !void {
     const l = log(.client_server);
     defer permits.post(daemon.io);
+    errdefer stream.close(daemon.io);
 
     _run(daemon, stream) catch |err| {
         if (err == error.ReAssigned)
@@ -44,9 +45,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
     var reader = stream.reader(daemon.io, reader_buf);
     var writer = stream.writer(daemon.io, writer_buf);
 
-    var conn: Connection = try .init(
-        daemon.io,
-        &try daemon.config.get_secret(),
+    var conn = try daemon.connect(
         &reader.interface,
         &writer.interface,
     );
@@ -578,7 +577,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
                     .description = try std.fmt.allocPrint(alloc, "Weft runner", .{}),
                 },
                 .fs = .{
-                    .inaccessible = &.{},
+                    .inaccessible = &.{ "/etc/weft", paths.weft_runtime_dir },
                     .private_tmp = true,
                     .protect_system = .strict,
                     .read = input_dirs,

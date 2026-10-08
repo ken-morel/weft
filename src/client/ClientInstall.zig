@@ -1,16 +1,18 @@
 const std = @import("std");
 
 const Term = @import("../domain/Term.zig");
+const Identity = @import("../wire/Identity.zig");
 const Deployment = @import("Deployment.zig");
-pub const Remote = @import("Remote.zig");
 
 pub const read_only_user_permissions = @as(std.Io.File.Permissions, @fromBackingInt(@intCast(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR))));
-pub const read_only_user_mode = read_only_user_permissions.toMode();
-pub const remotes_zon_file_name = "remotes.zon";
+
+pub const key_file_name = "key";
 
 config_dir: std.Io.Dir,
 data_dir: std.Io.Dir,
 temp_dir: std.Io.Dir,
+identity: Identity,
+env: *const std.process.Environ.Map,
 
 pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !@This() {
     const config_dir = try open_config_dir(gpa, io, env);
@@ -19,10 +21,14 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.
     data_dir.createDirPath(io, "temp") catch {};
     const temp_dir = try data_dir.openDir(io, "temp", .{ .iterate = true });
 
+    const identity = try Identity.ensure(io, config_dir, key_file_name);
+
     return .{
         .config_dir = config_dir,
         .data_dir = data_dir,
         .temp_dir = temp_dir,
+        .identity = identity,
+        .env = env,
     };
 }
 pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
@@ -56,44 +62,4 @@ pub fn open_data_dir(gpa: std.mem.Allocator, io: std.Io, env: *const std.process
     defer gpa.free(path);
     try std.Io.Dir.cwd().createDirPath(io, path);
     return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
-}
-
-pub fn get_remotes_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) ![]Remote {
-    const content = self.config_dir.readFileAllocOptions(
-        io,
-        remotes_zon_file_name,
-        gpa,
-        .unlimited,
-        .of(u8),
-        0,
-    ) catch |err|
-        return if (err == error.FileNotFound)
-            &.{}
-        else
-            err;
-    defer gpa.free(content);
-    var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
-
-    return std.zon.parse.fromSlice([]Remote, .{
-        .gpa = gpa,
-        .arena = ara,
-        .source = content,
-        .diagnostics = &diag,
-    }) catch |err| {
-        diag.log(remotes_zon_file_name);
-        return err;
-    };
-}
-
-pub fn save_remotes(self: @This(), io: std.Io, remotes: []const Remote) !void {
-    var atomic = try self.config_dir.createFileAtomic(io, remotes_zon_file_name, .{
-        .permissions = read_only_user_permissions,
-        .replace = true,
-    });
-    defer atomic.deinit(io);
-    var buffer: [4 << 10]u8 = undefined;
-    var writer = atomic.file.writer(io, &buffer);
-    try std.zon.stringify.serialize(remotes, .{}, &writer.interface);
-    try writer.interface.flush();
-    try atomic.replace(io);
 }

@@ -14,9 +14,11 @@ const Deployment = @import("Deployment.zig");
 const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
-const Remote = @import("Remote.zig");
+const Remote = Weft.Remote;
+const Identity = @import("../wire/Identity.zig");
 
 dep: *Deployment,
+identity: Identity,
 remotes: []const Remote,
 pushing: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 pulling: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
@@ -48,7 +50,7 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
-    var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
+    var client = try Client.connect(self.alloc, io, try Weft.parse_remote_address(remote.*), self.identity);
     defer client.destroy(self.alloc, io);
 
     const task_id: proto.task.Id = .{
@@ -119,7 +121,7 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
 
     try self.fetch(io, artifact);
 
-    const push_id = try std.mem.join(self.alloc, ".", &.{ remote.get_name(), artifact });
+    const push_id = try std.mem.join(self.alloc, ".", &.{ remote.@"0", artifact });
     defer self.alloc.free(push_id);
 
     const m = try self.get_mutex(io, &self.pushing, push_id);
@@ -144,7 +146,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     const artifact_dir_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
     defer self.alloc.free(artifact_dir_path);
 
-    var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
+    var client = try Client.connect(self.alloc, io, try Weft.parse_remote_address(remote.*), self.identity);
     defer client.destroy(self.alloc, io);
 
     const conn = &client.conn;
@@ -233,7 +235,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         for (self.dep.artifacts) |*art| {
             if (std.mem.eql(u8, art.name, artifact))
                 for (self.remotes) |*rem|
-                    if (std.mem.eql(u8, rem.get_name(), art.remote))
+                    if (std.mem.eql(u8, rem.@"0", art.remote))
                         break :remote rem;
         } else return error.ArtifactNotFound;
     };
@@ -241,7 +243,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     try self.state.artifact_progress(io, artifact, remote, .pulling, 0.0);
     defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
 
-    var client = try Client.connect(self.alloc, io, try remote.get_address(), &try remote.get_token());
+    var client = try Client.connect(self.alloc, io, try Weft.parse_remote_address(remote.*), self.identity);
     defer client.destroy(self.alloc, io);
 
     const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);

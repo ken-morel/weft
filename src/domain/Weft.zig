@@ -72,6 +72,16 @@ pub const Pipeline = struct {
             std.mem.eql(u8, self.name, artifact);
     }
 };
+pub const Remote = struct {
+    /// The remote name
+    []const u8,
+    /// The weft host:port
+    []const u8,
+    /// the ssh host:port
+    []const u8,
+    /// The remote tags seperated by spaces
+    []const u8,
+};
 
 modes: []const []const u8 = &.{"default"},
 environments: []const Env = &.{},
@@ -79,6 +89,16 @@ workspace: []const u8,
 sources: ?[]const struct { []const u8, []const u8 } = null,
 
 pipelines: []const Pipeline = &.{},
+remotes: []const Remote,
+
+pub fn parse_remote_address(remote: Remote) !std.Io.net.IpAddress {
+    const addr_str = remote.@"1";
+    return if (std.mem.lastIndexOfScalar(u8, addr_str, ':')) |colon|
+        try .parse(addr_str[0..colon], try std.fmt.parseInt(u16, addr_str[colon + 1 ..], 10))
+    else
+        try .parse(addr_str, 9338);
+}
+
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
     return for (self.pipelines) |*pipeline| {

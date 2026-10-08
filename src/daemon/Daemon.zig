@@ -6,6 +6,7 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
+const Crypt = @import("../wire/Crypt.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const handler = @import("handler.zig");
 const Server = @import("Server.zig");
@@ -23,8 +24,11 @@ config: DaemonInstall.Config,
 pressor: SharedPressor,
 stats_server: StatsServer,
 store: Store,
+keys: [][32]u8,
+keys_lock: std.Io.Mutex,
 
 pub fn deinit(self: *@This()) void {
+    self.gpa.free(self.keys);
     self.server.deinit(self.io);
     self.pressor.deinit(self.gpa);
     self.stats_server.deinit();
@@ -39,10 +43,13 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This()
 
     var server = try Server.init(
         io,
-        &try config.get_secret(),
         config.port,
     );
     errdefer server.deinit(io);
+
+    const keys = try DaemonInstall.get_keys(gpa, io);
+    errdefer gpa.free(keys);
+
     return .{
         .gpa = gpa,
         .arena = arena,
@@ -53,7 +60,16 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This()
         .pressor = try .init(gpa, io),
         .stats_server = try .init(gpa, io),
         .store = .init(gpa, config.max_nix_workers),
+        .keys = keys,
+        .keys_lock = .init,
     };
+}
+
+pub fn validate_key(self: @This(), key: [32]u8) bool {
+    return for (self.keys) |vkey| {
+        if (std.crypto.timing_safe.eql([32]u8, key, vkey))
+            break true;
+    } else false;
 }
 
 pub fn run_client_server(self: *@This()) !void {
@@ -214,4 +230,65 @@ pub fn finalize_task(self: *@This(), task: Task, status: i32) !void {
         artifacts_dir.deleteTree(self.io, name) catch {};
         try outputs_dir.rename(name, artifacts_dir, name, self.io);
     }
+}
+
+pub fn connect(self: *@This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !Connection {
+    var hello: Crypt.ClientHello = undefined;
+    try reader.readSliceAll(std.mem.asBytes(&hello));
+    if (!std.mem.eql(u8, &hello.magic, &Crypt.magick))
+        return error.InvalidProtocol;
+
+    if (!self.validate_key(hello.client_public)) {
+        var reject_msg: Crypt.ServerChallenge = .{
+            .status = .unauthorized,
+            .challenge = undefined,
+            .server_nonce = undefined,
+            .server_temp_pub = undefined,
+        };
+        try writer.writeAll(std.mem.asBytes(&reject_msg));
+        try writer.flush();
+        return error.ClientUnauthorized;
+    }
+
+    var challenge: [32]u8 = undefined;
+    try self.io.randomSecure(&challenge);
+    const temp_dh = std.crypto.dh.X25519.KeyPair.generate(self.io);
+    const out_nonce = try Crypt.Nonce.random(self.io);
+
+    const status: Crypt.ServerChallenge.Status = if (hello.proto_hash == proto.hash)
+        .ok
+    else
+        .proto_mismatch;
+    const challenge_msg: Crypt.ServerChallenge = .{
+        .status = status,
+        .challenge = challenge,
+        .server_temp_pub = temp_dh.public_key,
+        .server_nonce = out_nonce.to_bytes(),
+    };
+    try writer.writeAll(std.mem.asBytes(&challenge_msg));
+    try writer.flush();
+    if (status != .ok)
+        return error.ProtocolMismatch;
+
+    var auth: Crypt.ClientAuth = undefined;
+    try reader.readSliceAll(std.mem.asBytes(&auth));
+
+    const sign_data = Crypt.make_sign_data(&challenge, &temp_dh.public_key);
+    Crypt.Identity.verify(hello.client_public, &sign_data, auth.signature) catch
+        return error.AuthenticationFailed;
+
+    const shared_secret = try std.crypto.dh.X25519.scalarmult(
+        temp_dh.secret_key,
+        hello.client_temp_pub,
+    );
+
+    var in_nonce_bytes = hello.client_nonce;
+    const in_nonce = try Crypt.Nonce.from_bytes(&in_nonce_bytes);
+
+    return .{
+        .reader = reader,
+        .writer = writer,
+        .write_crypt = .init(&shared_secret, out_nonce),
+        .read_crypt = .init(&shared_secret, in_nonce),
+    };
 }

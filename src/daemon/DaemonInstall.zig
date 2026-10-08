@@ -3,23 +3,15 @@ const log = std.log.scoped;
 
 const ClientInstall = @import("../client/ClientInstall.zig");
 const read_only_user_permissions = ClientInstall.read_only_user_permissions;
-const read_only_user_mode = ClientInstall.read_only_user_mode;
 const Deployment = @import("../client/Deployment.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 
 pub const Config = struct {
     runner_user: ?[]const u8 = null,
-    secret: []const u8,
     port: u16 = 9338,
     max_workers: u32 = 8,
     max_nix_workers: u32 = 5,
-
-    pub fn get_secret(self: @This()) ![32]u8 {
-        var secret: [32]u8 = undefined;
-        _ = try std.fmt.hexToBytes(&secret, self.secret);
-        return secret;
-    }
 };
 
 const service_template =
@@ -96,17 +88,6 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, maybe_user: ?[]const u8) !voi
     write_config: {
         const current_config: ?Config = read_config_leaky(io, alloc) catch null;
 
-        var secret_hex = secret_hex: {
-            var stack_secret: [64]u8 = undefined;
-            if (current_config) |c| {
-                @memcpy(&stack_secret, c.secret);
-                break :secret_hex stack_secret;
-            } else {
-                try io.randomSecure(stack_secret[0..32]);
-                break :secret_hex std.fmt.bytesToHex(stack_secret[0..32], .lower);
-            }
-        };
-
         const runner_user = if (maybe_user) |u|
             u
         else if (current_config) |c|
@@ -115,13 +96,14 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, maybe_user: ?[]const u8) !voi
             null;
 
         const config = Config{
-            .secret = &secret_hex,
             .port = if (current_config) |c| c.port else 9338,
             .max_workers = if (current_config) |c| c.max_workers else 8,
             .runner_user = runner_user,
         };
 
-        var config_file = try cwd.createFileAtomic(io, "/etc/weft.zon", .{
+        try cwd.createDirPath(io, "/etc/weft");
+
+        var config_file = try cwd.createFileAtomic(io, "/etc/weft/config.zon", .{
             .permissions = read_only_user_permissions,
             .replace = true,
         });
@@ -185,9 +167,9 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, maybe_user: ?[]const u8) !voi
 pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
     const cwd = std.Io.Dir.cwd();
 
-    var file = cwd.openFile(io, "/etc/weft.zon", .{}) catch |err| {
+    var file = cwd.openFile(io, "/etc/weft/config.zon", .{}) catch |err| {
         if (err == error.AccessDenied)
-            log(.config).err("cannot read /etc/weft.zon: permission denied (must be run as root)", .{})
+            log(.config).err("cannot read /etc/weft/config.zon: permission denied (must be run as root)", .{})
         else if (err == error.FileNotFound)
             log(.config).err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
         return err;
@@ -196,8 +178,8 @@ pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
 
     const stat = try file.stat(io);
 
-    if ((stat.permissions.toMode() & 0o777) != read_only_user_mode) {
-        log(.config).err("/etc/weft.zon has insecure permissions, must be 0600", .{});
+    if ((stat.permissions.toMode() & 0o777) != read_only_user_permissions.toMode()) {
+        log(.config).err("/etc/weft/config.zon has insecure permissions, must be 0600", .{});
         return error.InsecurePermissions;
     }
     var buff: [4 << 10]u8 = undefined;
@@ -216,4 +198,59 @@ pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
         .source = content,
         .diagnostics = &diag,
     });
+}
+
+pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
+    const l = log(.load_keys);
+    const file = try std.Io.Dir.cwd().openFile(io, "/ect/weft/keys", .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+        .lock = .shared,
+        .mode = .read_only,
+    });
+    defer file.close(io);
+    var buf: [1 << 6]u8 = undefined;
+    var reader = file.reader(io, &buf);
+
+    const content = try reader.interface.allocRemaining(gpa, .unlimited);
+    defer gpa.free(content);
+
+    var list: std.ArrayList([32]u8) = .empty;
+    defer list.deinit(gpa);
+
+    var iter = std.mem.splitScalar(u8, content, '\n');
+    var ln: usize = 0;
+    while (iter.next()) |entry| : (ln += 1) {
+        if (entry.len == 0)
+            continue
+        else if (entry.len != 64) {
+            l.err("Invalid client key with length {d} at /etc/weft/keys:{d}", .{ entry.len, ln });
+            continue;
+        } else {
+            var key: [32]u8 = undefined;
+            _ = std.fmt.hexToBytes(&key, entry) catch |err| {
+                l.err("Error decoding key at /etc/weft/keys:{d} {any}", .{ ln, err });
+                continue;
+            };
+            try list.append(gpa, key);
+        }
+    }
+
+    return try list.toOwnedSlice(gpa);
+}
+
+pub fn add_key(io: std.Io, key: [32]u8) !void {
+    if (key.len != 64)
+        return error.InvalidKey;
+    const file = try std.Io.Dir.cwd().openFile(io, "/etc/weft/keys", .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+        .lock = .exclusive,
+        .mode = .write_only,
+    });
+    defer file.close(io);
+
+    const hex = std.fmt.bytesToHex(key, .upper);
+    file.writePositionalAll(io, "\n", 0);
+    file.writePositionalAll(io, &hex, 0);
 }

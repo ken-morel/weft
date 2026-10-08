@@ -3,8 +3,6 @@ const log = std.log;
 const scoped = log.scoped;
 const builtin = @import("builtin");
 
-const build = @import("build");
-
 const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_check = @import("client/cmd_check.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
@@ -43,8 +41,9 @@ const Argz = union(enum) {
         run: struct {
             pub const doc = "Run the weft daemon, requires superuser priviledges";
         },
-        token: struct {
-            pub const doc = "Display the daemon's access token";
+        register: struct {
+            pub const doc = "Register an authorized client public key";
+            key: []const u8,
         },
         ipc: union(enum) {
             pub const hidden = true;
@@ -93,17 +92,25 @@ const Argz = union(enum) {
     remote: union(enum) {
         pub const doc = "Perform actions on a remote";
 
+        register: struct {
+            pub const doc = "Register a client public key to the remote daemon over ssh";
+            pub const doc_ssh = "The ssh address of the remote (e.g. user@host:22)";
+            pub const doc_weft_addr = "The external weft address (host:port)";
+            pub const doc_pubkey = "Optional client public key (hex), defaults to local client key";
+
+            ssh: []const u8,
+            weft_addr: []const u8,
+            pubkey: ?[]const u8 = null,
+        },
         install: struct {
-            pub const doc = "Install weft on a remote via ssh and register it";
-            pub const doc_name = "The name to assign to the remote when registering. If the name is taken the remote will be updated";
-            pub const doc_ssh = "The ssh id of the remote, or ip:port tuple";
-            pub const doc_addr = "The external address to register";
+            pub const doc = "Install weft daemon on a remote via ssh and register the client";
+            pub const doc_ssh = "The ssh address of the remote (e.g. user@host:22)";
+            pub const doc_weft_addr = "The external weft address (host:port)";
             pub const doc_user = "Use an existing user to run tasks on the remote, instead of 'weft-runner'";
             pub const doc_extra = "Extra arguments to pass to the install command";
 
-            name: []const u8,
             ssh: []const u8,
-            addr: ?argz.SocketAddr = null,
+            weft_addr: []const u8,
             user: ?[]const u8 = null,
             extra: [][]const u8 = &.{},
         },
@@ -152,35 +159,19 @@ pub fn main(init: std.process.Init) !void {
 
     switch (parsed) {
         .version => {
-            const build_time = comptime build_time: {
-                const es = std.time.epoch.EpochSeconds{ .secs = @intCast(build.build_time_seconds) };
-                const day = es.getDaySeconds();
-                const yd = es.getEpochDay().calculateYearDay();
-                const md = yd.calculateMonthDay();
-                break :build_time std.fmt.comptimePrint("{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} UTC", .{
-                    yd.year,
-                    @backingInt(md.month),
-                    md.day_index + 1,
-                    day.getHoursIntoDay(),
-                    day.getMinutesIntoHour(),
-                    day.getSecondsIntoMinute(),
-                });
-            };
-
             const version_str = std.fmt.comptimePrint(
                 \\ Weft
                 \\  version:     v0.1.0-dev1 
-                \\  build time:  {s}
                 \\  build mode:  {s}
                 \\  schema hash: {s}
             , .{ // so that we can inspect this directly from binary
-                comptime build_time,
                 comptime @tagName(builtin.mode),
                 comptime &std.fmt.hex(proto.hash),
             });
 
             term.println("{s}", .{version_str});
         },
+
         .daemon => |d| switch (d) {
             .install => |i| {
                 try DaemonInstall.install(init.io, gpa, i.user);
@@ -191,9 +182,13 @@ pub fn main(init: std.process.Init) !void {
                 defer daemon.deinit();
                 return daemon.run();
             },
-            .token => {
-                const config = try DaemonInstall.read_config_leaky(init.io, alloc);
-                term.println("{s}", .{config.secret});
+            .register => |r| {
+                var key: [32]u8 = undefined;
+                _ = std.fmt.hexToBytes(&key, r.key) catch |err| {
+                    log.err("Invalid client public key: {any}", .{err});
+                    return err;
+                };
+                try DaemonInstall.add_key(init.io, key);
             },
             .ipc => |i| switch (i) {
                 .completed => |msg| {
@@ -253,7 +248,7 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(alloc, init.io, project_dir);
 
-            return cmd_do.run(gpa, init.io, &term, project, installation, .{
+            return cmd_do.run(gpa, init.io, &term, project, &installation, .{
                 .start = .{
                     .targets = targets,
                 },
@@ -276,7 +271,7 @@ pub fn main(init: std.process.Init) !void {
                     return error.NoDeployments;
                 };
 
-            return cmd_do.run(gpa, init.io, &term, project, installation, .{ .retry = resume_id });
+            return cmd_do.run(gpa, init.io, &term, project, &installation, .{ .retry = resume_id });
         },
         .logs => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
@@ -288,7 +283,7 @@ pub fn main(init: std.process.Init) !void {
                 gpa,
                 init.io,
                 project,
-                installation,
+                &installation,
                 cmd.pipeline,
                 cmd.deployment,
                 cmd.remote,
@@ -296,35 +291,36 @@ pub fn main(init: std.process.Init) !void {
         },
         .monitor => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            return cmd_monitor.run(gpa, init.io, &term, installation, cmd.spec);
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open(alloc, init.io, project_dir);
+            const config = try project.get_config_leaky(alloc, init.io);
+            return cmd_monitor.run(gpa, init.io, &term, &installation, config.remotes, cmd.spec);
         },
         .remote => |r| switch (r) {
-            .install => |install| {
+            .register => |reg| {
                 const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-
-                var extra_list: std.ArrayList([]const u8) = .empty;
-                defer extra_list.deinit(gpa);
-                if (install.user) |user| {
-                    try extra_list.append(gpa, "--user");
-                    try extra_list.append(gpa, user);
-                }
-                for (install.extra) |arg| {
-                    try extra_list.append(gpa, arg);
-                }
-
-                const weft_host: ?[]const u8 = if (install.addr) |a| a.host else null;
-                const weft_port: ?u16 = if (install.addr) |a| a.port else null;
-
+                return cmd_remote.register(
+                    gpa,
+                    init.io,
+                    &term,
+                    &installation,
+                    reg.ssh,
+                    reg.weft_addr,
+                    reg.pubkey,
+                );
+            },
+            .install => |inst_arg| {
+                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
                 return cmd_remote.install(
                     gpa,
                     init.io,
                     &term,
-                    installation,
-                    install.name,
-                    install.ssh,
-                    weft_host,
-                    weft_port,
-                    extra_list.items,
+                    &installation,
+                    inst_arg.ssh,
+                    inst_arg.weft_addr,
+                    inst_arg.user,
+                    inst_arg.extra,
                 );
             },
         },
@@ -334,7 +330,7 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(alloc, init.io, project_dir);
 
-            return try cmd_kill.run(gpa, init.io, project, installation, cmd.pipeline, cmd.remote, cmd.deployment);
+            return try cmd_kill.run(gpa, init.io, project, &installation, cmd.pipeline, cmd.remote, cmd.deployment);
         },
 
         .nix => |n| switch (n) {

@@ -15,7 +15,7 @@ pub fn run(
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: ClientInstall,
+    inst: *const ClientInstall,
     do: union(enum) {
         start: struct {
             targets: []const Step,
@@ -23,7 +23,7 @@ pub fn run(
         retry: Deployment.Id,
     },
 ) !void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena: std.heap.ArenaAllocator = .init(allocator);
     defer arena.deinit();
     var alloc = arena.allocator();
 
