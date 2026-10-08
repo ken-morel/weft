@@ -165,7 +165,7 @@ pub fn main(init: std.process.Init) !void {
         .version => {
             const version_str = std.fmt.comptimePrint(
                 \\ Weft
-                \\  version:     v0.1.0-dev1 
+                \\  version:     v0.1.0-dev2 
                 \\  build mode:  {s}
                 \\  schema hash: {s}
             , .{ // so that we can inspect this directly from binary
