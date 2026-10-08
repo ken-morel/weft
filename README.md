@@ -2,7 +2,7 @@
 
 A lightweight deployment tool and task orchestrator with a daemon and client, designed to run pipelines and scripts across machines and pass inputs and outputs between steps.
 
-While there are already many tools built for machines with 512MB+ RAM, Weft is specifically built to deploy comfortably on 128MB–512MB single-core VPSs (such as a $1 [TierHive](https://tierhive.com) instance). It lets you define pipelines, explicitly choose what they require, produce, and where they run, relying on native Linux cgroups and systemd for isolation with a daemon that runs under 10–15MB RAM (+ ~9MB per concurrent package fetch from Nix) to leave as much memory as possible for your actual applications.
+While there are already many tools built for machines with 512MB+ RAM, Weft is specifically built to deploy comfortably on 128MB–512MB single-core VPSs (such as a $1 [TierHive](https://tierhive.com/r/D8A6B5B18DDE) instance). It lets you define pipelines, explicitly choose what they require, produce, and where they run, relying on native Linux cgroups and systemd for isolation with a daemon that runs under 10–15MB RAM (+ ~9MB per concurrent package fetch from Nix) to leave as much memory as possible for your actual applications.
 
 Weft is currently in active development. Breaking changes may occur frequently.
 

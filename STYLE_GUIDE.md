@@ -144,8 +144,7 @@ const str = try std.fmt.allocPrint(alloc, "hello {s}", .{name});
 
 ## Use only unmanaged hashmaps and array lists
 
-Avoid managed container types where the allocator is stored inside the container struct. Use unmanaged containers and pass the allocator explicitly on each operation:
-
+Avoid managed container types where the allocator is stored inside the container struct. Use unmanaged containers and pass the allocator explicitly on each operation:the object usually only need to store a fixedbuffer allocator or an arena allocatorplea.
 ```zig
 {
   // GOOD

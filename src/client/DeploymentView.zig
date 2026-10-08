@@ -172,7 +172,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
             if (art.status == .pulling) {
                 const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
                 self.term.clear_line();
-                self.term.styled_ln(.cyan, "< {s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
+                self.term.styled_ln(.cyan, "< .{s}@{s} {d}%", .{ art.name, art.remote.get_name(), pct });
                 lines_count += 1;
             } else if (art.status == .pushing) {
                 const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, art.percent * 100.0)));
