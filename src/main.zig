@@ -99,11 +99,9 @@ const Argz = union(enum) {
         register: struct {
             pub const doc = "Register a client public key to the remote daemon over ssh";
             pub const doc_ssh = "The ssh address of the remote (e.g. user@host:22)";
-            pub const doc_weft_addr = "The external weft address (host:port)";
             pub const doc_pubkey = "Optional client public key (hex), defaults to local client key";
 
             ssh: []const u8,
-            weft_addr: []const u8,
             pubkey: ?[]const u8 = null,
         },
         install: struct {
@@ -114,7 +112,6 @@ const Argz = union(enum) {
             pub const doc_extra = "Extra arguments to pass to the install command";
 
             ssh: []const u8,
-            weft_addr: []const u8,
             user: ?[]const u8 = null,
             extra: [][]const u8 = &.{},
         },
@@ -311,10 +308,8 @@ pub fn main(init: std.process.Init) !void {
                 return cmd_remote.register(
                     gpa,
                     init.io,
-                    &term,
                     &installation,
                     reg.ssh,
-                    reg.weft_addr,
                     reg.pubkey,
                 );
             },
@@ -323,10 +318,8 @@ pub fn main(init: std.process.Init) !void {
                 return cmd_remote.install(
                     gpa,
                     init.io,
-                    &term,
                     &installation,
                     inst_arg.ssh,
-                    inst_arg.weft_addr,
                     inst_arg.user,
                     inst_arg.extra,
                 );

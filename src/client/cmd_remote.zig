@@ -61,10 +61,8 @@ fn get_remote_hostname(alloc: std.mem.Allocator, io: std.Io, target: TargetInfo)
 pub fn register(
     gpa: std.mem.Allocator,
     io: std.Io,
-    term: *Term,
     inst: *const ClientInstall,
     ssh_target: []const u8,
-    weft_addr: []const u8,
     maybe_pubkey: ?[]const u8,
 ) !void {
     const l = log(.remote_register);
@@ -100,19 +98,13 @@ pub fn register(
         l.err("remote client registration failed (exit code {any}): {s}", .{ reg_res.term, reg_res.stderr });
         return error.RemoteRegisterFailed;
     }
-
-    const remote_name = get_remote_hostname(alloc, io, target) catch "remote";
-
-    term.println(".{{ \"{s}\", \"{s}\",  \"\" }},", .{ remote_name, weft_addr });
 }
 
 pub fn install(
     gpa: std.mem.Allocator,
     io: std.Io,
-    term: *Term,
     installation: *const ClientInstall,
     ssh_target: []const u8,
-    weft_addr: []const u8,
     maybe_user: ?[]const u8,
     extra_args: []const []const u8,
 ) !void {
@@ -125,7 +117,7 @@ pub fn install(
 
     const exe_path = try std.process.executablePathAlloc(io, alloc);
 
-    term.op("uploading weft binary to {s}...", .{target.ssh_dest});
+    l.info("uploading weft binary to {s}...", .{target.ssh_dest});
     const scp_dst = try alloc.print("{s}:/tmp/weft", .{target.ssh_dest});
 
     const scp_argv: []const []const u8 = if (target.port) |p|
@@ -145,7 +137,7 @@ pub fn install(
         return error.ScpFailed;
     }
 
-    term.op("installing weft daemon on {s}...", .{target.ssh_dest});
+    l.info("installing weft daemon on {s}...", .{target.ssh_dest});
     var install_argv: std.ArrayListUnmanaged([]const u8) = .empty;
     try install_argv.append(alloc, "ssh");
     if (target.port) |p|
@@ -186,5 +178,5 @@ pub fn install(
         return error.RemoteInstallFailed;
     }
 
-    return try register(gpa, io, term, installation, ssh_target, weft_addr, null);
+    return try register(gpa, io, installation, ssh_target, null);
 }
