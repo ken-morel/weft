@@ -199,3 +199,7 @@ This rules applies in other places too, prefare using the control flow as an exp
 ## Always pass io
 
 `io`, just like `gpa` and `ara` should always be passed as a function argument, and not be stored in the object, the object usually only need to store a fixedbuffer allocator or an arena allocator.
+
+## Use `return try` when returning from a call which can fail
+
+

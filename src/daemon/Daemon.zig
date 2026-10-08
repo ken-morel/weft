@@ -65,11 +65,23 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This()
     };
 }
 
-pub fn validate_key(self: @This(), key: [32]u8) bool {
+pub fn validate_key(self: *@This(), key: [32]u8) bool {
+    self.keys_lock.lockUncancelable(self.io);
+    defer self.keys_lock.unlock(self.io);
     return for (self.keys) |vkey| {
         if (std.crypto.timing_safe.eql([32]u8, key, vkey))
             break true;
     } else false;
+}
+
+pub fn reload_keys(self: *@This()) !void {
+    const l = log(.daemon_keys);
+    const new_keys = try DaemonInstall.get_keys(self.gpa, self.io);
+    self.keys_lock.lockUncancelable(self.io);
+    defer self.keys_lock.unlock(self.io);
+    self.gpa.free(self.keys);
+    self.keys = new_keys;
+    l.info("reloaded {d} client keys", .{new_keys.len});
 }
 
 pub fn run_client_server(self: *@This()) !void {
@@ -150,6 +162,11 @@ pub fn run_system_server(self: *@This()) !void {
             switch (cmd) {
                 .task_completed => |msg| {
                     try spawn(self.io, &group, finalize_task, .{ self, Task{ .id = try msg.task.dupe(self.gpa) }, msg.status });
+                    continue :run .done;
+                },
+                .reload_keys => {
+                    self.reload_keys() catch |err|
+                        l.err("failed to reload keys: {any}", .{err});
                     continue :run .done;
                 },
             }

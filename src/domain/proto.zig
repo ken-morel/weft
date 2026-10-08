@@ -160,6 +160,7 @@ pub const DaemonMsg = union(enum) {
         task: task.Id,
     };
     task_completed: TaskCompleted,
+    reload_keys,
 };
 
 req: Request,

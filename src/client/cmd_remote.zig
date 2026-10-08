@@ -187,5 +187,5 @@ pub fn install(
         return error.RemoteInstallFailed;
     }
 
-    return register(gpa, io, term, installation, ssh_target, weft_addr, null);
+    return try register(gpa, io, term, installation, ssh_target, weft_addr, null);
 }

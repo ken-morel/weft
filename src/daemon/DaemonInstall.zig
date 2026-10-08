@@ -200,14 +200,20 @@ pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
     });
 }
 
+pub const keys_file_path = "/etc/weft/keys";
+
 pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
     const l = log(.load_keys);
-    const file = try std.Io.Dir.cwd().openFile(io, "/ect/weft/keys", .{
+    const file = std.Io.Dir.cwd().openFile(io, keys_file_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
         .lock = .shared,
         .mode = .read_only,
-    });
+    }) catch |err| {
+        if (err == error.FileNotFound)
+            return &.{};
+        return err;
+    };
     defer file.close(io);
     var buf: [1 << 6]u8 = undefined;
     var reader = file.reader(io, &buf);
@@ -215,7 +221,7 @@ pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
     const content = try reader.interface.allocRemaining(gpa, .unlimited);
     defer gpa.free(content);
 
-    var list: std.ArrayList([32]u8) = .empty;
+    var list: std.ArrayListUnmanaged([32]u8) = .empty;
     defer list.deinit(gpa);
 
     var iter = std.mem.splitScalar(u8, content, '\n');
@@ -240,17 +246,25 @@ pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
 }
 
 pub fn add_key(io: std.Io, key: [32]u8) !void {
-    if (key.len != 64)
-        return error.InvalidKey;
-    const file = try std.Io.Dir.cwd().openFile(io, "/etc/weft/keys", .{
-        .allow_directory = false,
-        .follow_symlinks = false,
+    const cwd = std.Io.Dir.cwd();
+    cwd.createDirPath(io, "/etc/weft") catch {};
+
+    var file = try cwd.createFile(io, keys_file_path, .{
+        .truncate = false,
+        .permissions = read_only_user_permissions,
         .lock = .exclusive,
-        .mode = .write_only,
     });
     defer file.close(io);
 
+    const offset = try file.length(io);
     const hex = std.fmt.bytesToHex(key, .upper);
-    file.writePositionalAll(io, "\n", 0);
-    file.writePositionalAll(io, &hex, 0);
+
+    if (offset > 0) {
+        var entry: [65]u8 = undefined;
+        entry[0] = '\n';
+        @memcpy(entry[1..], &hex);
+        try file.writePositionalAll(io, &entry, offset);
+    } else {
+        try file.writePositionalAll(io, &hex, 0);
+    }
 }

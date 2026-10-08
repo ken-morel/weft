@@ -189,6 +189,7 @@ pub fn main(init: std.process.Init) !void {
                     return err;
                 };
                 try DaemonInstall.add_key(init.io, key);
+                clinternal.reload_keys(init.io);
             },
             .ipc => |i| switch (i) {
                 .completed => |msg| {
