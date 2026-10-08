@@ -101,10 +101,9 @@ pub fn register(
         return error.RemoteRegisterFailed;
     }
 
-    const remote_name = try get_remote_hostname(alloc, io, target);
+    const remote_name = get_remote_hostname(alloc, io, target) catch "remote";
 
-    term.println("Add this entry to your weft/weft.zon under .remotes:", .{});
-    term.println("  .{{ \"{s}\", \"{s}\", \"{s}\", \"\" }},", .{ remote_name, weft_addr, ssh_target });
+    term.println(".{{ \"{s}\", \"{s}\",  \"\" }},", .{ remote_name, weft_addr });
 }
 
 pub fn install(

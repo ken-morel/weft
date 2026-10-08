@@ -110,6 +110,19 @@ pub fn run_client_server(self: *@This()) !void {
 }
 
 pub fn run_system_server(self: *@This()) !void {
+    while (true) {
+        self._run_system_server() catch |err| {
+            if (err == error.Cancelled or err == error.Cancellable)
+                return err
+            else {
+                if (@errorReturnTrace()) |trace|
+                    std.debug.dumpErrorReturnTrace(trace);
+                log(.system_server).err("system server recoverable error: {any}", .{err});
+            }
+        };
+    }
+}
+pub fn _run_system_server(self: *@This()) !void {
     const l = log(.system_server);
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);

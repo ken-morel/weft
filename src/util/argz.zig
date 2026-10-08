@@ -144,25 +144,18 @@ pub fn Help(comptime name: []const u8, comptime T: anytype) type {
 
 pub inline fn parse(comptime A: type, alloc: std.mem.Allocator, io: ?std.Io, args: []const []const u8) anyerror!A {
     if (@typeInfo(A) == .@"union" and @hasField(A, "argz_help")) {
-        var has_help = false;
-        for (args) |raw| {
-            if (std.mem.eql(u8, raw, "--help") or std.mem.eql(u8, raw, "-h") or std.mem.eql(u8, raw, "help")) {
-                has_help = true;
-                break;
-            }
-        }
-        if (has_help) {
-            var cmd_list: std.ArrayListUnmanaged([]const u8) = .empty;
-            for (args) |raw| {
-                if (!std.mem.eql(u8, raw, "--help") and !std.mem.eql(u8, raw, "-h") and !std.mem.eql(u8, raw, "help"))
-                    try cmd_list.append(alloc, raw);
-            }
+        const help_cmd = if (args.len > 0 and std.mem.eql(u8, args[0], "help"))
+            args[1..]
+        else for (args, 0..) |raw, i| {
+            if (std.mem.eql(u8, raw, "--help") or std.mem.eql(u8, raw, "-h"))
+                break args[0..i];
+        } else null;
+        if (help_cmd) |cmd_slice|
             return @unionInit(
                 A,
                 "argz_help",
-                @FieldType(A, "argz_help").init(cmd_list.items),
+                @FieldType(A, "argz_help").init(cmd_slice),
             );
-        }
     }
     return switch (@typeInfo(A)) {
         inline .@"union" => try subcmd(A, alloc, io, args),

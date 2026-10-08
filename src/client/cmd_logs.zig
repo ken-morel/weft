@@ -42,7 +42,7 @@ pub fn run(
         return err;
     };
 
-    const remotes = deployment.config.remotes;
+    const remotes = try deployment.config.remotes_with_local(alloc);
 
     _ = deployment.config.get_pipeline(pipeline_name) orelse {
         l.err("pipeline '{s}' not found in deployment {s}", .{ pipeline_name, &deployment.id.to_string() });

@@ -51,6 +51,7 @@ const Argz = union(enum) {
                 task: Task,
                 code: ?[]const u8 = null,
             },
+            reload_keys: struct {},
         },
     },
     version: struct {
@@ -59,6 +60,9 @@ const Argz = union(enum) {
 
     check: struct {
         pub const doc = "Validate weft.zon";
+    },
+    key: struct {
+        pub const doc = "Show the client's public key";
     },
 
     do: struct {
@@ -199,6 +203,9 @@ pub fn main(init: std.process.Init) !void {
                         -3;
                     try clinternal.task_completed(gpa, init.io, msg.task, code);
                 },
+                .reload_keys => {
+                    clinternal.reload_keys(init.io);
+                },
             },
         },
         .check => {
@@ -296,7 +303,7 @@ pub fn main(init: std.process.Init) !void {
             defer project_dir.close(init.io);
             const project = try Project.open(alloc, init.io, project_dir);
             const config = try project.get_config_leaky(alloc, init.io);
-            return cmd_monitor.run(gpa, init.io, &term, &installation, config.remotes, cmd.spec);
+            return cmd_monitor.run(gpa, init.io, &term, &installation, try config.remotes_with_local(alloc), cmd.spec);
         },
         .remote => |r| switch (r) {
             .register => |reg| {
@@ -324,6 +331,13 @@ pub fn main(init: std.process.Init) !void {
                     inst_arg.extra,
                 );
             },
+        },
+        .key => {
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+
+            const hex = std.fmt.bytesToHex(installation.identity.public_key(), .upper);
+            term.print("{s}", .{&hex});
+            return;
         },
         .kill => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);

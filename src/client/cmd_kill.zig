@@ -32,7 +32,7 @@ pub fn run(
             return;
         };
 
-    const remotes = config.remotes;
+    const remotes = try config.remotes_with_local(alloc);
     const remote = for (remotes) |*r| {
         if (std.mem.eql(u8, r.@"0", remote_name)) break r;
     } else {

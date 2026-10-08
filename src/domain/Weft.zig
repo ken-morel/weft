@@ -77,11 +77,21 @@ pub const Remote = struct {
     []const u8,
     /// The weft host:port
     []const u8,
-    /// the ssh host:port
-    []const u8,
     /// The remote tags seperated by spaces
     []const u8,
 };
+pub const remote_local: Remote = .{ "local", "127.0.0.1:9338", "local" };
+
+pub fn remotes_with_local(self: @This(), ara: std.mem.Allocator) ![]const Remote {
+    for (self.remotes) |r|
+        if (std.mem.eql(u8, r.@"0", "local"))
+            return self.remotes;
+    const new_remotes = try ara.alloc(Remote, self.remotes.len + 1);
+
+    @memcpy(new_remotes[0..self.remotes.len], self.remotes);
+    new_remotes[self.remotes.len] = remote_local;
+    return new_remotes;
+}
 
 modes: []const []const u8 = &.{"default"},
 environments: []const Env = &.{},
@@ -98,7 +108,6 @@ pub fn parse_remote_address(remote: Remote) !std.Io.net.IpAddress {
     else
         try .parse(addr_str, 9338);
 }
-
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
     return for (self.pipelines) |*pipeline| {

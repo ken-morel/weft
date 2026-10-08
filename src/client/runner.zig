@@ -6,6 +6,7 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
+const Remote = Weft.Remote;
 const Connection = @import("../wire/Connection.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
@@ -14,7 +15,6 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Fetcher = @import("Fetcher.zig");
 const Project = @import("Project.zig");
-const Remote = Weft.Remote;
 
 pub fn run_deployment(
     gpa: std.mem.Allocator,
@@ -29,7 +29,8 @@ pub fn run_deployment(
 
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-    const remotes = deployment.config.remotes;
+
+    const remotes = try deployment.config.remotes_with_local(arena.allocator());
     const identity = inst.identity;
 
     var state: DeploymentState = .init(gpa, &project);
@@ -78,9 +79,9 @@ pub fn run_deployment(
         }
 
         while (try deployment.next_step(term)) |step| {
-            const remote: *const Remote = remote: for (remotes) |*remote| {
+            const remote = for (remotes) |*remote| {
                 if (std.mem.eql(u8, remote.@"0", step.remote))
-                    break :remote remote;
+                    break remote;
             } else return error.InvalidRemote;
 
             const pipeline = deployment.config.get_pipeline(step.pipeline) orelse
