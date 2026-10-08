@@ -260,7 +260,7 @@ pub const task_palette = [_]Color{
 };
 
 pub fn task_color(name: []const u8) Color {
-    var idx: u8 = 0;
+    var idx: u8 = 0xFF;
     for (name) |c|
         idx *%= c;
     return task_palette[idx % task_palette.len];
