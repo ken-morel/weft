@@ -47,6 +47,7 @@ pub const Pipeline = struct {
 
     sibling: HandleSibling = .{ .then = .ignore },
     keep: []Keep = &.{},
+    on: ?[]const []const u8 = null,
 
     env: struct {
         uses: []const []const u8 = &.{},
@@ -71,6 +72,15 @@ pub const Pipeline = struct {
         else
             std.mem.eql(u8, self.name, artifact);
     }
+    pub fn matches_remote(self: @This(), remote: Remote) bool {
+        return if (self.on) |on_list|
+            for (on_list) |target| {
+                if (remote_matches(remote, target))
+                    break true;
+            } else false
+        else
+            true;
+    }
 };
 pub const Remote = struct {
     /// The remote name
@@ -81,6 +91,21 @@ pub const Remote = struct {
     []const u8,
 };
 pub const remote_local: Remote = .{ "local", "127.0.0.1:9338", "local" };
+
+pub fn remote_has_group(remote: Remote, group: []const u8) bool {
+    var iter = std.mem.splitScalar(u8, remote.@"2", ' ');
+    return while (iter.next()) |item| {
+        if (item.len > 0 and std.mem.eql(u8, item, group))
+            break true;
+    } else false;
+}
+
+pub fn remote_matches(remote: Remote, name_or_group: []const u8) bool {
+    return if (std.mem.eql(u8, remote.@"0", name_or_group))
+        true
+    else
+        remote_has_group(remote, name_or_group);
+}
 
 pub fn remotes_with_local(self: @This(), ara: std.mem.Allocator) ![]const Remote {
     for (self.remotes) |r|
@@ -115,6 +140,39 @@ pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
             break pipeline;
     } else null;
 }
+
+pub fn find_remote(self: @This(), name: []const u8) ?Remote {
+    for (self.remotes) |r|
+        if (std.mem.eql(u8, r.@"0", name))
+            return r;
+    if (std.mem.eql(u8, name, "local"))
+        return remote_local;
+    return null;
+}
+
+pub fn select_remote_for(self: @This(), pipeline: *const Pipeline, preferred_remote_name: ?[]const u8) ?[]const u8 {
+    if (preferred_remote_name) |pref_name|
+        if (self.find_remote(pref_name)) |pref|
+            if (pipeline.matches_remote(pref))
+                return pref_name;
+
+    const on_list = pipeline.on orelse return preferred_remote_name orelse "local";
+
+    for (on_list) |target| {
+        if (self.find_remote(target)) |r|
+            return r.@"0";
+
+        for (self.remotes) |r|
+            if (remote_has_group(r, target))
+                return r.@"0";
+
+        if (remote_has_group(remote_local, target))
+            return "local";
+    }
+
+    return null;
+}
+
 pub fn get_producer(self: @This(), output: []const u8) ?*const Pipeline {
     return pipeline: for (self.pipelines) |*pipeline| {
         for (pipeline.out orelse &.{pipeline.name}) |out|

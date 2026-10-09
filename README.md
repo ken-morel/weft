@@ -23,7 +23,7 @@ Communication between the client and daemon takes place exclusively over TCP soc
 
 ### Authentication & Encryption
 
-All traffic is authenticated and encrypted using `XChaCha20-Poly1305` AEAD with a 32-byte pre-shared key (PSK) represented as a 64-character hexadecimal string. The key is stored in `/etc/weft.zon` on the remote and in `~/.config/weft/remotes.zon` on the client.
+Authentication uses Ed25519 keypairs. The client generates an identity key (`~/.config/weft/key`), and the daemon maintains authorized client public keys in `/etc/weft/keys`. Traffic is encrypted using `XChaCha20-Poly1305` AEAD with ephemeral session keys established during handshake.
 
 ### Handshake & Versioning
 
@@ -61,14 +61,14 @@ Run the daemon installer on any Linux host that will execute tasks:
 sudo weft daemon install
 ```
 
-The installer provisions the unprivileged `weft-runner` system user via `systemd-sysusers`, generates a random 32-byte secret in `/etc/weft.zon` with restrictive permissions (`0600`), creates task directory hierarchies under `/var/lib/weft/`, installs the `weftd.service` systemd unit, and immediately starts the daemon.
+The installer provisions the unprivileged `weft-runner` system user via `systemd-sysusers`, creates `/etc/weft/config.zon` with restrictive permissions (`0600`), creates task directory hierarchies under `/var/lib/weft/`, installs the `weftd.service` systemd unit, and immediately starts the daemon.
 
 To run tasks under an existing user instead of creating `weft-runner`, specify the user via `--user <username>` or as a positional argument (e.g. `sudo weft daemon install --user myuser` or `sudo weft daemon install myuser`).
 
-To inspect the generated authentication token on the daemon host at any time, run:
+After installing the daemon, register your client public key so it can run tasks:
 
 ```bash
-sudo weft daemon token
+sudo weft daemon register $(weft key)
 ```
 
 ### Remote Installation via SSH
@@ -76,54 +76,41 @@ sudo weft daemon token
 From your development machine, you can install Weft and register a remote server in a single step using standard SSH and SCP:
 
 ```bash
-weft remote install my-server root@192.0.2.1:22
+weft remote install root@192.0.2.1:22
 ```
 
-Weft uploads the local binary over SCP, runs `weft daemon install` on the remote host, retrieves the authentication token, and writes the host entry into `~/.config/weft/remotes.zon`. If SSH host aliases are configured in `~/.ssh/config`, Weft resolves the underlying hostname automatically.
+Weft uploads the local binary over SCP, runs `weft daemon install` on the remote host, and registers your client public key.
 
-For servers behind NAT or port forwarding (such as NAT VPS instances) where the public Weft port or IP differs from the SSH connection, specify the daemon address using `--addr`:
+For servers behind NAT or port forwarding (such as NAT VPS instances) where the public Weft port or IP differs from the SSH connection, specify the daemon address using `--weft-addr`:
 
 ```bash
-weft remote install my-server root@192.0.2.1:2222 --addr 192.0.2.1:19338
+weft remote install root@192.0.2.1:2222 --weft-addr 192.0.2.1:19338
 ```
 
 You can also pass installer options such as `--user <username>` directly through `weft remote install`.
 
-### Manual Remote Registration
+To register your client key on an already installed remote daemon:
 
-You can also register remote daemons directly by editing `~/.config/weft/remotes.zon` (or `$XDG_CONFIG_HOME/weft/remotes.zon`):
-
-```zig
-.{
-    .{
-        .name = "my-server",
-        .address = .{ "192.0.2.1", 9338 },
-        .token = "4a8f9c...64_hex_chars...",
-    },
-    .{ // local daemon only requires the token
-        .token = "e3b0c4...local_daemon_token...",
-    },
-}
+```bash
+weft remote register root@192.0.2.1:22
 ```
 
 ## Configuration Schemas
 
-Weft relies on three configuration files across remotes and clients:
+Weft relies on two configuration files:
 
-1. `/etc/weft.zon`: Configures the daemon service, network port, and worker limits on the remote host.
-2. `~/.config/weft/remotes.zon`: Stores registered daemon connections and authentication keys on the client.
-3. `weft/weft.zon`: Defines the project pipeline DAG, environments, and resource constraints in your repository.
+1. `/etc/weft/config.zon`: Configures the daemon service, network port, and worker limits on the remote host (with authorized keys in `/etc/weft/keys`).
+2. `weft/weft.zon`: Defines the project pipeline DAG, environments, remotes, and resource constraints in your repository.
 
-### 1. Remote Daemon Configuration (`/etc/weft.zon`)
+### 1. Remote Daemon Configuration (`/etc/weft/config.zon`)
 
-Located at `/etc/weft.zon` on the remote host, this file defines daemon server parameters. File permissions must be strictly `0600` (readable only by root).
+Located at `/etc/weft/config.zon` on the remote host, this file defines daemon server parameters. File permissions must be strictly `0600` (readable only by root).
 
 #### Schema Definition
 
 ```zig
 pub const Config = struct {
     runner_user: ?[]const u8 = null,
-    secret: []const u8,
     port: u16 = 9338,
     max_workers: u32 = 8,
     max_nix_workers: u32 = 5,
@@ -134,7 +121,6 @@ pub const Config = struct {
 
 ```zig
 .{
-    .secret = "3a7b21e8d4c5f6a7...64_hex_chars...9f1e8a2b3c4d5e6f",
     .port = 9338,
     .max_workers = 8,
     .max_nix_workers = 2,
@@ -142,51 +128,16 @@ pub const Config = struct {
 }
 ```
 
-- `secret`: The pre-shared 32-byte key in 64-character hex format used to encrypt and authenticate incoming TCP connections.
 - `port`: TCP listening port (defaults to `9338`).
 - `max_workers`: Maximum concurrent client connections accepted by the daemon (defaults to `8`).
 - `max_nix_workers`: Maximum concurrent background workers for fetching and decompressing Nix packages (defaults to `5`). Each active fetcher uses approximately 9MB of RAM during decompression and releases it immediately upon completion. On constrained VPSs (such as 128MB RAM instances), setting this to `1` or `2` keeps package installation within available system memory.
 - `runner_user`: The system user account under which pipeline tasks execute. If `null`, defaults to `weft-runner`.
 
-### 2. Client Remotes Registry (`~/.config/weft/remotes.zon`)
+Authorized client keys are stored in `/etc/weft/keys`, one 64-character hexadecimal public key per line. You can authorize a key using `sudo weft daemon register <key>`.
 
-Located at `~/.config/weft/remotes.zon` (or `$XDG_CONFIG_HOME/weft/remotes.zon`), this file contains the client registry of known remote daemons. File permissions are restricted to `0600`.
+### 2. Project Configuration (`weft/weft.zon`)
 
-#### Schema Definition
-
-```zig
-pub const Remote = struct {
-    name: ?[]const u8 = null,
-    address: struct { []const u8, u16 } = .{ "127.0.0.1", 9338 },
-    token: []const u8,
-    groups: []const []const u8 = &.{},
-};
-```
-
-#### Example Configuration
-
-```zig
-.{
-    .{
-        .name = "prod-node-1",
-        .address = .{ "192.0.2.10", 9338 },
-        .token = "3a7b...64_hex_chars...9f1e",
-        .groups = .{ "prod", "us-east" },
-    },
-    .{ // local daemon only requires the token
-        .token = "8d1c...local_daemon_token...4a2b",
-    },
-}
-```
-
-- `name`: Remote alias used when specifying deployment targets (`<remote>.<pipeline>`). If omitted, defaults to `"local"`.
-- `address`: Hostname/IP and TCP port tuple. Defaults to `.{ "127.0.0.1", 9338 }`.
-- `token`: 32-byte cryptographic secret formatted as a 64-character lowercase hexadecimal string.
-- `groups`: Optional string tags for categorization.
-
-### 3. Project Configuration (`weft/weft.zon`)
-
-Located at `weft/weft.zon` within your project repository, this file defines the pipelines, dependencies, environments, and source mappings.
+Located at `weft/weft.zon` within your project repository, this file defines the pipelines, dependencies, environments, remotes, and source mappings.
 
 #### Top-Level Struct (`Weft`)
 
@@ -197,6 +148,7 @@ pub const Weft = struct {
     sources: ?[]const struct { []const u8, []const u8 } = null,
     environments: []const Env = &.{},
     pipelines: []const Pipeline = &.{},
+    remotes: []const Remote = &.{},
 };
 ```
 
@@ -205,6 +157,21 @@ pub const Weft = struct {
 - `sources`: Named mappings from source identifiers to relative paths within the repository: `.{ .{ "backend", "backend/" }, .{ "frontend", "frontend/" } }`. Source directories are packaged as source artifacts prefixed with `-` (e.g. `-backend`). If omitted, defaults to mapping the repository root as `-`.
 - `environments`: Reusable environment blocks defining packages and variables.
 - `pipelines`: The list of task pipelines.
+- `remotes`: List of remote daemon targets: `.{ .{ "name", "host:port", "tags" } }`. The local daemon is always available implicitly as `"local"`.
+
+#### Remotes (`Remote`)
+
+```zig
+pub const Remote = struct {
+    []const u8, // name
+    []const u8, // host:port
+    []const u8, // tags separated by spaces
+};
+```
+
+- `name`: Remote alias used when specifying deployment targets (`<remote>.<pipeline>`).
+- `host:port`: Host address and TCP port (e.g. `"192.0.2.10:9338"`).
+- `tags`: Space-separated tags/groups used for target filtering in pipeline `.on` declarations (e.g. `"builder prod"`).
 
 #### Environments (`Env`)
 
@@ -254,6 +221,7 @@ pub const Pipeline = struct {
     in: []const []const u8 = &.{},
     out: ?[]const []const u8 = null,
     run: ?Run = null,
+    on: ?[]const []const u8 = null,
     tune: Tune = .{},
     sibling: HandleSibling = .{ .then = .ignore },
     keep: []const struct { []const u8, []const u8 } = &.{},
@@ -268,6 +236,7 @@ pub const Pipeline = struct {
 - `name`: Pipeline identifier. By default, executes `weft/<name>.sh` (or `weft/<name>.*`).
 - `in`: Dependencies required before execution. Prepend `-` for source trees (e.g. `"-backend"` or `"-"`), or specify an artifact output emitted by an upstream pipeline.
 - `out`: Output artifacts produced by the pipeline. Defaults to `.{ name }` if omitted, but can declare multiple custom artifact names (e.g. `.{ "bin", "assets" }`).
+- `on`: Optional priority list of remote names or remote groups/tags where this pipeline is allowed to run (e.g. `.{ "local" }` or `.{ "builder", "prod" }`). When resolving steps, Weft prioritizes the preferred remote if it matches `.on`, or auto-selects the first matching candidate.
 - `run`: Execution override:
   - If omitted (`null`), Weft executes the matching script file in `weft/` (e.g. `weft/<name>.sh` or `weft/<name>.*`).
   - `.run = .{ .script = .{ "#!/bin/sh", "echo 'inline task'" } }`: Inline script lines. The first line must be a valid shebang (`#!`).
@@ -360,6 +329,14 @@ Validate `weft/weft.zon`, checking for syntax errors, missing source directories
 weft check
 ```
 
+### Viewing Client Public Key
+
+Display the client's Ed25519 public key hex:
+
+```bash
+weft key
+```
+
 ### Finding Nix Package Hashes
 
 Query Hydra for the exact store path of any pre-built package:
@@ -446,6 +423,10 @@ Below is a complete example configuration illustrating pipelines, Nix packages, 
     .workspace = "my-service",
     .modes = .{ "default", "prod" },
 
+    .remotes = .{
+        .{ "prod-server", "192.0.2.10:9338", "prod" },
+    },
+
     .sources = .{
         .{ "server", "server/" },
     },
@@ -470,6 +451,7 @@ Below is a complete example configuration illustrating pipelines, Nix packages, 
         .{
             .name = "server-build",
             .in = .{"-server"},
+            .on = .{"local"},
             .keep = .{
                 .{ "cargo-target", "target/" },
             },
@@ -482,6 +464,7 @@ Below is a complete example configuration illustrating pipelines, Nix packages, 
         .{
             .name = "server-run",
             .in = .{"server-build"},
+            .on = .{"prod"},
             .sibling = .{ .then = .kill },
             .env = .{
                 .uses = .{"db"},

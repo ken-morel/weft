@@ -91,6 +91,21 @@ pub fn run(
         cycle_stack.clearRetainingCapacity();
         if (check_cycle(alloc, config, pipeline, &cycle_stack))
             l.err("pipeline '{s}': cyclic dependency detected", .{pipeline.name});
+
+        if (pipeline.on) |on_list| {
+            for (on_list) |target| {
+                const found = for (config.remotes) |r| {
+                    if (Weft.remote_matches(r, target))
+                        break true;
+                } else if (std.mem.eql(u8, target, "local") or Weft.remote_has_group(Weft.remote_local, target))
+                    true
+                else
+                    false;
+
+                if (!found)
+                    l.err("pipeline '{s}': .on target '{s}' does not match any remote name or group", .{ pipeline.name, target });
+            }
+        }
     }
 
     for (config.pipelines) |*pipeline|

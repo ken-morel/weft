@@ -58,22 +58,35 @@ pub fn next_target(self: @This()) ?Step {
 }
 
 pub fn next_step(self: @This(), term: *Term) !?Step {
-    target: for (self.targets) |*target| {
+    return target: for (self.targets) |*target| {
         if (self.get_pipeline_artifact(target.pipeline, null)) |_|
             continue :target;
 
-        return switch (try self.resolve_pipeline(term, target.pipeline, 0)) {
+        break switch (try self.resolve_pipeline(term, target.pipeline, 0)) {
             .waits, .running => continue :target,
-            .needs => |n| .{
-                .remote = target.remote,
-                .pipeline = n,
-                .mode = target.mode,
+            .needs => |n| {
+                const dep_pipeline = self.config.get_pipeline(n) orelse return error.InvalidPipeline;
+                const remote_name = self.config.select_remote_for(dep_pipeline, target.remote) orelse
+                    return error.NoMatchingRemote;
+                break :target .{
+                    .remote = remote_name,
+                    .pipeline = n,
+                    .mode = target.mode,
+                };
             },
-            .runnable => target.*,
+            .runnable => {
+                const pipeline = self.config.get_pipeline(target.pipeline) orelse return error.InvalidPipeline;
+                const remote_name = self.config.select_remote_for(pipeline, target.remote) orelse
+                    return error.NoMatchingRemote;
+                break :target .{
+                    .remote = remote_name,
+                    .pipeline = target.pipeline,
+                    .mode = target.mode,
+                };
+            },
             .done => continue :target,
         };
-    }
-    return null;
+    } else null;
 }
 
 pub const StepStatus = union(enum) {

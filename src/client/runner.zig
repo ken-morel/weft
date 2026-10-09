@@ -87,6 +87,11 @@ pub fn run_deployment(
             const pipeline = deployment.config.get_pipeline(step.pipeline) orelse
                 return error.InvalidPipeline;
 
+            if (!pipeline.matches_remote(remote.*)) {
+                l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.@"0" });
+                return error.InvalidRemote;
+            }
+
             _ = try state.add(io, remote, pipeline);
             try deployment.add_running(gpa, step);
             try spawn(
@@ -230,6 +235,11 @@ pub fn spawn_step(
 
     if (!dep.config.has_mode(step.mode))
         return error.InvalidMode;
+
+    if (!pipeline.matches_remote(remote.*)) {
+        l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.@"0" });
+        return error.InvalidRemote;
+    }
 
     const script_content = switch (pipeline.run orelse @as(Weft.Pipeline.Run, .{ .file = pipeline.name })) {
         .script => |lines| inline_script: {
