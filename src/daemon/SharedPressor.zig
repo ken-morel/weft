@@ -7,9 +7,9 @@ output: []u8,
 pressor: Pressor,
 lock: std.Io.Mutex,
 
-pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
-    const output = try alloc.alloc(u8, Pressor.chunk_size);
-    const buffer = try alloc.alloc(u8, Pressor.buffer_size);
+pub fn init(gpa: std.mem.Allocator, io: std.Io) !@This() {
+    const output = try gpa.alloc(u8, Pressor.chunk_size);
+    const buffer = try gpa.alloc(u8, Pressor.buffer_size);
     return .{
         .io = io,
         .output = output,
@@ -52,7 +52,7 @@ pub fn decompress(self: *@This(), input: *std.Io.Reader) ![]u8 {
     return writer.buffered();
 }
 
-pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
-    alloc.free(self.output);
-    alloc.free(self.pressor.buffer);
+pub fn deinit(self: @This(), gpa: std.mem.Allocator) void {
+    gpa.free(self.output);
+    gpa.free(self.pressor.buffer);
 }

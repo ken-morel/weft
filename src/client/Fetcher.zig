@@ -23,7 +23,7 @@ remotes: []const Remote,
 pushing: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 pulling: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 map_mutex: std.Io.Mutex = .init,
-alloc: std.mem.Allocator,
+gpa: std.mem.Allocator,
 state: *DeploymentState,
 term: *Term,
 project: *const Project,
@@ -37,21 +37,21 @@ pub fn deinit(self: *@This(), io: std.Io) void {
     };
     var pushing_iter = self.pushing.iterator();
     while (pushing_iter.next()) |entry| {
-        self.alloc.free(entry.key_ptr.*);
-        self.alloc.destroy(entry.value_ptr.*);
+        self.gpa.free(entry.key_ptr.*);
+        self.gpa.destroy(entry.value_ptr.*);
     }
     var pulling_iter = self.pulling.iterator();
     while (pulling_iter.next()) |entry| {
-        self.alloc.free(entry.key_ptr.*);
-        self.alloc.destroy(entry.value_ptr.*);
+        self.gpa.free(entry.key_ptr.*);
+        self.gpa.destroy(entry.value_ptr.*);
     }
-    self.pushing.deinit(self.alloc);
-    self.pulling.deinit(self.alloc);
+    self.pushing.deinit(self.gpa);
+    self.pulling.deinit(self.gpa);
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
-    var client = try Client.connect(self.alloc, io, try Weft.parse_remote_address(remote.*), self.identity);
-    defer client.destroy(self.alloc, io);
+    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(remote.*), self.identity);
+    defer client.destroy(self.gpa, io);
 
     const task_id: proto.task.Id = .{
         .deployment = self.dep.id,
@@ -59,13 +59,13 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
         .workspace = self.dep.config.workspace,
     };
 
-    const buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
-    defer self.alloc.free(buffer);
+    const buffer = try self.gpa.alloc(u8, Connection.max_packet_size);
+    defer self.gpa.free(buffer);
 
     try client.conn.send_object(buffer, proto.Request, .artifact_has);
     try client.conn.send_object(buffer, proto.artifact.has.Req, .{ .id = task_id });
 
-    const reply = try try client.conn.recv_object(self.alloc, proto.Res(proto.artifact.has.Res));
+    const reply = try try client.conn.recv_object(self.gpa, proto.Res(proto.artifact.has.Res));
     return reply.has;
 }
 
@@ -77,19 +77,19 @@ fn get_mutex(self: *@This(), io: std.Io, map: *std.StringHashMapUnmanaged(*std.I
         return m;
     }
 
-    const key = try self.alloc.dupe(u8, key_str);
-    errdefer self.alloc.free(key);
-    const m = try self.alloc.create(std.Io.Mutex);
+    const key = try self.gpa.dupe(u8, key_str);
+    errdefer self.gpa.free(key);
+    const m = try self.gpa.create(std.Io.Mutex);
     m.* = .init;
-    try map.put(self.alloc, key, m);
+    try map.put(self.gpa, key, m);
     return m;
 }
 
 pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
     const l = log(.artifact_fetch);
     if (Weft.is_source_artifact(artifact)) {
-        const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
-        defer self.alloc.free(artifact_path);
+        const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
+        defer self.gpa.free(artifact_path);
         return std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 l.err("Source artifact {s} couldn't be found", .{artifact});
@@ -102,8 +102,8 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
     try m.lock(io);
     defer m.unlock(io);
 
-    const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
-    defer self.alloc.free(artifact_path);
+    const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
+    defer self.gpa.free(artifact_path);
 
     std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {
         if (err == error.FileNotFound)
@@ -121,8 +121,8 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
 
     try self.fetch(io, artifact);
 
-    const push_id = try std.mem.join(self.alloc, ".", &.{ remote.@"0", artifact });
-    defer self.alloc.free(push_id);
+    const push_id = try std.mem.join(self.gpa, ".", &.{ remote.@"0", artifact });
+    defer self.gpa.free(push_id);
 
     const m = try self.get_mutex(io, &self.pushing, push_id);
     try m.lock(io);
@@ -137,17 +137,17 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     try self.state.artifact_progress(io, artifact, remote, .pushing, 0.0);
     defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
 
-    const read_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
-    defer self.alloc.free(read_buffer);
-    const send_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
-    defer self.alloc.free(send_buffer);
-    const compressed_buffer = try self.alloc.alloc(u8, Pressor.chunk_size);
-    defer self.alloc.free(compressed_buffer);
-    const artifact_dir_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
-    defer self.alloc.free(artifact_dir_path);
+    const read_buffer = try self.gpa.alloc(u8, Connection.max_packet_size);
+    defer self.gpa.free(read_buffer);
+    const send_buffer = try self.gpa.alloc(u8, Connection.max_packet_size);
+    defer self.gpa.free(send_buffer);
+    const compressed_buffer = try self.gpa.alloc(u8, Pressor.chunk_size);
+    defer self.gpa.free(compressed_buffer);
+    const artifact_dir_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
+    defer self.gpa.free(artifact_dir_path);
 
-    var client = try Client.connect(self.alloc, io, try Weft.parse_remote_address(remote.*), self.identity);
-    defer client.destroy(self.alloc, io);
+    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(remote.*), self.identity);
+    defer client.destroy(self.gpa, io);
 
     const conn = &client.conn;
     const task_id: proto.task.Id = .{
@@ -169,7 +169,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     {
         var count_dir = try std.Io.Dir.cwd().openDir(io, artifact_dir_path, .{ .iterate = true });
         defer count_dir.close(io);
-        var count_walker = try count_dir.walk(self.alloc);
+        var count_walker = try count_dir.walk(self.gpa);
         defer count_walker.deinit();
         while (try count_walker.next(io)) |entry|
             if (entry.kind == .file) {
@@ -187,12 +187,12 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     defer artifact_dir.close(io);
 
     var packer: Packer = try .packer(
-        self.alloc,
+        self.gpa,
         artifact_dir,
     );
     defer packer.deinit(io);
-    const pressor_buffer = try self.alloc.alloc(u8, Pressor.buffer_size);
-    defer self.alloc.free(pressor_buffer);
+    const pressor_buffer = try self.gpa.alloc(u8, Pressor.buffer_size);
+    defer self.gpa.free(pressor_buffer);
     var pressor: Pressor = .init(pressor_buffer);
 
     var sent_files: u32 = 0;
@@ -243,14 +243,14 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     try self.state.artifact_progress(io, artifact, remote, .pulling, 0.0);
     defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
 
-    var client = try Client.connect(self.alloc, io, try Weft.parse_remote_address(remote.*), self.identity);
-    defer client.destroy(self.alloc, io);
+    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(remote.*), self.identity);
+    defer client.destroy(self.gpa, io);
 
-    const artifact_path = try self.project.artifact_dir_path(self.alloc, io, self.dep.id, artifact);
-    defer self.alloc.free(artifact_path);
+    const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
+    defer self.gpa.free(artifact_path);
 
-    const conn_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
-    defer self.alloc.free(conn_buffer);
+    const conn_buffer = try self.gpa.alloc(u8, Connection.max_packet_size);
+    defer self.gpa.free(conn_buffer);
 
     const task_id: proto.task.Id = .{
         .deployment = self.dep.id,
@@ -270,11 +270,11 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
 
     var packer: Packer = .unpacker(dir);
     defer packer.deinit(io);
-    const pressor_buffer = try self.alloc.alloc(u8, Pressor.buffer_size);
-    defer self.alloc.free(pressor_buffer);
+    const pressor_buffer = try self.gpa.alloc(u8, Pressor.buffer_size);
+    defer self.gpa.free(pressor_buffer);
     var pressor: Pressor = .init(pressor_buffer);
-    const decompress_buffer = try self.alloc.alloc(u8, Pressor.chunk_size);
-    defer self.alloc.free(decompress_buffer);
+    const decompress_buffer = try self.gpa.alloc(u8, Pressor.chunk_size);
+    defer self.gpa.free(decompress_buffer);
 
     var total_files: u32 = 0;
     var received_files: u32 = 0;
@@ -325,15 +325,15 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
 }
 
 pub fn spawn_fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
-    const key = try self.alloc.dupe(u8, artifact);
-    errdefer self.alloc.free(key);
+    const key = try self.gpa.dupe(u8, artifact);
+    errdefer self.gpa.free(key);
 
     try spawn(io, &self.group, fetch_wrapper, .{ self, io, key });
 }
 
 fn fetch_wrapper(self: *@This(), io: std.Io, key: []const u8) !void {
     const l = log(.artifact_fetch);
-    defer self.alloc.free(key);
+    defer self.gpa.free(key);
     self.fetch(io, key) catch |e|
         l.err("failed to fetch artifact {s}: {any}", .{ key, e });
 }

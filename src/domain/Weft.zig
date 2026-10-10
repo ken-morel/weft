@@ -107,7 +107,7 @@ pub fn remote_matches(remote: Remote, name_or_group: []const u8) bool {
         remote_has_group(remote, name_or_group);
 }
 
-pub fn remotes_with_local(self: @This(), ara: std.mem.Allocator) ![]const Remote {
+pub fn remotes_with_local_leaky(self: @This(), ara: std.mem.Allocator) ![]const Remote {
     for (self.remotes) |r|
         if (std.mem.eql(u8, r.@"0", "local"))
             return self.remotes;

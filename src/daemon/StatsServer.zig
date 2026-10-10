@@ -14,9 +14,9 @@ const Listener = struct {
     stream: std.Io.net.Stream,
 };
 
-listeners: std.ArrayList(Listener),
+listeners: std.ArrayListUnmanaged(Listener),
 monitor: Monitor,
-alloc: std.mem.Allocator,
+gpa: std.mem.Allocator,
 io: std.Io,
 stats_history: []?Monitor.Stats,
 stats_idx: u64,
@@ -53,13 +53,13 @@ pub const StatsIterator = struct {
 
 pub const history_capacity: usize = 120;
 
-pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
-    const history = try alloc.alloc(?Monitor.Stats, history_capacity);
+pub fn init(gpa: std.mem.Allocator, io: std.Io) !@This() {
+    const history = try gpa.alloc(?Monitor.Stats, history_capacity);
     @memset(history, null);
     return .{
         .monitor = .{},
         .listeners = .empty,
-        .alloc = alloc,
+        .gpa = gpa,
         .io = io,
         .stats_history = history,
         .stats_idx = 0,
@@ -68,15 +68,15 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
 }
 
 pub fn deinit(self: *@This()) void {
-    self.monitor.deinit(self.alloc);
+    self.monitor.deinit(self.gpa);
     for (self.stats_history) |maybe_stat| {
         if (maybe_stat) |stat|
-            stat.free(self.alloc);
+            stat.free(self.gpa);
     }
-    self.alloc.free(self.stats_history);
+    self.gpa.free(self.stats_history);
     for (self.listeners.items) |listener|
         listener.stream.close(self.io);
-    self.listeners.deinit(self.alloc);
+    self.listeners.deinit(self.gpa);
 }
 
 pub fn iterator(self: *const @This()) StatsIterator {
@@ -91,8 +91,8 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
     l.info("daemon::stats_server new listener connected, catchup from timestamp {d}", .{timestamp.nanoseconds});
 
     var last_time = timestamp;
-    const hist_buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
-    defer self.alloc.free(hist_buffer);
+    const hist_buffer = try self.gpa.alloc(u8, Connection.max_packet_size);
+    defer self.gpa.free(hist_buffer);
 
     var it = StatsIterator.init(self);
     var catchup_count: usize = 0;
@@ -121,9 +121,9 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
     l.info("daemon::stats_server sent {d} catchup samples to listener", .{catchup_count});
 
     if (catchup_count == 0) {
-        if (self.monitor.fetch(self.alloc, self.io)) |stats| {
+        if (self.monitor.fetch(self.gpa, self.io)) |stats| {
             if (self.stats_history[@intCast(self.stats_idx)]) |stat|
-                stat.free(self.alloc);
+                stat.free(self.gpa);
             self.stats_history[@intCast(self.stats_idx)] = stats;
             self.stats_idx = (self.stats_idx + 1) % self.stats_history.len;
 
@@ -140,7 +140,7 @@ pub fn add_listener(self: *@This(), stream: std.Io.net.Stream, timestamp: std.Io
         }
     }
 
-    try self.listeners.append(self.alloc, .{
+    try self.listeners.append(self.gpa, .{
         .last = last_time,
         .stream = stream,
     });
@@ -164,11 +164,11 @@ pub fn run(self: *@This()) error{Canceled}!void {
 fn _run(self: *@This()) !void {
     const l = log(.stats_server);
     l.info("daemon::stats_server started background sampling loop", .{});
-    const buffer = try self.alloc.alloc(u8, Connection.max_packet_size);
-    defer self.alloc.free(buffer);
+    const buffer = try self.gpa.alloc(u8, Connection.max_packet_size);
+    defer self.gpa.free(buffer);
 
     while (true) {
-        const stats = self.monitor.fetch(self.alloc, self.io) catch |err| {
+        const stats = self.monitor.fetch(self.gpa, self.io) catch |err| {
             l.err("daemon::stats_server fetch error: {any}", .{err});
             try std.Io.sleep(self.io, .fromSeconds(2), .awake);
             continue;
@@ -179,7 +179,7 @@ fn _run(self: *@This()) !void {
             defer self.lock.unlock(self.io);
 
             if (self.stats_history[@intCast(self.stats_idx)]) |stat|
-                stat.free(self.alloc);
+                stat.free(self.gpa);
             self.stats_history[@intCast(self.stats_idx)] = stats;
             self.stats_idx = (self.stats_idx + 1) % self.stats_history.len;
 

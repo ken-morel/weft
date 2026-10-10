@@ -29,8 +29,8 @@ pub fn run_deployment(
 
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
-
-    const remotes = try deployment.config.remotes_with_local(arena.allocator());
+    const alloc = arena.allocator();
+    const remotes = try deployment.config.remotes_with_local_leaky(alloc);
     const identity = inst.identity;
 
     var state: DeploymentState = .init(gpa, &project);
@@ -38,7 +38,7 @@ pub fn run_deployment(
     var depl: std.Io.Mutex = .init;
 
     var fetcher: Fetcher = .{
-        .alloc = gpa,
+        .gpa = gpa,
         .dep = deployment,
         .depl = &depl,
         .identity = identity,
@@ -61,7 +61,7 @@ pub fn run_deployment(
     const log_buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(log_buffer);
 
-    var poll_arena = std.heap.ArenaAllocator.init(gpa);
+    var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
 
     while (true) : (try std.Io.sleep(io, .fromSeconds(2), .awake)) {

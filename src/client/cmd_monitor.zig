@@ -102,16 +102,16 @@ fn render_header(term: *Term, date_str: []const u8) void {
     term.println("", .{});
 }
 
-fn connect(alloc: std.mem.Allocator, io: std.Io, remote: Remote, identity: Identity) !*Client {
+fn connect(gpa: std.mem.Allocator, io: std.Io, remote: Remote, identity: Identity) !*Client {
     const l = log(.monitor_connect);
-    var client = Client.connect(alloc, io, try Weft.parse_remote_address(remote), identity) catch |err| {
+    var client = Client.connect(gpa, io, try Weft.parse_remote_address(remote), identity) catch |err| {
         l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.@"0", err });
         return err;
     };
-    errdefer client.destroy(alloc, io);
+    errdefer client.destroy(gpa, io);
 
-    const req_buf = try alloc.alloc(u8, 256);
-    defer alloc.free(req_buf);
+    const req_buf = try gpa.alloc(u8, 256);
+    defer gpa.free(req_buf);
 
     try client.conn.send_object(req_buf, proto.Request, .system_stats);
     try client.conn.send_object(req_buf, proto.system.stats.Req, .{
@@ -155,7 +155,7 @@ pub fn run(
 
     l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.@"0"});
 
-    var frame_arena = std.heap.ArenaAllocator.init(gpa);
+    var frame_arena: std.heap.ArenaAllocator = .init(gpa);
     defer frame_arena.deinit();
 
     var stream_buf = try alloc.alloc(u8, 64 << 10);
@@ -552,7 +552,7 @@ pub fn run(
                         const peak_str = format_bytes(&peak_buf, svc.memory_peak_bytes) catch "...";
                         const cpu_ms = svc.cpu_usage_usec / 1000;
 
-                        const task_key = try std.fmt.allocPrint(frame_arena.allocator(), "{s}.{s}", .{ svc.task.id.workspace, svc.task.id.pipeline });
+                        const task_key = try frame_arena.allocator().print("{s}.{s}", .{ svc.task.id.workspace, svc.task.id.pipeline });
                         const color = Term.task_color(task_key);
 
                         term.clear_line();

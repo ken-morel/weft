@@ -169,30 +169,30 @@ pub fn add_running(self: *@This(), alloc: std.mem.Allocator, step: Step) !void {
     self.running[self.running.len - 1] = step;
 }
 
-pub fn remove_running(self: *@This(), alloc: std.mem.Allocator, remote: []const u8, pipeline: []const u8) void {
+pub fn remove_running(self: *@This(), gpa: std.mem.Allocator, remote: []const u8, pipeline: []const u8) void {
     for (self.running, 0..) |s, idx|
         if (std.mem.eql(u8, s.remote, remote) and std.mem.eql(u8, s.pipeline, pipeline)) {
             self.running[idx] = self.running[self.running.len - 1];
-            self.running = alloc.realloc(self.running, self.running.len - 1) catch self.running[0 .. self.running.len - 1];
+            self.running = gpa.realloc(self.running, self.running.len - 1) catch self.running[0 .. self.running.len - 1];
             return;
         };
 }
 
-pub fn add_artifact(self: *@This(), alloc: std.mem.Allocator, art: Artifact) !void {
-    self.artifacts = try alloc.realloc(self.artifacts, self.artifacts.len + 1);
+pub fn add_artifact(self: *@This(), gpa: std.mem.Allocator, art: Artifact) !void {
+    self.artifacts = try gpa.realloc(self.artifacts, self.artifacts.len + 1);
     self.artifacts[self.artifacts.len - 1] = art;
 }
 
-pub fn add_source(self: *@This(), alloc: std.mem.Allocator, src: []const u8) !void {
-    self.sources = try alloc.realloc(self.sources, self.sources.len + 1);
-    self.sources[self.sources.len - 1] = try alloc.dupe(u8, src);
+pub fn add_source(self: *@This(), gpa: std.mem.Allocator, src: []const u8) !void {
+    self.sources = try gpa.realloc(self.sources, self.sources.len + 1);
+    self.sources[self.sources.len - 1] = try gpa.dupe(u8, src);
 }
 
-pub fn save(self: @This(), alloc: std.mem.Allocator, io: std.Io, proj: Project) !void {
+pub fn save(self: @This(), gpa: std.mem.Allocator, io: std.Io, proj: Project) !void {
     var buffer: [1 << 5]u8 = undefined;
 
-    const filename = try std.fmt.allocPrint(alloc, "{s}.zon", .{&self.id.to_string()});
-    defer alloc.free(filename);
+    const filename = try gpa.print("{s}.zon", .{&self.id.to_string()});
+    defer gpa.free(filename);
 
     const deployments_dir = try proj.open_deployment_dir(io, self.id);
     defer deployments_dir.close(io);

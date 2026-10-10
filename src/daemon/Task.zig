@@ -35,21 +35,21 @@ pub fn argz_parse(_: std.mem.Allocator, _: ?std.Io, val: []const u8) anyerror!@T
     return from_unit_name(val) orelse error.InvalidTask;
 }
 
-pub fn kill(self: @This(), alloc: std.mem.Allocator, io: std.Io) !void {
-    const unit = try self.unit_name(alloc);
-    defer alloc.free(unit);
+pub fn kill(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
+    const unit = try self.unit_name(gpa);
+    defer gpa.free(unit);
     try systemd.stop(io, unit);
 }
 
-pub fn is_active(self: @This(), alloc: std.mem.Allocator, io: std.Io) !bool {
-    const unit = try self.unit_name(alloc);
-    defer alloc.free(unit);
+pub fn is_active(self: @This(), gpa: std.mem.Allocator, io: std.Io) !bool {
+    const unit = try self.unit_name(gpa);
+    defer gpa.free(unit);
     return systemd.is_active(io, unit);
 }
 
-pub fn unit_name(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
+pub fn unit_name(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
     return try std.mem.join(
-        alloc,
+        gpa,
         "--",
         &.{
             "weft-runner",
@@ -60,34 +60,34 @@ pub fn unit_name(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
     );
 }
 
-pub fn run_dir_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
+pub fn run_dir_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
     return try paths.run(
-        alloc,
+        gpa,
         self.id.workspace,
         self.id.pipeline,
         &self.id.deployment.to_string(),
     );
 }
 
-pub fn archive(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
+pub fn archive(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
     return paths.task_archive(
-        alloc,
+        gpa,
         self.id.workspace,
         &self.id.deployment.to_string(),
         self.id.pipeline,
     );
 }
 
-pub fn keep_path(self: @This(), alloc: std.mem.Allocator, name: []const u8) ![]const u8 {
+pub fn keep_path(self: @This(), gpa: std.mem.Allocator, name: []const u8) ![]const u8 {
     return paths.task_cache(
-        alloc,
+        gpa,
         self.id.workspace,
         name,
     );
 }
-pub fn artifacts_path(self: @This(), alloc: std.mem.Allocator) ![]const u8 {
+pub fn artifacts_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
     return try paths.artifacts(
-        alloc,
+        gpa,
         self.id.workspace,
         &self.id.deployment.to_string(),
     );
@@ -129,9 +129,9 @@ pub const TaskSiblingsIterator = struct {
     }
 };
 
-pub fn siblings(self: *const @This(), alloc: std.mem.Allocator, io: std.Io, skip_self: bool) !TaskSiblingsIterator {
-    const run_dir = try self.run_dir_path(alloc);
-    defer alloc.free(run_dir);
+pub fn siblings(self: *const @This(), gpa: std.mem.Allocator, io: std.Io, skip_self: bool) !TaskSiblingsIterator {
+    const run_dir = try self.run_dir_path(gpa);
+    defer gpa.free(run_dir);
     const pipeline_dir = std.fs.path.dirname(run_dir).?;
     const dir = std.Io.Dir.cwd().openDir(io, pipeline_dir, .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
@@ -161,9 +161,9 @@ pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
     self.id.free_duped(alloc);
 }
 
-pub fn usage(self: @This(), alloc: std.mem.Allocator, io: std.Io) ?proto.task.poll.TaskUsage {
-    const unit = self.unit_name(alloc) catch return null;
-    defer alloc.free(unit);
+pub fn usage(self: @This(), gpa: std.mem.Allocator, io: std.Io) ?proto.task.poll.TaskUsage {
+    const unit = self.unit_name(gpa) catch return null;
+    defer gpa.free(unit);
 
     var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/system.slice", .{}) catch |err|
         if (err == error.FileNotFound)
@@ -172,8 +172,8 @@ pub fn usage(self: @This(), alloc: std.mem.Allocator, io: std.Io) ?proto.task.po
             return null;
     defer cgroup_dir.close(io);
 
-    const unit_dir_name = std.fmt.allocPrint(alloc, "{s}.service", .{unit}) catch return null;
-    defer alloc.free(unit_dir_name);
+    const unit_dir_name = gpa.print("{s}.service", .{unit}) catch return null;
+    defer gpa.free(unit_dir_name);
 
     var svc_dir = cgroup_dir.openDir(io, unit_dir_name, .{}) catch |err|
         if (err == error.FileNotFound)
@@ -229,8 +229,8 @@ pub const Spec = struct {
         pkgs: []const []const u8 = &.{},
     };
 
-    pub fn resolve_env_leaky(gpa: std.mem.Allocator, alloc: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env) !Env {
-        return _resolve_env_leaky(gpa, alloc, io, mode, envs, dotenv, env, 0);
+    pub fn resolve_env_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env) !Env {
+        return _resolve_env_leaky(gpa, ara, io, mode, envs, dotenv, env, 0);
     }
 
     pub fn _resolve_env_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env, level: u8) !Env {
@@ -243,7 +243,7 @@ pub const Spec = struct {
             return error.EnvCycle;
         }
 
-        var parents: std.ArrayList(Env) = try .initCapacity(alloc, env.uses.len);
+        var parents: std.ArrayListUnmanaged(Env) = try .initCapacity(alloc, env.uses.len);
         for (env.uses) |use_spec| {
             if (Weft.strip_mode(mode, use_spec)) |use_name| {
                 const use: Env = for (envs) |envs_entry| {
@@ -265,7 +265,7 @@ pub const Spec = struct {
                 parents.appendAssumeCapacity(use);
             }
         }
-        var pkgs: std.ArrayList([]const u8) = try .initCapacity(ara, env.pkgs.len);
+        var pkgs: std.ArrayListUnmanaged([]const u8) = try .initCapacity(ara, env.pkgs.len);
         for (env.pkgs) |pkg|
             if (Weft.strip_mode(mode, pkg)) |p|
                 pkgs.appendAssumeCapacity(try ara.dupe(u8, p));

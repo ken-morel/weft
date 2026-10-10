@@ -176,7 +176,7 @@ pub fn main(init: std.process.Init) !void {
 
         .daemon => |d| switch (d) {
             .install => |i| {
-                try DaemonInstall.install(init.io, gpa, i.user);
+                try DaemonInstall.install(gpa, init.io, i.user);
             },
             .run => {
                 const installation: DaemonInstall = try .init(init.io);
@@ -209,7 +209,7 @@ pub fn main(init: std.process.Init) !void {
         .check => {
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{ .iterate = true });
             defer project_dir.close(init.io);
-            const project = try Project.open(alloc, init.io, project_dir);
+            const project = try Project.open_leaky(alloc, init.io, project_dir);
 
             try cmd_check.run(gpa, init.io, project);
         },
@@ -252,7 +252,7 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(alloc, init.io, project_dir);
+            const project = try Project.open_leaky(alloc, init.io, project_dir);
 
             return cmd_do.run(gpa, init.io, &term, project, &installation, .{
                 .start = .{
@@ -264,7 +264,7 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(alloc, init.io, project_dir);
+            const project = try Project.open_leaky(alloc, init.io, project_dir);
 
             const resume_id = if (cmd.deployment) |dep_arg|
                 project.find_deployment_id(init.io, dep_arg) catch {
@@ -283,7 +283,7 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(alloc, init.io, project_dir);
+            const project = try Project.open_leaky(alloc, init.io, project_dir);
 
             return cmd_logs.run(
                 gpa,
@@ -302,9 +302,9 @@ pub fn main(init: std.process.Init) !void {
             } else {
                 const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
                 defer project_dir.close(init.io);
-                const project = try Project.open(alloc, init.io, project_dir);
+                const project = try Project.open_leaky(alloc, init.io, project_dir);
                 const config = try project.get_config_leaky(alloc, init.io);
-                return cmd_monitor.run(gpa, init.io, &term, &installation, try config.remotes_with_local(alloc), cmd.spec);
+                return cmd_monitor.run(gpa, init.io, &term, &installation, try config.remotes_with_local_leaky(alloc), cmd.spec);
             }
         },
         .remote => |r| switch (r) {
@@ -341,7 +341,7 @@ pub fn main(init: std.process.Init) !void {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
             defer project_dir.close(init.io);
-            const project = try Project.open(alloc, init.io, project_dir);
+            const project = try Project.open_leaky(alloc, init.io, project_dir);
 
             return try cmd_kill.run(gpa, init.io, project, &installation, cmd.pipeline, cmd.remote, cmd.deployment);
         },

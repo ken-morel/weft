@@ -8,19 +8,19 @@ const Deployment = @import("Deployment.zig");
 dir: std.Io.Dir,
 env: DotEnv,
 
-pub fn open(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() {
+pub fn open_leaky(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() {
     return .{
         .dir = dir,
         .env = try .load_leaky(ara, io, dir),
     };
 }
 
-pub fn get_config_leaky(self: @This(), alloc: std.mem.Allocator, io: std.Io) !Weft {
+pub fn get_config_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io) !Weft {
     @setEvalBranchQuota(100_000);
     const content = self.dir.readFileAllocOptions(
         io,
         "weft/weft.zon",
-        alloc,
+        ara,
         .unlimited,
         .of(u8),
         0,
@@ -32,7 +32,7 @@ pub fn get_config_leaky(self: @This(), alloc: std.mem.Allocator, io: std.Io) !We
     var diag: std.zon.parse.Diagnostics = .{
         .errors = &.{undefined},
     };
-    return std.zon.parse.fromSlice(Weft, .{ .gpa = alloc, .arena = alloc, .source = content, .diagnostics = &diag }) catch |err| {
+    return std.zon.parse.fromSlice(Weft, .{ .gpa = ara, .arena = ara, .source = content, .diagnostics = &diag }) catch |err| {
         diag.log("weft/weft.zon");
         return err;
     };
@@ -57,15 +57,15 @@ pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: Deployment.Id)
     return weft_dir.openDir(io, &deployment_name, .{ .iterate = true });
 }
 
-pub fn artifact_dir_path(self: @This(), alloc: std.mem.Allocator, io: std.Io, deployment_id: Deployment.Id, pipeline: []const u8) ![]const u8 {
+pub fn artifact_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, deployment_id: Deployment.Id, pipeline: []const u8) ![]const u8 {
     const deployment_dir = try self.open_deployment_dir(io, deployment_id);
     defer deployment_dir.close(io);
 
-    const deployment_dir_path = try deployment_dir.realPathFileAlloc(io, ".", alloc);
-    defer alloc.free(deployment_dir_path);
+    const deployment_dir_path = try deployment_dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(deployment_dir_path);
 
     return try std.fs.path.join(
-        alloc,
+        gpa,
         &.{ deployment_dir_path, "artifacts", pipeline },
     );
 }
@@ -125,14 +125,14 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
     return match.?;
 }
 
-pub fn load_deployment_leaky(self: @This(), alloc: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
+pub fn load_deployment_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
     @setEvalBranchQuota(100_000);
     var dep_dir = try self.open_deployment_dir(io, id);
     defer dep_dir.close(io);
 
     var iter = dep_dir.iterate();
     var content: ?[]u8 = null;
-    defer if (content) |c| alloc.free(c);
+    defer if (content) |c| ara.free(c);
 
     while (try iter.next(io)) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zon")) {
@@ -140,17 +140,17 @@ pub fn load_deployment_leaky(self: @This(), alloc: std.mem.Allocator, io: std.Io
             defer file.close(io);
             var buffer: [1 << 10]u8 = undefined;
             var reader = file.reader(io, &buffer);
-            content = try reader.interface.allocRemaining(alloc, .limited(512 << 10));
+            content = try reader.interface.allocRemaining(ara, .limited(512 << 10));
             break;
         }
     }
 
     const zon_content = content orelse return error.DeploymentNotFound;
-    const null_terminated = try alloc.dupeSentinel(u8, zon_content, 0);
-    defer alloc.free(null_terminated);
+    const null_terminated = try ara.dupeSentinel(u8, zon_content, 0);
+    defer ara.free(null_terminated);
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
 
-    var deployment = try std.zon.parse.fromSlice(Deployment, .{ .gpa = alloc, .arena = alloc, .source = null_terminated, .diagnostics = &diag });
+    var deployment = try std.zon.parse.fromSlice(Deployment, .{ .gpa = ara, .arena = ara, .source = null_terminated, .diagnostics = &diag });
     deployment.id = id;
     deployment.running = &.{};
     return deployment;

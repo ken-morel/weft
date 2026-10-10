@@ -58,7 +58,7 @@ pub fn open_temp(io: std.Io, sub: []const u8) !std.Io.Dir {
     return try sub_dir.createDirPathOpen(io, &uuid, .{ .open_options = .{ .iterate = true } });
 }
 
-pub fn install(io: std.Io, gpa: std.mem.Allocator, maybe_user: ?[]const u8) !void {
+pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -86,7 +86,7 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, maybe_user: ?[]const u8) !voi
     log(.daemon_install).debug("installed binary to /usr/local/bin/weft", .{});
 
     write_config: {
-        const current_config: ?Config = read_config_leaky(io, alloc) catch null;
+        const current_config: ?Config = read_config_leaky(alloc, io) catch null;
 
         const runner_user = if (maybe_user) |u|
             u
@@ -297,7 +297,7 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     }
 }
 
-pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
+pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
     const cwd = std.Io.Dir.cwd();
 
     var file = cwd.openFile(io, "/etc/weft/config.zon", .{}) catch |err| {
@@ -318,7 +318,7 @@ pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
     var buff: [4 << 10]u8 = undefined;
     var reader = file.reader(io, &buff);
     const content: [:0]const u8 = try reader.interface.allocRemainingAlignedSentinel(
-        gpa,
+        ara,
         .unlimited,
         .of(u8),
         0,
@@ -326,8 +326,8 @@ pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {
 
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
     return try std.zon.parse.fromSlice(Config, .{
-        .arena = gpa,
-        .gpa = gpa,
+        .arena = ara,
+        .gpa = ara,
         .source = content,
         .diagnostics = &diag,
     });

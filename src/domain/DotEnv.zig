@@ -2,7 +2,7 @@ const std = @import("std");
 
 registers: std.StringHashMapUnmanaged(std.StringHashMapUnmanaged([]const u8)),
 
-pub fn load_leaky(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() {
+pub fn load_leaky(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() {
     var iter_dir = try dir.openDir(io, ".", .{ .iterate = true });
     defer iter_dir.close(io);
     var registers: std.StringHashMapUnmanaged(std.StringHashMapUnmanaged([]const u8)) = .empty;
@@ -18,12 +18,12 @@ pub fn load_leaky(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This(
             continue;
 
         const map = try load_file_leaky(
-            alloc,
+            ara,
             io,
             dir,
             entry.name,
         );
-        try registers.put(alloc, try alloc.dupe(u8, name), map);
+        try registers.put(ara, try ara.dupe(u8, name), map);
     }
     return .{
         .registers = registers,
@@ -74,10 +74,10 @@ pub fn parse(alloc: std.mem.Allocator, content: []const u8) !std.StringHashMapUn
 
 //TODO: Make DotEnv a struct which will cache the results of this load_env
 
-pub fn load_file_leaky(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, filename: []const u8) !std.StringHashMapUnmanaged([]const u8) {
+pub fn load_file_leaky(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, filename: []const u8) !std.StringHashMapUnmanaged([]const u8) {
     var env: std.StringHashMapUnmanaged([]const u8) = .empty;
-    errdefer env.deinit(alloc);
-    const content = try dir.readFileAlloc(io, filename, alloc, .unlimited);
-    try parse_into(alloc, &env, content);
+    errdefer env.deinit(ara);
+    const content = try dir.readFileAlloc(io, filename, ara, .unlimited);
+    try parse_into(ara, &env, content);
     return env;
 }

@@ -54,11 +54,11 @@ pub const Stats = struct {
     threads: [2]u32,
     services: []const Service,
 
-    pub fn free(self: @This(), alloc: std.mem.Allocator) void {
-        alloc.free(self.cpu.model);
+    pub fn free(self: @This(), gpa: std.mem.Allocator) void {
+        gpa.free(self.cpu.model);
         for (self.services) |svc|
-            svc.task.free_duped(alloc);
-        alloc.free(self.services);
+            svc.task.free_duped(gpa);
+        gpa.free(self.services);
     }
 };
 
@@ -95,19 +95,19 @@ const CpuTicks = struct {
 
 pub const Monitor = @This();
 
-pub fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
+pub fn deinit(self: *@This(), gpa: std.mem.Allocator) void {
     _ = self;
-    _ = alloc;
+    _ = gpa;
 }
 
-pub fn fetch(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats {
+pub fn fetch(self: *@This(), gpa: std.mem.Allocator, io: std.Io) !Stats {
     const time = std.Io.Clock.now(.real, io);
-    const cpu = try self.fetch_cpu(alloc, io);
+    const cpu = try self.fetch_cpu(gpa, io);
     const ram_swap = fetch_ram_swap(io);
     const disk = fetch_disk(io);
     const net = fetch_net(io);
     const load_thr = fetch_load(io);
-    const services = fetch_services(alloc, io) catch &.{};
+    const services = fetch_services(gpa, io) catch &.{};
 
     return .{
         .time = time,
@@ -122,7 +122,7 @@ pub fn fetch(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats {
     };
 }
 
-fn fetch_cpu(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats.Cpu {
+fn fetch_cpu(self: *@This(), gpa: std.mem.Allocator, io: std.Io) !Stats.Cpu {
     var stat_buf: [4096]u8 = undefined;
     const stat_content = read_file(io, "/proc/stat", &stat_buf) orelse "";
 
@@ -184,7 +184,7 @@ fn fetch_cpu(self: *@This(), alloc: std.mem.Allocator, io: std.Io) !Stats.Cpu {
     }
 
     return .{
-        .model = try alloc.dupe(u8, model_slice),
+        .model = try gpa.dupe(u8, model_slice),
         .usage = usage,
         .freq = freq,
         .cores = if (core_count > 0) core_count else 1,
@@ -386,7 +386,7 @@ fn fetch_load(io: std.Io) struct { load: [3]f32, threads: [2]u32 } {
     };
 }
 
-fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
+fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
     var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/system.slice", .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
             std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup", .{ .iterate = true }) catch return &.{}
@@ -395,7 +395,7 @@ fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
     defer cgroup_dir.close(io);
 
     var list = std.ArrayListUnmanaged(Stats.Service).empty;
-    errdefer list.deinit(alloc);
+    errdefer list.deinit(gpa);
 
     var iter = cgroup_dir.iterate();
     while (try iter.next(io)) |entry| {
@@ -447,8 +447,8 @@ fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
             pids = std.fmt.parseInt(u32, std.mem.trim(u8, mem_buf[0..n], " \t\r\n"), 10) catch 0;
         } else |_| {}
 
-        try list.append(alloc, .{
-            .task = try t.dupe(alloc),
+        try list.append(gpa, .{
+            .task = try t.dupe(gpa),
             .cpu_usage_usec = cpu_usage_usec,
             .memory_bytes = mem_bytes,
             .memory_peak_bytes = peak_bytes,
@@ -456,7 +456,7 @@ fn fetch_services(alloc: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
         });
     }
 
-    return try list.toOwnedSlice(alloc);
+    return try list.toOwnedSlice(gpa);
 }
 
 fn parse_meminfo_kb(line: []const u8) u64 {

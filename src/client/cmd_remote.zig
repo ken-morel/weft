@@ -10,7 +10,7 @@ const TargetInfo = struct {
     port: ?[]const u8,
 };
 
-fn parse_target(alloc: std.mem.Allocator, raw: []const u8) !TargetInfo {
+fn parse_target_leaky(ara: std.mem.Allocator, raw: []const u8) !TargetInfo {
     var user: []const u8 = "root";
     var rest: []const u8 = raw;
 
@@ -30,32 +30,13 @@ fn parse_target(alloc: std.mem.Allocator, raw: []const u8) !TargetInfo {
         }
     }
 
-    const ssh_dest = try alloc.print("{s}@{s}", .{ user, host });
+    const ssh_dest = try ara.print("{s}@{s}", .{ user, host });
 
     return .{
         .ssh_dest = ssh_dest,
         .host = host,
         .port = maybe_port,
     };
-}
-
-fn get_remote_hostname(alloc: std.mem.Allocator, io: std.Io, target: TargetInfo) ![]const u8 {
-    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
-    try argv.append(alloc, "ssh");
-    if (target.port) |p|
-        try argv.appendSlice(alloc, &.{ "-p", p });
-    try argv.appendSlice(alloc, &.{ target.ssh_dest, "hostname" });
-
-    if (std.process.run(alloc, io, .{ .argv = argv.items })) |res| {
-        defer alloc.free(res.stdout);
-        defer alloc.free(res.stderr);
-        if (res.term == .exited and res.term.exited == 0) {
-            const trimmed = std.mem.trim(u8, res.stdout, " \t\r\n");
-            if (trimmed.len > 0)
-                return try alloc.dupe(u8, trimmed);
-        }
-    } else |_| {}
-    return try alloc.dupe(u8, target.host);
 }
 
 pub fn register(
@@ -70,7 +51,7 @@ pub fn register(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const target = try parse_target(alloc, ssh_target);
+    const target = try parse_target_leaky(alloc, ssh_target);
 
     const pubkey_hex: []const u8 = if (maybe_pubkey) |pk| pk else pk: {
         const client_pub = inst.identity.public_key();
@@ -113,7 +94,7 @@ pub fn install(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const target = try parse_target(alloc, ssh_target);
+    const target = try parse_target_leaky(alloc, ssh_target);
 
     const exe_path = try std.process.executablePathAlloc(io, alloc);
 

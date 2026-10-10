@@ -4,7 +4,6 @@ const Server = @import("../daemon/Server.zig");
 const proto = @import("../domain/proto.zig");
 pub const Connection = @import("../wire/Connection.zig");
 const Crypt = @import("../wire/Crypt.zig");
-const Handshake = @import("../wire/Handshake.zig");
 const Identity = @import("../wire/Identity.zig");
 const Nonce = @import("../wire/Nonce.zig");
 

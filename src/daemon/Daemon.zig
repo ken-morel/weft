@@ -39,7 +39,7 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This()
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
     const alloc = arena.allocator();
-    const config = try DaemonInstall.read_config_leaky(io, alloc);
+    const config = try DaemonInstall.read_config_leaky(alloc, io);
 
     var server = try Server.init(
         io,

@@ -35,15 +35,15 @@ io: std.Io,
 is_tty: bool,
 mutex: std.Io.Mutex = .init,
 
-pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
+pub fn init(gpa: std.mem.Allocator, io: std.Io) !@This() {
     var stdin_file = std.Io.File.stdin();
     var stdout_file = std.Io.File.stdout();
 
-    const out_buf = try alloc.alloc(u8, 4 << 10);
-    errdefer alloc.free(out_buf);
+    const out_buf = try gpa.alloc(u8, 4 << 10);
+    errdefer gpa.free(out_buf);
 
-    const in_buf = try alloc.alloc(u8, 4 << 10);
-    errdefer alloc.free(in_buf);
+    const in_buf = try gpa.alloc(u8, 4 << 10);
+    errdefer gpa.free(in_buf);
 
     const is_tty = stdout_file.isTty(io) catch false;
     const mode = std.Io.Terminal.Mode.detect(io, stdout_file, false, false) catch .no_color;
@@ -66,10 +66,10 @@ pub fn init(alloc: std.mem.Allocator, io: std.Io) !@This() {
     return self;
 }
 
-pub fn deinit(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
+pub fn deinit(self: *@This(), gpa: std.mem.Allocator, io: std.Io) void {
     _ = io;
-    alloc.free(self.in_buf);
-    alloc.free(self.out_buf);
+    gpa.free(self.in_buf);
+    gpa.free(self.out_buf);
 }
 
 pub inline fn reader(self: *@This()) *std.Io.Reader {

@@ -41,7 +41,7 @@ pub fn run(
     project: Project,
 ) !void {
     const l = log(.check);
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
 

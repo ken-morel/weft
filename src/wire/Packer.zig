@@ -12,10 +12,10 @@ root: std.Io.Dir,
 walker: ?std.Io.Dir.Walker = null,
 handle: ?std.Io.File = null,
 
-pub fn packer(alloc: std.mem.Allocator, dir: std.Io.Dir) !@This() {
+pub fn packer(gpa: std.mem.Allocator, dir: std.Io.Dir) !@This() {
     return .{
         .root = dir,
-        .walker = try dir.walk(alloc),
+        .walker = try dir.walk(gpa),
     };
 }
 pub fn unpacker(dir: std.Io.Dir) @This() {
