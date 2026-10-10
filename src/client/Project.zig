@@ -8,10 +8,10 @@ const Deployment = @import("Deployment.zig");
 dir: std.Io.Dir,
 env: DotEnv,
 
-pub fn open(alloc: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() {
+pub fn open(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() {
     return .{
         .dir = dir,
-        .env = try .load_leaky(alloc, io, dir),
+        .env = try .load_leaky(ara, io, dir),
     };
 }
 

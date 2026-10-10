@@ -20,6 +20,7 @@ const nix = @import("daemon/nix.zig");
 const Task = @import("daemon/Task.zig");
 const proto = @import("domain/proto.zig");
 const Term = @import("domain/Term.zig");
+const Weft = @import("domain/Weft.zig");
 const argz = @import("util/argz.zig");
 const Monitor = @import("util/Monitor.zig");
 
@@ -296,11 +297,15 @@ pub fn main(init: std.process.Init) !void {
         },
         .monitor => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-            defer project_dir.close(init.io);
-            const project = try Project.open(alloc, init.io, project_dir);
-            const config = try project.get_config_leaky(alloc, init.io);
-            return cmd_monitor.run(gpa, init.io, &term, &installation, try config.remotes_with_local(alloc), cmd.spec);
+            if (std.mem.eql(u8, cmd.spec, "local")) {
+                return cmd_monitor.run(gpa, init.io, &term, &installation, &.{Weft.remote_local}, cmd.spec);
+            } else {
+                const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+                defer project_dir.close(init.io);
+                const project = try Project.open(alloc, init.io, project_dir);
+                const config = try project.get_config_leaky(alloc, init.io);
+                return cmd_monitor.run(gpa, init.io, &term, &installation, try config.remotes_with_local(alloc), cmd.spec);
+            }
         },
         .remote => |r| switch (r) {
             .register => |reg| {
