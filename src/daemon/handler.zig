@@ -478,15 +478,17 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
         for (&env_vars) |v|
             try env.append(alloc, try std.mem.join(alloc, "=", &v));
 
+        const base_path = paths.weft_bin_dir[0 .. paths.weft_bin_dir.len - 1];
         if (spec.pkgs.len > 0) {
-            var pkg_bin_paths: std.ArrayList([]const u8) = .empty;
+            var pkg_bin_paths: std.ArrayListUnmanaged([]const u8) = .empty;
             for (spec.pkgs) |basename| {
-                const bin_dir = try std.fmt.allocPrint(alloc, "/nix/store/{s}/bin", .{basename});
+                const bin_dir = try alloc.print("/nix/store/{s}/bin", .{basename});
                 try pkg_bin_paths.append(alloc, bin_dir);
             }
             const joined_bins = try std.mem.join(alloc, ":", pkg_bin_paths.items);
-            try env.append(alloc, try std.fmt.allocPrint(alloc, "PATH={s}:/usr/local/bin:/usr/bin:/bin", .{joined_bins}));
-        }
+            try env.append(alloc, try alloc.print("PATH={s}:{s}", .{ joined_bins, base_path }));
+        } else
+            try env.append(alloc, try alloc.print("PATH={s}", .{base_path}));
 
         for (spec.vars) |pair|
             try env.append(alloc, try std.mem.join(alloc, "=", &.{ pair.@"0", pair.@"1" }));

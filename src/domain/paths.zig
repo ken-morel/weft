@@ -16,6 +16,7 @@ pub const weft_cache_dir = weft_dir ++ "cache/";
 pub const weft_home_dir = weft_dir ++ "home/";
 pub const weft_tmp_dir = weft_dir ++ "tmp/";
 pub const weft_store_dir = weft_dir ++ "store/";
+pub const weft_bin_dir = weft_dir ++ "bin/";
 
 pub const weft_runtime_dir = "/run/weft/";
 pub const weft_socket = weft_runtime_dir ++ "weft.pipe";
@@ -30,6 +31,7 @@ pub fn ensure_dirs(io: std.Io) void {
     cwd.createDirPath(io, weft_home_dir) catch {};
     cwd.createDirPath(io, weft_tmp_dir) catch {};
     cwd.createDirPath(io, weft_store_dir) catch {};
+    cwd.createDirPath(io, weft_bin_dir) catch {};
 }
 
 pub inline fn home(gpa: std.mem.Allocator, w: []const u8) ![]u8 {

@@ -162,6 +162,139 @@ pub fn install(io: std.Io, gpa: std.mem.Allocator, maybe_user: ?[]const u8) !voi
 
         break :setup_sysusers;
     }
+
+    setup_bin: {
+        try setup_bin(gpa, io);
+        break :setup_bin;
+    }
+}
+
+const allowed_tools = [_][]const u8{
+    "sh",
+    "bash",
+    "dash",
+    "cat",
+    "cp",
+    "mv",
+    "rm",
+    "mkdir",
+    "rmdir",
+    "touch",
+    "chmod",
+    "chown",
+    "chgrp",
+    "ln",
+    "ls",
+    "readlink",
+    "realpath",
+    "basename",
+    "dirname",
+    "mktemp",
+    "stat",
+    "sync",
+    "pwd",
+    "df",
+    "du",
+    "head",
+    "tail",
+    "sort",
+    "uniq",
+    "wc",
+    "cut",
+    "tr",
+    "tee",
+    "paste",
+    "split",
+    "fold",
+    "fmt",
+    "nl",
+    "comm",
+    "csplit",
+    "join",
+    "expand",
+    "unexpand",
+    "od",
+    "tac",
+    "rev",
+    "md5sum",
+    "sha1sum",
+    "sha224sum",
+    "sha256sum",
+    "sha384sum",
+    "sha512sum",
+    "b2sum",
+    "base64",
+    "base32",
+    "cksum",
+    "echo",
+    "printf",
+    "test",
+    "[",
+    "true",
+    "false",
+    "sleep",
+    "env",
+    "printenv",
+    "date",
+    "uname",
+    "which",
+    "id",
+    "whoami",
+    "groups",
+    "timeout",
+    "kill",
+    "yes",
+    "nohup",
+    "expr",
+    "seq",
+    "grep",
+    "egrep",
+    "fgrep",
+    "sed",
+    "awk",
+    "gawk",
+    "find",
+    "xargs",
+    "tar",
+    "gzip",
+    "gunzip",
+    "zcat",
+    "bzip2",
+    "bunzip2",
+    "bzcat",
+    "xz",
+    "unxz",
+    "xzcat",
+    "zstd",
+    "unzstd",
+    "zip",
+    "unzip",
+    "diff",
+    "diff3",
+    "patch",
+    "cmp",
+    "file",
+};
+
+pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    paths.ensure_dirs(io);
+    var bin_dir: std.Io.Dir = try std.Io.Dir.cwd().openDir(io, paths.weft_bin_dir, .{});
+    defer bin_dir.close(io);
+
+    for (allowed_tools) |tool| {
+        const target = try alloc.print("/bin/{s}", .{tool});
+        bin_dir.deleteFile(io, tool) catch {};
+        bin_dir.symLink(
+            io,
+            target,
+            tool,
+            .{},
+        ) catch {};
+    }
 }
 
 pub fn read_config_leaky(io: std.Io, gpa: std.mem.Allocator) !Config {

@@ -124,7 +124,7 @@ workspace: []const u8,
 sources: ?[]const struct { []const u8, []const u8 } = null,
 
 pipelines: []const Pipeline = &.{},
-remotes: []const Remote,
+remotes: []const Remote = &.{},
 
 pub fn parse_remote_address(remote: Remote) !std.Io.net.IpAddress {
     const addr_str = remote.@"1";
