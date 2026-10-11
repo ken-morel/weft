@@ -3,14 +3,14 @@ const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
+const Weft = @import("../domain/Weft.zig");
+const Remote = Weft.Remote;
 const Monitor = @import("../util/Monitor.zig");
 const format_bytes = @import("../util/sizes.zig").format_bytes;
 const zoto = @import("../util/zoto.zig");
 const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
-const Weft = @import("../domain/Weft.zig");
-const Remote = Weft.Remote;
 
 fn format_time_only(buf: *[8]u8, ns: i128) []const u8 {
     const epoch_seconds: u64 = if (ns > 0) @intCast(@divTrunc(ns, std.time.ns_per_s)) else 0;
@@ -48,38 +48,35 @@ fn pad_10(buf: *[10]u8, s: []const u8) []const u8 {
 }
 
 fn format_rate(buf: []u8, rate: u64) []const u8 {
-    if (rate == 0) return "0 B/s";
+    if (rate == 0)
+        return "0 B/s";
     var b_buf: [32]u8 = undefined;
     const b_str = format_bytes(&b_buf, rate) catch "...";
     return std.fmt.bufPrint(buf, "{s}/s", .{b_str}) catch "0 B/s";
 }
 
-fn render_cell(term: *Term, cell: *const [10]u8, filled: u8, color: Term.Color) void {
+fn render_cell(term: *Term, cell: *const [10]u8, filled: u8, color: Term.Color) !void {
     if (!term.is_tty) {
-        term.writer().writeAll(cell) catch {};
+        try term.writer().writeAll(cell);
         return;
     }
 
     const fill_count = @min(filled, 10);
-    if (fill_count > 0) {
-        term.set_reverse(true);
-        term.set_color(color);
-        term.writer().writeAll(cell[0..fill_count]) catch {};
-        term.set_reverse(false);
-    }
-    if (fill_count < 10) {
-        term.set_color(.dim);
-        term.writer().writeAll(cell[fill_count..10]) catch {};
-        term.set_color(.reset);
-    } else {
-        term.set_color(.reset);
-    }
+
+    term.set_reverse(true);
+    term.set_color(color);
+    term.writer().writeAll(cell[0..fill_count]) catch {};
+    term.set_reverse(false);
+    term.set_color(.dim);
+    term.writer().writeAll(cell[fill_count..10]) catch {};
+
+    term.set_color(.reset);
 }
 
 fn render_header(term: *Term, date_str: []const u8) void {
     if (term.is_tty)
         term.clear_line();
-    term.styled(.dim, "─── {s} ──────────────────────────────────────────────────────────────────────────────────────────\n", .{date_str});
+    term.styled(.dim, "─── {s} ───\n", .{date_str});
     if (term.is_tty)
         term.clear_line();
     term.styled(.bold, "   TIME   ", .{});
@@ -102,9 +99,20 @@ fn render_header(term: *Term, date_str: []const u8) void {
     term.println("", .{});
 }
 
-fn connect(gpa: std.mem.Allocator, io: std.Io, remote: Remote, identity: Identity) !*Client {
+fn connect(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    remote: Remote,
+    identity: Identity,
+    from: std.Io.Timestamp,
+) !*Client {
     const l = log(.monitor_connect);
-    var client = Client.connect(gpa, io, try Weft.parse_remote_address(remote), identity) catch |err| {
+    var client = Client.connect(
+        gpa,
+        io,
+        try Weft.parse_remote_address(remote),
+        identity,
+    ) catch |err| {
         l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.@"0", err });
         return err;
     };
@@ -115,7 +123,7 @@ fn connect(gpa: std.mem.Allocator, io: std.Io, remote: Remote, identity: Identit
 
     try client.conn.send_object(req_buf, proto.Request, .system_stats);
     try client.conn.send_object(req_buf, proto.system.stats.Req, .{
-        .from = .{ .nanoseconds = 0 },
+        .from = from,
     });
     return client;
 }
@@ -149,9 +157,15 @@ pub fn run(
 
     l.info("connecting to remote '{s}' at {s}...", .{ target_remote.@"0", target_remote.@"1" });
 
-    var maybe_client: ?*Client = try connect(alloc, io, target_remote.*, inst.identity);
+    var maybe_client: ?*Client = try connect(
+        gpa,
+        io,
+        target_remote.*,
+        inst.identity,
+        .{ .nanoseconds = 0 },
+    );
     defer if (maybe_client) |c|
-        c.destroy(alloc, io);
+        c.destroy(gpa, io);
 
     l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.@"0"});
 
@@ -188,22 +202,36 @@ pub fn run(
     var prev_tx_rate: ?u64 = null;
 
     while (true) {
-        const client = if (maybe_client) |c| c else {
-            try std.Io.sleep(io, .fromSeconds(10), .real);
-            maybe_client = connect(alloc, io, target_remote.*, inst.identity) catch null;
+        const client = if (maybe_client) |c|
+            c
+        else {
+            try std.Io.sleep(io, .fromSeconds(5), .real);
+            const from_ts: std.Io.Timestamp = if (prev_time_ns) |pt|
+                .{ .nanoseconds = @intCast(pt + 1) }
+            else
+                .{ .nanoseconds = 0 };
+            maybe_client = connect(
+                gpa,
+                io,
+                target_remote.*,
+                inst.identity,
+                from_ts,
+            ) catch null;
             continue;
         };
         var iac = [_][]u8{stream_buf[read_pos..]};
-        const n = client.conn.reader.readVec(&iac) catch |err| {
-            if (err == error.EndOfStream) {
-                alloc.destroy(client);
-                maybe_client = null;
-                continue;
-            }
-            break;
+        const n = client.conn.reader.readVec(&iac) catch {
+            client.destroy(gpa, io);
+            maybe_client = null;
+            read_pos = 0;
+            continue;
         };
-        if (n == 0)
-            break;
+        if (n == 0) {
+            client.destroy(gpa, io);
+            maybe_client = null;
+            read_pos = 0;
+            continue;
+        }
         read_pos += n;
 
         var slice: []const u8 = stream_buf[0..read_pos];
@@ -461,21 +489,21 @@ pub fn run(
             if (term.is_tty) term.clear_line();
             term.styled(.dim, "{s}", .{time_cell});
             term.print("  ", .{});
-            render_cell(term, &cpu_cell, cpu_filled, cpu_color);
+            try render_cell(term, &cpu_cell, cpu_filled, cpu_color);
             term.print("  ", .{});
-            render_cell(term, &ram_cell, ram_filled, ram_color);
+            try render_cell(term, &ram_cell, ram_filled, ram_color);
             term.print("  ", .{});
-            render_cell(term, &swap_cell, swap_filled, swap_color);
+            try render_cell(term, &swap_cell, swap_filled, swap_color);
             term.print("  ", .{});
-            render_cell(term, &disk_cell, disk_filled, disk_color);
+            try render_cell(term, &disk_cell, disk_filled, disk_color);
             term.print("  ", .{});
-            render_cell(term, &drx_cell, drx_filled, drx_color);
+            try render_cell(term, &drx_cell, drx_filled, drx_color);
             term.print("  ", .{});
-            render_cell(term, &dtx_cell, dtx_filled, dtx_color);
+            try render_cell(term, &dtx_cell, dtx_filled, dtx_color);
             term.print("  ", .{});
-            render_cell(term, &rx_cell, rx_filled, rx_color);
+            try render_cell(term, &rx_cell, rx_filled, rx_color);
             term.print("  ", .{});
-            render_cell(term, &tx_cell, tx_filled, tx_color);
+            try render_cell(term, &tx_cell, tx_filled, tx_color);
             term.println("", .{});
             lines_since_header += 1;
 

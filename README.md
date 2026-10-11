@@ -486,7 +486,6 @@ set -euo pipefail
 cp -r "$IN/-server/"* ./
 cargo build --release
 
-mkdir -p "$OUT/server-build"
 cp target/release/app "$OUT/server-build/app"
 ```
 

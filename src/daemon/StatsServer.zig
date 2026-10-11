@@ -8,6 +8,7 @@ const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 
 const StatsServer = @This();
+pub const history_capacity: usize = 1000;
 
 const Listener = struct {
     last: std.Io.Timestamp,
@@ -50,8 +51,6 @@ pub const StatsIterator = struct {
         return stat;
     }
 };
-
-pub const history_capacity: usize = 120;
 
 pub fn init(gpa: std.mem.Allocator, io: std.Io) !@This() {
     const history = try gpa.alloc(?Monitor.Stats, history_capacity);
