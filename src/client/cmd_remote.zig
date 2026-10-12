@@ -12,7 +12,7 @@ const TargetInfo = struct {
 
 fn parse_target_leaky(ara: std.mem.Allocator, raw: []const u8) !TargetInfo {
     var user: []const u8 = "root";
-    var rest: []const u8 = raw;
+    var rest = raw;
 
     if (std.mem.indexOfScalar(u8, raw, '@')) |at_idx| {
         user = raw[0..at_idx];

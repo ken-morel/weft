@@ -38,9 +38,9 @@ fn format_date_only(buf: []u8, ns: i128) []const u8 {
 
 fn pad_10(buf: *[10]u8, s: []const u8) []const u8 {
     @memset(buf, ' ');
-    if (s.len >= 10) {
-        @memcpy(buf[0..10], s[0..10]);
-    } else {
+    if (s.len >= 10)
+        @memcpy(buf[0..10], s[0..10])
+    else {
         const left = (10 - s.len) / 2;
         @memcpy(buf[left .. left + s.len], s);
     }
