@@ -311,13 +311,8 @@ fn fetch_net(io: std.Io) Stats.Net {
         const iface = std.mem.trim(u8, trimmed[0..colon], " \t");
         var it = std.mem.tokenizeAny(u8, trimmed[colon + 1 ..], " \t");
         const rx = parse_next_u64(&it);
-        _ = it.next();
-        _ = it.next();
-        _ = it.next();
-        _ = it.next();
-        _ = it.next();
-        _ = it.next();
-        _ = it.next();
+        inline for (0..7) |_|
+            _ = it.next();
         const tx = parse_next_u64(&it);
         if (std.mem.eql(u8, iface, "lo")) {
             lo_rx += rx;

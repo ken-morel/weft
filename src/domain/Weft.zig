@@ -7,6 +7,11 @@ pub const Keep = struct {
     []const u8,
 };
 
+pub const Retention = struct {
+    artifacts: u32 = 2,
+    archive: u32 = 10,
+};
+
 pub const Pipeline = struct {
     const Input = []const u8;
     const Output = []const u8;
@@ -36,7 +41,6 @@ pub const Pipeline = struct {
         cpu_quota: ?u16 = null,
         tasks_max: ?u32 = null,
         io_weight: ?u32 = null,
-        timeout: ?u32 = null,
     };
 
     name: []const u8,
@@ -44,6 +48,9 @@ pub const Pipeline = struct {
     out: ?[]const Output = null,
     run: ?Run = null,
     tune: Tune = .{},
+    timeout: ?u32 = null,
+    max_retries: u16 = 10,
+    retention: ?Retention = null,
 
     sibling: HandleSibling = .{ .then = .ignore },
     keep: []Keep = &.{},
@@ -125,6 +132,8 @@ sources: ?[]const struct { []const u8, []const u8 } = null,
 
 pipelines: []const Pipeline = &.{},
 remotes: []const Remote = &.{},
+
+retention: Retention = .{},
 
 pub fn parse_remote_address(remote: Remote) !std.Io.net.IpAddress {
     const addr_str = remote.@"1";

@@ -64,7 +64,7 @@ pub fn run_deployment(
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
 
-    while (true) : (try std.Io.sleep(io, .fromSeconds(2), .awake)) {
+    while (true) : (try std.Io.sleep(io, .fromSeconds(1), .awake)) {
         try depl.lock(io);
         defer depl.unlock(io);
         if (deployment.completed() and fetcher.is_idle(io))
@@ -73,7 +73,7 @@ pub fn run_deployment(
         if (state.has_error(io) and deployment.running.len == 0) {
             try deployment.save(gpa, io, project);
             l.err("Error during deployment", .{});
-            try std.Io.sleep(io, .fromSeconds(3), .awake);
+            try std.Io.sleep(io, .fromSeconds(1), .awake);
             try view.update(io);
             return error.DeploymentFailed;
         }
@@ -167,10 +167,9 @@ pub fn run_deployment(
                                     for (p.out orelse &.{p.name}) |output| {
                                         try deployment.add_artifact(gpa, .{
                                             .remote = remote_name,
-                                            .pipeline = pipeline_name,
+                                            .pipeline = p.name,
                                             .name = output,
                                         });
-                                        try fetcher.spawn_fetch(io, output);
                                     }
                                 }
 
@@ -180,6 +179,14 @@ pub fn run_deployment(
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
                                 const err_msg = try gpa.print("task failed with exit code {d}", .{code});
                                 state.err(io, remote_name, pipeline_name, err_msg);
+
+                                if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+                                    try deployment.add_failed(gpa, .{
+                                        .retries_left = pipeline.max_retries,
+                                        .remote = remote_name,
+                                        .pipeline = pipeline.name,
+                                        .status = .{ .term = code },
+                                    });
                             },
                             .skipped => {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
@@ -188,10 +195,25 @@ pub fn run_deployment(
                             .stopped => {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
                                 state.stopped(io, remote_name, pipeline_name);
+
+                                if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+                                    try deployment.add_failed(gpa, .{
+                                        .retries_left = pipeline.max_retries,
+                                        .remote = remote_name,
+                                        .pipeline = pipeline.name,
+                                        .status = .stopped,
+                                    });
                             },
                             .not_found => {
                                 deployment.remove_running(gpa, remote_name, pipeline_name);
                                 state.err(io, remote_name, pipeline_name, "task not found on remote");
+                                if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+                                    try deployment.add_failed(gpa, .{
+                                        .retries_left = 0,
+                                        .remote = remote_name,
+                                        .pipeline = pipeline.name,
+                                        .status = .not_found,
+                                    });
                             },
                         }
                         deployment.save(gpa, io, project) catch {};

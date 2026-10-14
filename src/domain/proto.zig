@@ -178,4 +178,5 @@ poll_res: task.poll.Res,
 kill_req: task.kill.Req,
 kill_res: task.kill.Res,
 stats_req: system.stats.Req,
+
 pub const hash = zoto.hashType(@This());

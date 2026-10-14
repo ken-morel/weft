@@ -13,12 +13,19 @@ config: Weft,
 artifacts: []Artifact = &.{},
 sources: [][]const u8 = &.{},
 running: []Step = &.{},
+failed: []Failed = &.{},
 targets: []Step = &.{},
 
 pub const Artifact = struct {
     remote: []const u8,
     pipeline: []const u8,
     name: []const u8,
+};
+pub const Failed = struct {
+    retries_left: u16,
+    remote: []const u8,
+    pipeline: []const u8,
+    status: union(enum) { not_found, term: u16, stopped },
 };
 
 pub fn get_artifact(self: @This(), output: []const u8) ?Artifact {
@@ -84,7 +91,7 @@ pub fn next_step(self: @This(), term: *Term) !?Step {
                     .mode = target.mode,
                 };
             },
-            .done => continue :target,
+            .done, .failed, .needs_failed => continue :target,
         };
     } else null;
 }
@@ -92,9 +99,11 @@ pub fn next_step(self: @This(), term: *Term) !?Step {
 pub const StepStatus = union(enum) {
     waits: []const u8,
     needs: []const u8,
+    needs_failed: []const u8,
     done,
     running,
     runnable,
+    failed,
 };
 
 const resolve_pipeline_max_depth: u16 = 100;
@@ -108,11 +117,18 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
     for (outs) |output|
         if (self.get_artifact(output)) |_|
             return .done;
-    if (self.get_running_step(pipeline.name)) |_|
+    if (self.get_running(pipeline.name)) |_|
         return .running;
+
+    if (self.get_failed(pipeline.name)) |f|
+        return if (f.retries_left > 0)
+            .runnable
+        else
+            .failed;
 
     var waiting: ?[]const u8 = null;
     var needs: ?[]const u8 = null;
+    var failed: ?[]const u8 = null;
 
     input: for (pipeline.in) |in| {
         if (Weft.is_source_artifact(in))
@@ -132,6 +148,8 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
             .waits => |task| waiting = task,
             .needs => |task| needs = task,
             .runnable => needs = producer.name,
+            .failed => failed = producer.name,
+            .needs_failed => |p| failed = p,
         }
     }
 
@@ -139,16 +157,23 @@ pub fn resolve_pipeline(self: @This(), term: *Term, pipeline_name: []const u8, d
         .{ .needs = task }
     else if (waiting) |task|
         .{ .waits = task }
+    else if (failed) |f|
+        .{ .needs_failed = f }
     else
         .runnable;
 }
-pub fn get_running_step(self: @This(), pipeline: []const u8) ?*const Step {
-    for (self.running) |*running|
+pub fn get_running(self: @This(), pipeline: []const u8) ?*const Step {
+    return for (self.running) |*running| {
         if (std.mem.eql(u8, running.pipeline, pipeline))
-            return running;
-    return null;
+            break running;
+    } else null;
 }
-
+pub fn get_failed(self: @This(), pipeline: []const u8) ?*const Failed {
+    return for (self.failed) |*failed| {
+        if (std.mem.eql(u8, failed.pipeline, pipeline))
+            break failed;
+    } else null;
+}
 pub fn completed(self: @This()) bool {
     return self.next_target() == null;
 }
@@ -186,6 +211,17 @@ pub fn add_artifact(self: *@This(), gpa: std.mem.Allocator, art: Artifact) !void
 pub fn add_source(self: *@This(), gpa: std.mem.Allocator, src: []const u8) !void {
     self.sources = try gpa.realloc(self.sources, self.sources.len + 1);
     self.sources[self.sources.len - 1] = try gpa.dupe(u8, src);
+}
+pub fn add_failed(self: *@This(), gpa: std.mem.Allocator, failed: Failed) !void {
+    for (self.failed) |*f| {
+        if (std.mem.eql(u8, f.pipeline, failed.pipeline)) {
+            f.retries_left -|= 1;
+            break;
+        }
+    } else {
+        self.failed = try gpa.realloc(self.failed, self.failed.len + 1);
+        self.failed[self.failed.len - 1] = failed;
+    }
 }
 
 pub fn save(self: @This(), gpa: std.mem.Allocator, io: std.Io, proj: Project) !void {

@@ -1,0 +1,18 @@
+name: "Setup Weft"
+description: "Downloads and installs the pre-built Weft binary"
+inputs:
+  version:
+    description: "Release tag to install (e.g. latest or a specific release tag)"
+    required: false
+    default: "latest"
+runs:
+  using: "composite"
+  steps:
+    - name: Download and install Weft
+      shell: bash
+      run: |
+        echo "Installing Weft (${{ inputs.version }})..."
+        curl -fsSL "https://github.com/ken-morel/weft/releases/download/${{ inputs.version }}/weft-linux-x86_64.tar.gz" | sudo tar -xz -C /usr/local/bin
+        sudo chmod +x /usr/local/bin/weft
+        weft --help > /dev/null
+        echo "Weft installed successfully to /usr/local/bin/weft"

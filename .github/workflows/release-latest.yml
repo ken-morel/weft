@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    branches: [dev, main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    name: Build & Publish Binary
+    steps:
+      - name: Checkout weft
+        uses: actions/checkout@v4
+
+      - name: Setup Zig
+        uses: ziglang/setup-zig@v1
+        with:
+          zig-version: 0.17.0
+
+      - name: Build Weft (ReleaseSafe)
+        run: |
+          zig build -Doptimize=ReleaseSafe
+          strip zig-out/bin/weft
+          tar -czf weft-linux-x86_64.tar.gz -C zig-out/bin weft
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Weft Latest (Rolling)' }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          files: weft-linux-x86_64.tar.gz

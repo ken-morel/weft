@@ -328,17 +328,16 @@ pub fn run(
             const cpu_filled: u8 = @min(10, @as(u8, @intCast((@as(u16, stats.cpu.usage) * 10 + 50) / 100)));
             const cpu_color: Term.Color = if (prev_cpu) |pc| color_select: {
                 const delta: i16 = @as(i16, stats.cpu.usage) - @as(i16, pc);
-                if (delta >= 25) {
-                    break :color_select .bright_red;
-                } else if (delta >= 5) {
-                    break :color_select .yellow;
-                } else if (delta <= -25) {
-                    break :color_select .bright_cyan;
-                } else if (delta <= -5) {
-                    break :color_select .cyan;
-                } else {
-                    break :color_select .green;
-                }
+                break :color_select if (delta >= 25)
+                    .bright_red
+                else if (delta >= 5)
+                    .yellow
+                else if (delta <= -25)
+                    .bright_cyan
+                else if (delta <= -5)
+                    .cyan
+                else
+                    .green;
             } else .green;
 
             var ram_raw_buf: [32]u8 = undefined;

@@ -215,6 +215,7 @@ pub const Spec = struct {
     pub const Tune = Weft.Pipeline.Tune;
     task_id: proto.task.Id,
     script: ?[]const u8,
+    timeout: ?u32 = null,
     vars: []const struct { []const u8, []const u8 } = &.{},
     pkgs: []const []const u8 = &.{},
     inputs: []const []const u8 = &.{},
@@ -223,6 +224,7 @@ pub const Spec = struct {
     sibling: Weft.Pipeline.HandleSibling = .{ .then = .ignore },
     tune: Tune,
     mode: []const u8,
+    retention: Weft.Retention,
 
     pub const Env = struct {
         vars: []const struct { []const u8, []const u8 } = &.{},
@@ -342,6 +344,7 @@ pub const Spec = struct {
                 .workspace = config.workspace,
             },
             .script = script,
+            .timeout = pipeline.timeout,
             .vars = env.vars,
             .pkgs = env.pkgs,
             .inputs = pipeline.in,
@@ -350,6 +353,7 @@ pub const Spec = struct {
             .sibling = pipeline.sibling,
             .tune = pipeline.tune,
             .mode = mode,
+            .retention = pipeline.retention orelse config.retention,
         };
     }
 };

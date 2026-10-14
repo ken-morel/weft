@@ -588,6 +588,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
                     .bind_paths_read = bind_paths_read.items,
                 },
                 .permissions = .{
+                    // just in case they had sudo password maybe?
                     .capability_bounding_set = &.{},
                     .protect_control_groups = true,
                     .private_devices = true,
@@ -621,7 +622,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
                     .cpu_quota = spec.tune.cpu_quota,
                     .tasks_max = spec.tune.tasks_max,
                     .io_weight = spec.tune.io_weight,
-                    .timeout = spec.tune.timeout,
+                    .timeout = spec.timeout, //TODO: Move to it's own field
                 },
             },
         );

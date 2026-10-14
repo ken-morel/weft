@@ -3,6 +3,8 @@ const log = std.log;
 const scoped = log.scoped;
 const builtin = @import("builtin");
 
+const build = @import("build");
+
 const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_check = @import("client/cmd_check.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
@@ -162,14 +164,13 @@ pub fn main(init: std.process.Init) !void {
     switch (parsed) {
         .version => {
             const version_str = std.fmt.comptimePrint(
-                \\ Weft
-                \\  version:     v0.1.0-dev1 
-                \\  build mode:  {s}
-                \\  schema hash: {s}
-            , .{ // so that we can inspect this directly from binary
-                comptime @tagName(builtin.mode),
-                comptime &std.fmt.hex(proto.hash),
-            });
+                "Weft v{s}#{s}.{s}",
+                .{ // so that we can inspect this directly from binary
+                    comptime build.version_str,
+                    comptime &std.fmt.hex(proto.hash),
+                    comptime @tagName(builtin.mode),
+                },
+            );
 
             term.println("{s}", .{version_str});
         },
