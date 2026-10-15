@@ -1,17 +1,14 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+## v0.1.1-dev
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+- `weft artifact push/pull`: pull/push artifacts from local project to a remote.
+- `weft task spawn`: Manually spawn a task, without artifact resolution.
+- `weft artifact register`: Simply register the artifact in the deployment config.
+- `weft artifact path`: Prints the expected path for an artifact.
+- `weft monitor` moved to `weft remote monitor`.
 
-## [Unreleased]
-
-### Planned for 0.2.0
-- Decouple task execution from systemd; introduce native `weft shim`.
-- Init-agnostic daemon service management (support for OpenRC, runit, sysvinit).
-
-## [0.1.0] - 2026-10-15
+## v0.1.0
 
 ### Added
 - Weft daemon, running pipelines on remotes using systemd. 

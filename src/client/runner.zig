@@ -15,6 +15,7 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Fetcher = @import("Fetcher.zig");
 const Project = @import("Project.zig");
+const src = @import("src.zig");
 
 pub fn run_deployment(
     gpa: std.mem.Allocator,
@@ -158,65 +159,17 @@ pub fn run_deployment(
                             );
                         }
 
-                        switch (item.status) {
-                            .running => {},
-                            .success => {
-                                deployment.remove_running(gpa, remote_name, pipeline_name);
-                                const pipeline = deployment.config.get_pipeline(pipeline_name);
-                                if (pipeline) |p| {
-                                    for (p.out orelse &.{p.name}) |output| {
-                                        try deployment.add_artifact(gpa, .{
-                                            .remote = remote_name,
-                                            .pipeline = p.name,
-                                            .name = output,
-                                        });
-                                    }
-                                }
-
-                                state.completed(io, remote_name, pipeline_name);
-                            },
-                            .failed => |code| {
-                                deployment.remove_running(gpa, remote_name, pipeline_name);
-                                const err_msg = try gpa.print("task failed with exit code {d}", .{code});
-                                state.err(io, remote_name, pipeline_name, err_msg);
-
-                                if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
-                                    try deployment.add_failed(gpa, .{
-                                        .retries_left = pipeline.max_retries,
-                                        .remote = remote_name,
-                                        .pipeline = pipeline.name,
-                                        .status = .{ .term = code },
-                                    });
-                            },
-                            .skipped => {
-                                deployment.remove_running(gpa, remote_name, pipeline_name);
-                                state.skipped(io, remote_name, pipeline_name);
-                            },
-                            .stopped => {
-                                deployment.remove_running(gpa, remote_name, pipeline_name);
-                                state.stopped(io, remote_name, pipeline_name);
-
-                                if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
-                                    try deployment.add_failed(gpa, .{
-                                        .retries_left = pipeline.max_retries,
-                                        .remote = remote_name,
-                                        .pipeline = pipeline.name,
-                                        .status = .stopped,
-                                    });
-                            },
-                            .not_found => {
-                                deployment.remove_running(gpa, remote_name, pipeline_name);
-                                state.err(io, remote_name, pipeline_name, "task not found on remote");
-                                if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
-                                    try deployment.add_failed(gpa, .{
-                                        .retries_left = 0,
-                                        .remote = remote_name,
-                                        .pipeline = pipeline.name,
-                                        .status = .not_found,
-                                    });
-                            },
-                        }
-                        deployment.save(gpa, io, project) catch {};
+                        try poll_item(
+                            gpa,
+                            io,
+                            project,
+                            deployment,
+                            &state,
+                            &fetcher,
+                            remote_name,
+                            pipeline_name,
+                            item.status,
+                        );
                     },
                     .footer => break,
                 }
@@ -230,6 +183,239 @@ pub fn run_deployment(
     try group.await(io);
     try view.update(io);
     term.success("Deployment completed", .{});
+}
+
+fn poll_item(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    project: Project,
+    deployment: *Deployment,
+    state: *DeploymentState,
+    fetcher: ?*Fetcher,
+    remote_name: []const u8,
+    pipeline_name: []const u8,
+    status: proto.task.poll.Status,
+) !void {
+    switch (status) {
+        .running => {},
+        .success => {
+            deployment.remove_running(gpa, remote_name, pipeline_name);
+            const pipeline = deployment.config.get_pipeline(pipeline_name);
+            if (pipeline) |p| {
+                const is_target = for (deployment.targets) |target| {
+                    if (std.mem.eql(u8, target.pipeline, pipeline_name))
+                        break true;
+                } else false;
+
+                for (p.out orelse &.{p.name}) |output| {
+                    try deployment.add_artifact(gpa, .{
+                        .remote = remote_name,
+                        .pipeline = p.name,
+                        .name = output,
+                    });
+
+                    if (fetcher) |f|
+                        if (is_target)
+                            try f.spawn_fetch(io, output);
+                }
+            }
+
+            state.completed(io, remote_name, pipeline_name);
+        },
+        .failed => |code| {
+            deployment.remove_running(gpa, remote_name, pipeline_name);
+            const err_msg = try gpa.print("task failed with exit code {d}", .{code});
+            state.err(io, remote_name, pipeline_name, err_msg);
+
+            if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+                try deployment.add_failed(gpa, .{
+                    .retries_left = pipeline.max_retries,
+                    .remote = remote_name,
+                    .pipeline = pipeline.name,
+                    .status = .{ .term = code },
+                });
+        },
+        .skipped => {
+            deployment.remove_running(gpa, remote_name, pipeline_name);
+            state.skipped(io, remote_name, pipeline_name);
+        },
+        .stopped => {
+            deployment.remove_running(gpa, remote_name, pipeline_name);
+            state.stopped(io, remote_name, pipeline_name);
+
+            if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+                try deployment.add_failed(gpa, .{
+                    .retries_left = pipeline.max_retries,
+                    .remote = remote_name,
+                    .pipeline = pipeline.name,
+                    .status = .stopped,
+                });
+        },
+        .not_found => {
+            deployment.remove_running(gpa, remote_name, pipeline_name);
+            state.err(io, remote_name, pipeline_name, "task not found on remote");
+            if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+                try deployment.add_failed(gpa, .{
+                    .retries_left = 0,
+                    .remote = remote_name,
+                    .pipeline = pipeline.name,
+                    .status = .not_found,
+                });
+        },
+    }
+    deployment.save(gpa, io, project) catch {};
+}
+
+pub fn run_task(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    term: *Term,
+    project: Project,
+    inst: *const ClientInstall,
+    deployment: *Deployment,
+    step: Deployment.Step,
+) !void {
+    const l = log(.runner);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+    const remotes = try deployment.config.remotes_with_local_leaky(alloc);
+    const identity = inst.identity;
+
+    const remote = for (remotes) |*remote| {
+        if (std.mem.eql(u8, remote.@"0", step.remote))
+            break remote;
+    } else return error.InvalidRemote;
+
+    const pipeline = deployment.config.get_pipeline(step.pipeline) orelse
+        return error.InvalidPipeline;
+
+    if (!pipeline.matches_remote(remote.*)) {
+        l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.@"0" });
+        return error.InvalidRemote;
+    }
+
+    var state: DeploymentState = .init(gpa, &project);
+    defer state.deinit();
+    var depl: std.Io.Mutex = .init;
+
+    var fetcher: Fetcher = .{
+        .gpa = gpa,
+        .dep = deployment,
+        .depl = &depl,
+        .identity = identity,
+        .project = &project,
+        .remotes = remotes,
+        .term = term,
+        .state = &state,
+    };
+    defer fetcher.deinit(io);
+
+    var group: std.Io.Group = .init;
+    errdefer group.await(io) catch {};
+    errdefer deployment.save(gpa, io, project) catch {};
+
+    try src.create_sources(alloc, io, term, inst, project, deployment);
+
+    _ = try state.add(io, remote, pipeline);
+    try deployment.add_running(gpa, step);
+    try spawn(
+        io,
+        &group,
+        spawn_step,
+        .{ gpa, io, &state, project, &depl, deployment, remote, pipeline, &fetcher, step },
+    );
+
+    const log_buffer = try gpa.alloc(u8, Connection.max_packet_size);
+    defer gpa.free(log_buffer);
+
+    var poll_arena: std.heap.ArenaAllocator = .init(gpa);
+    defer poll_arena.deinit();
+
+    while (true) : (try std.Io.sleep(io, .fromSeconds(1), .awake)) {
+        try depl.lock(io);
+        defer depl.unlock(io);
+
+        const still_running = for (deployment.running) |running| {
+            if (std.mem.eql(u8, running.remote, step.remote) and std.mem.eql(u8, running.pipeline, step.pipeline))
+                break true;
+        } else false;
+
+        if (!still_running)
+            break;
+
+        const step_state = state.get(io, step.remote, step.pipeline) orelse break;
+        if (step_state.status != .running and step_state.status != .initializing)
+            continue;
+
+        const addr = Weft.parse_remote_address(remote.*) catch continue;
+        var poll_client = Client.connect(gpa, io, addr, identity) catch continue;
+        defer poll_client.destroy(gpa, io);
+
+        poll_client.conn.send_object(log_buffer, proto.Request, .task_poll) catch continue;
+        poll_client.conn.send_object(log_buffer, proto.task.poll.Req, .{
+            .header = .{
+                .tasks = &.{.{
+                    .task = .{
+                        .deployment = deployment.id,
+                        .pipeline = step.pipeline,
+                        .workspace = deployment.config.workspace,
+                    },
+                    .logs_offset = step_state.log_offset,
+                }},
+            },
+        }) catch continue;
+
+        while (true) {
+            const res = poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break;
+            const poll_res = res catch break;
+            switch (poll_res) {
+                .item => |item| {
+                    if (item.logs) |logs| {
+                        if (logs.data.len > 0) {
+                            const stdout: std.Io.File = .stdout();
+                            try stdout.writeStreamingAll(io, logs.data);
+                        }
+                        state.set_log_offset(io, step.remote, step.pipeline, logs.end_offset);
+                    }
+
+                    try poll_item(
+                        gpa,
+                        io,
+                        project,
+                        deployment,
+                        &state,
+                        null,
+                        step.remote,
+                        step.pipeline,
+                        item.status,
+                    );
+                },
+                .footer => break,
+            }
+        }
+
+        _ = poll_arena.reset(.retain_capacity);
+    }
+    try group.await(io);
+
+    const final_state = state.get(io, step.remote, step.pipeline) orelse {
+        l.err("task {s} was never registered", .{step.pipeline});
+        return error.DeploymentFailed;
+    };
+
+    switch (final_state.status) {
+        .completed => term.success("Task {s} completed", .{step.pipeline}),
+        .skipped => term.success("Task {s} skipped", .{step.pipeline}),
+        .stopped => {
+            l.err("Task {s} stopped", .{step.pipeline});
+            return error.DeploymentFailed;
+        },
+        else => {
+            l.err("Task {s} failed", .{step.pipeline});
+            return error.DeploymentFailed;
+        },
+    }
 }
 
 pub fn spawn_step(

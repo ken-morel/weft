@@ -206,3 +206,11 @@ This rules applies in other places too, prefare using the control flow as an exp
 ## Do not use `.?`
 
 Use `orelse unreachable`, `catch unreachable`. And where possible don't use any of those at all please.
+
+## Avoid creating new types/functions unless really necessary
+
+Sometimes simply using a `switch` or other statements is okay, avoid for example declaring a new Walker type when a loop could handle it.
+
+## Avoid recursive code
+
+Prefer iterating over context, this comes with the previous point

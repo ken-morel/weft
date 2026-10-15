@@ -339,7 +339,7 @@ weft key
 
 ### Finding Nix Package Hashes
 
-Query Hydra for the exact store path of any pre-built package:
+Added this to easily search for a nix package. Wanted to have it builtin, but resolves only the latest version.
 
 ```bash
 weft nix show bun
@@ -348,7 +348,7 @@ weft nix show rustc
 
 ### Deploying Pipelines
 
-Execute pipelines using `weft do`:
+Start a new deployment.
 
 ```bash
 # Run a pipeline locally in default mode
@@ -368,7 +368,24 @@ weft do build
 weft do prod-server.server-run local.web-run
 ```
 
-When a deployment begins, Weft computes the execution DAG for the requested targets, packages source directories, syncs artifacts to remotes, executes prerequisite pipelines in topological order, transfers output artifacts between remotes as required by downstream dependencies, and streams logs and resource metrics to the client terminal in real-time.
+When a deployment begins, Weft computes the execution DAG for the requested targets, packages source directories, syncs artifacts to remotes, executes prerequisite pipelines in topological order, transfers output artifacts between remotes as required by downstream dependencies, fetches the outputs of the requested targets into `.weft/<deployment>/artifacts/` as soon as they succeed, and streams logs and resource metrics to the client terminal in real-time.
+
+### Spawning a Task
+
+Spawn a single pipeline inside an existing deployment, without touching the deployment's targets:
+
+```bash
+# Spawn in the latest deployment, on the first matching remote
+weft task spawn server-run
+
+# Pick the remote explicitly
+weft task spawn server-run prod-server
+
+# Spawn in a specific deployment (id or unique prefix)
+weft task spawn server-run --deployment 2EWbDg3L
+```
+
+`weft task spawn` runs exactly one pipeline: it pushes that pipeline's inputs, spawns the task, streams its logs, and records its outputs as artifacts in the deployment. It does not resolve dependencies and never edits the deployment's targets, which makes it the manual counterpart to `weft do` — start a deployment (even an empty one), spawn each pipeline by hand, and move artifacts around with `weft artifact`. Spawning into a deployment that does not exist is an error.
 
 ### Resuming Failed Deployments
 
@@ -402,13 +419,41 @@ Terminate a running pipeline instance on a remote:
 weft kill --remote prod-server --deployment 2EWbDg3L --pipeline server-run
 ```
 
+### Artifacts
+
+Artifacts live per deployment under `.weft/<deployment_id>/artifacts/<name>/`. Push one to a remote, pull one back, ask where it lives, or register one you placed yourself:
+
+```bash
+# Push the 'bin' artifact of the latest deployment to 'local'
+weft artifact push bin
+
+# Push to a named remote
+weft artifact push bin --remote prod-server
+
+# Pull that artifact back, replacing the local copy
+weft artifact pull bin --remote prod-server
+
+# Print where the 'bin' artifact lives
+weft artifact path bin
+
+# Place a directory yourself and register it in one step
+mv ./dist "$(weft artifact register bin)"
+[[ -d "$(weft artifact path bin)" ]] && echo present
+
+# Use a specific deployment (id or unique prefix) instead of the latest
+weft artifact push bin --deployment 2EWbDg3L
+weft artifact path bin --deployment 2EWbDg3L
+```
+
+Pushing an artifact the remote already holds is a no-op. `weft artifact path` only prints where an artifact belongs, and `weft artifact register` only records it in the deployment — with `--remote` (default `local`) and the pipeline that produces that output — then prints the same path, so it composes with shell workflows such as `mv ./dist "$(weft artifact register bin)"`. Weft itself never moves or copies artifact directories, and a recorded artifact is what makes `weft do` treat the pipeline it stands for as done.
+
 ### Resource Monitoring
 
 Weft includes a real-time terminal monitor that connects to the daemon's metrics endpoint over the encrypted wire:
 
 ```bash
-weft monitor
-weft monitor prod-server
+weft remote monitor
+weft remote monitor prod-server
 ```
 
 The monitor reports host CPU utilization with variance indicators, RAM usage, network throughput (RX / TX), disk bandwidth, and active task units with per-process CPU time and memory consumption.

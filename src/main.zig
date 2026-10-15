@@ -11,6 +11,8 @@ const cmd_kill = @import("client/cmd_kill.zig");
 const cmd_logs = @import("client/cmd_logs.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
 const cmd_remote = @import("client/cmd_remote.zig");
+const cmd_task = @import("client/cmd_task.zig");
+const cmd_transfer = @import("client/cmd_transfer.zig");
 const Deployment = @import("client/Deployment.zig");
 const cmd_do = @import("client/do.zig");
 const Project = @import("client/Project.zig");
@@ -90,12 +92,63 @@ const Argz = union(enum) {
         deployment: ?[]const u8 = null,
         remote: ?[]const u8 = null,
     },
-    monitor: struct {
-        pub const doc = "Monitor a remote";
-        pub const doc_remote = "The remote name to monitor or it's ip:port tuple. Follows 'local' by default.";
+    artifact: union(enum) {
+        pub const doc = "Transfer artifacts to and from remotes";
 
-        remote: []const u8 = "local",
+        pull: struct {
+            pub const doc = "Fetch the specified artifact";
+            pub const doc_name = "The artifact name to pull from remote";
+            pub const doc_remote = "The remote to pull from, defaults to 'local'";
+            pub const doc_deployment = "The deployment id to pull artifact from, default to latest deployment";
+
+            name: []const u8,
+            remote: []const u8 = "local",
+            deployment: ?[]const u8 = null,
+        },
+        push: struct {
+            pub const doc = "Push the specified artifact";
+            pub const doc_name = "The artifact/source name to push to remote";
+            pub const doc_remote = "The remote name to push to, defaults to 'local'";
+            pub const doc_deployment = "The deployment specifier, defaults to the latest deployment.";
+
+            name: []const u8,
+            remote: []const u8 = "local",
+            deployment: ?[]const u8 = null,
+        },
+        register: struct {
+            pub const doc = "Register an artifact in a deployment and print its expected path";
+            pub const doc_name = "The artifact name to register";
+            pub const doc_remote = "The remote to record as holding the artifact, defaults to 'local'";
+            pub const doc_deployment = "The deployment to register the artifact in, defaults to the latest deployment";
+
+            name: []const u8,
+            remote: []const u8 = "local",
+            deployment: ?[]const u8 = null,
+        },
+        path: struct {
+            pub const doc = "Print the expected path of an artifact in a deployment";
+            pub const doc_name = "The artifact name";
+            pub const doc_deployment = "The deployment the artifact belongs to, defaults to the latest deployment";
+
+            name: []const u8,
+            deployment: ?[]const u8 = null,
+        },
     },
+    task: union(enum) {
+        pub const doc = "Perform actions on a task";
+
+        spawn: struct {
+            pub const doc = "Spawn a single pipeline in a deployment without touching its targets";
+            pub const doc_pipeline = "The pipeline to spawn";
+            pub const doc_remote = "The remote to spawn the pipeline on. Defaults to first matching remote if null";
+            pub const doc_deployment = "The deployment matcher for the deployment to spawn the pipeline in, default to the latest deployment";
+
+            pipeline: []const u8,
+            remote: ?[]const u8 = null,
+            deployment: ?[]const u8 = null,
+        },
+    },
+
     remote: union(enum) {
         pub const doc = "Perform actions on a remote";
 
@@ -117,6 +170,12 @@ const Argz = union(enum) {
             ssh: []const u8,
             user: ?[]const u8 = null,
             extra: [][]const u8 = &.{},
+        },
+        monitor: struct {
+            pub const doc = "Monitor a remote";
+            pub const doc_remote = "The remote name to monitor or it's ip:port tuple. Follows 'local' by default.";
+
+            remote: []const u8 = "local",
         },
     },
     kill: struct {
@@ -215,10 +274,6 @@ pub fn main(init: std.process.Init) !void {
             try cmd_check.run(gpa, init.io, project);
         },
         .do => |cmd| {
-            if (cmd.targets.len == 0) {
-                log.err("No targets specified", .{});
-                return error.Usage;
-            }
             const targets: []Step = try gpa.alloc(Step, cmd.targets.len);
             defer gpa.free(targets);
             var last_mode: []const u8 = "default";
@@ -296,31 +351,72 @@ pub fn main(init: std.process.Init) !void {
                 cmd.remote,
             );
         },
-        .monitor => |cmd| {
-            const remote_name = cmd.remote;
+        .artifact => |cmd| {
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            if (std.mem.eql(u8, remote_name, "local")) {
-                return cmd_monitor.run(gpa, init.io, &term, &installation, Weft.remote_local);
-            } else if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
-                _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
-                    log.err("Invalid ip address: {any}", .{e});
-                    return error.InvalidIpAddress;
-                };
-                return cmd_monitor.run(gpa, init.io, &term, &installation, .{ "remote", remote_name, "" });
-            } else {
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open_leaky(alloc, init.io, project_dir);
+
+            return switch (cmd) {
+                .pull => |c| cmd_transfer.run(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    &installation,
+                    .pull,
+                    c.name,
+                    c.remote,
+                    c.deployment,
+                ),
+                .push => |c| cmd_transfer.run(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    &installation,
+                    .push,
+                    c.name,
+                    c.remote,
+                    c.deployment,
+                ),
+                .register => |c| cmd_transfer.register(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    c.name,
+                    c.remote,
+                    c.deployment,
+                ),
+                .path => |c| cmd_transfer.path(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    c.name,
+                    c.deployment,
+                ),
+            };
+        },
+        .task => |cmd| switch (cmd) {
+            .spawn => |c| {
+                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
                 const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
                 defer project_dir.close(init.io);
                 const project = try Project.open_leaky(alloc, init.io, project_dir);
-                const config = try project.get_config_leaky(alloc, init.io);
-                const remote: Weft.Remote = for (config.remotes) |r| {
-                    if (std.mem.eql(u8, r.@"0", remote_name))
-                        break r;
-                } else {
-                    log.err("Remote '{s}' not found", .{remote_name});
-                    return error.RemoteNotFound;
-                };
-                return cmd_monitor.run(gpa, init.io, &term, &installation, remote);
-            }
+
+                return cmd_task.spawn(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    &installation,
+                    c.pipeline,
+                    c.remote,
+                    c.deployment,
+                );
+            },
         },
         .remote => |r| switch (r) {
             .register => |reg| {
@@ -343,6 +439,32 @@ pub fn main(init: std.process.Init) !void {
                     inst_arg.user,
                     inst_arg.extra,
                 );
+            },
+            .monitor => |cmd| {
+                const remote_name = cmd.remote;
+                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+                if (std.mem.eql(u8, remote_name, "local")) {
+                    return cmd_monitor.run(gpa, init.io, &term, &installation, Weft.remote_local);
+                } else if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
+                    _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
+                        log.err("Invalid ip address: {any}", .{e});
+                        return error.InvalidIpAddress;
+                    };
+                    return cmd_monitor.run(gpa, init.io, &term, &installation, .{ "remote", remote_name, "" });
+                } else {
+                    const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+                    defer project_dir.close(init.io);
+                    const project = try Project.open_leaky(alloc, init.io, project_dir);
+                    const config = try project.get_config_leaky(alloc, init.io);
+                    const remote: Weft.Remote = for (config.remotes) |rem| {
+                        if (std.mem.eql(u8, rem.@"0", remote_name))
+                            break rem;
+                    } else {
+                        log.err("Remote '{s}' not found", .{remote_name});
+                        return error.RemoteNotFound;
+                    };
+                    return cmd_monitor.run(gpa, init.io, &term, &installation, remote);
+                }
             },
         },
         .key => {

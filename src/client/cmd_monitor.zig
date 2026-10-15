@@ -140,8 +140,6 @@ pub fn run(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    l.info("connecting to remote '{s}' at {s}...", .{ remote.@"0", remote.@"1" });
-
     var maybe_client: ?*Client = try connect(
         gpa,
         io,
@@ -151,8 +149,6 @@ pub fn run(
     );
     defer if (maybe_client) |c|
         c.destroy(gpa, io);
-
-    l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{remote.@"0"});
 
     var frame_arena: std.heap.ArenaAllocator = .init(gpa);
     defer frame_arena.deinit();
