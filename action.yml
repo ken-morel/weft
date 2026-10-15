@@ -2,9 +2,9 @@ name: "Setup Weft"
 description: "Downloads and installs the pre-built Weft binary"
 inputs:
   version:
-    description: "Release tag to install (e.g. latest or a specific release tag)"
+    description: "Release tag to install (e.g. nightly or a specific release tag like v0.1.0)"
     required: false
-    default: "latest"
+    default: "nightly"
 runs:
   using: "composite"
   steps:
