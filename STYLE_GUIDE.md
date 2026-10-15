@@ -203,3 +203,6 @@ This rules applies in other places too, prefare using the control flow as an exp
 ## Use `return try` when returning from a call which can fail
 
 
+## Do not use `.?`
+
+Use `orelse unreachable`, `catch unreachable`. And where possible don't use any of those at all please.

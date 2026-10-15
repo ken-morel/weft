@@ -58,7 +58,7 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
         defer gpa.free(store_path);
 
         if (cwd.access(io, store_path, .{})) |_| {
-            const popped = backlog.pop().?;
+            const popped = backlog.pop() orelse unreachable;
             gpa.free(popped);
             continue;
         } else |err| if (err != error.FileNotFound)
@@ -119,7 +119,7 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             l.info("nix::store installed {s}", .{store_basename});
         }
 
-        const popped = backlog.pop().?;
+        const popped = backlog.pop() orelse unreachable;
         gpa.free(popped);
     }
 

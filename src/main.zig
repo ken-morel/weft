@@ -92,9 +92,9 @@ const Argz = union(enum) {
     },
     monitor: struct {
         pub const doc = "Monitor a remote";
-        pub const doc_spec = "The remote to monitor. Follows 'local' by default ";
+        pub const doc_remote = "The remote name to monitor or it's ip:port tuple. Follows 'local' by default.";
 
-        spec: []const u8 = "local",
+        remote: []const u8 = "local",
     },
     remote: union(enum) {
         pub const doc = "Perform actions on a remote";
@@ -297,15 +297,29 @@ pub fn main(init: std.process.Init) !void {
             );
         },
         .monitor => |cmd| {
+            const remote_name = cmd.remote;
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            if (std.mem.eql(u8, cmd.spec, "local")) {
-                return cmd_monitor.run(gpa, init.io, &term, &installation, &.{Weft.remote_local}, cmd.spec);
+            if (std.mem.eql(u8, remote_name, "local")) {
+                return cmd_monitor.run(gpa, init.io, &term, &installation, Weft.remote_local);
+            } else if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
+                _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
+                    log.err("Invalid ip address: {any}", .{e});
+                    return error.InvalidIpAddress;
+                };
+                return cmd_monitor.run(gpa, init.io, &term, &installation, .{ "remote", remote_name, "" });
             } else {
                 const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
                 defer project_dir.close(init.io);
                 const project = try Project.open_leaky(alloc, init.io, project_dir);
                 const config = try project.get_config_leaky(alloc, init.io);
-                return cmd_monitor.run(gpa, init.io, &term, &installation, try config.remotes_with_local_leaky(alloc), cmd.spec);
+                const remote: Weft.Remote = for (config.remotes) |r| {
+                    if (std.mem.eql(u8, r.@"0", remote_name))
+                        break r;
+                } else {
+                    log.err("Remote '{s}' not found", .{remote_name});
+                    return error.RemoteNotFound;
+                };
+                return cmd_monitor.run(gpa, init.io, &term, &installation, remote);
             }
         },
         .remote => |r| switch (r) {

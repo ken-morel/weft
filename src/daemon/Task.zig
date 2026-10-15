@@ -132,7 +132,7 @@ pub const TaskSiblingsIterator = struct {
 pub fn siblings(self: *const @This(), gpa: std.mem.Allocator, io: std.Io, skip_self: bool) !TaskSiblingsIterator {
     const run_dir = try self.run_dir_path(gpa);
     defer gpa.free(run_dir);
-    const pipeline_dir = std.fs.path.dirname(run_dir).?;
+    const pipeline_dir = std.fs.path.dirname(run_dir) orelse unreachable;
     const dir = std.Io.Dir.cwd().openDir(io, pipeline_dir, .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
             return .{

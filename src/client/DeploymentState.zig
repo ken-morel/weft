@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const Weft = @import("../domain/Weft.zig");
-const Project = @import("Project.zig");
 const Remote = Weft.Remote;
+const Project = @import("Project.zig");
 
 pub const Step = struct {
     pub const Status = enum {
@@ -183,7 +183,7 @@ pub fn update_usage(self: *@This(), io: std.Io, remote_name: []const u8, pipelin
             const dt_ns = now.nanoseconds - last_t.nanoseconds;
             if (dt_ns > 50_000_000 and s.prev_cpu_usec != null) {
                 const dt_usec = @divTrunc(dt_ns, 1000);
-                const delta_usec = cpu_usec -| s.prev_cpu_usec.?;
+                const delta_usec = cpu_usec -| (s.prev_cpu_usec orelse unreachable);
                 s.cpu_pct = @as(f32, @floatFromInt(delta_usec)) * 100.0 / @as(f32, @floatFromInt(dt_usec));
             }
         }

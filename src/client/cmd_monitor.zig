@@ -132,8 +132,7 @@ pub fn run(
     io: std.Io,
     term: *Term,
     inst: *const ClientInstall,
-    remotes: []const Remote,
-    spec: ?[]const u8,
+    remote: Remote,
 ) !void {
     const l = log(.monitor);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -141,33 +140,19 @@ pub fn run(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    if (remotes.len == 0) {
-        l.err("no remotes configured in weft/weft.zon.", .{});
-        return error.NoRemotes;
-    }
-
-    const target_remote: *const Remote = if (spec) |name| remote_find: {
-        for (remotes) |*r|
-            if (std.mem.eql(u8, r.@"0", name))
-                break :remote_find r;
-
-        l.err("remote '{s}' not found in weft/weft.zon", .{name});
-        return error.InvalidRemote;
-    } else &remotes[0];
-
-    l.info("connecting to remote '{s}' at {s}...", .{ target_remote.@"0", target_remote.@"1" });
+    l.info("connecting to remote '{s}' at {s}...", .{ remote.@"0", remote.@"1" });
 
     var maybe_client: ?*Client = try connect(
         gpa,
         io,
-        target_remote.*,
+        remote,
         inst.identity,
         .{ .nanoseconds = 0 },
     );
     defer if (maybe_client) |c|
         c.destroy(gpa, io);
 
-    l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{target_remote.@"0"});
+    l.info("connected. Monitoring '{s}' (Ctrl+C to quit)...", .{remote.@"0"});
 
     var frame_arena: std.heap.ArenaAllocator = .init(gpa);
     defer frame_arena.deinit();
@@ -213,7 +198,7 @@ pub fn run(
             maybe_client = connect(
                 gpa,
                 io,
-                target_remote.*,
+                remote,
                 inst.identity,
                 from_ts,
             ) catch null;
@@ -264,7 +249,7 @@ pub fn run(
 
                 if (term.is_tty) term.clear_line();
                 term.styled(.bold, "remote: ", .{});
-                term.styled(.cyan, "{s}", .{target_remote.@"0"});
+                term.styled(.cyan, "{s}", .{remote.@"0"});
                 term.styled(.dim, "   cpu: ", .{});
                 term.print("{s} ({d}@{d}MHz)", .{ stats.cpu.model, stats.cpu.cores, stats.cpu.freq });
                 term.styled(.dim, "   ram: ", .{});
@@ -569,7 +554,7 @@ pub fn run(
 
                 if (stats.services.len == 0) {
                     term.clear_line();
-                    term.styled_ln(.dim, "  (no active tasks on {s})", .{target_remote.@"0"});
+                    term.styled_ln(.dim, "  (no active tasks on {s})", .{remote.@"0"});
                     lines_count += 1;
                 } else {
                     for (stats.services) |svc| {

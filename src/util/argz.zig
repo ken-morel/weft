@@ -331,6 +331,9 @@ pub const SocketAddr = struct {
             .port = null,
         };
     }
+    pub fn ip_address(self: @This()) !std.Io.net.IpAddress {
+        return try .parse(self.host, self.port orelse 0);
+    }
 };
 
 pub const ExistingPath = struct {

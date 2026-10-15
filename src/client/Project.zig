@@ -122,7 +122,7 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
     if (count > 1)
         return error.AmbiguousDeploymentId;
 
-    return match.?;
+    return match orelse unreachable;
 }
 
 pub fn load_deployment_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {

@@ -224,7 +224,7 @@ pub fn has_mode(self: @This(), mode: []const u8) bool {
 
 pub fn strip_mode(mode: ?[]const u8, name: []const u8) ?[]const u8 {
     return if (std.mem.findScalar(u8, name, ':')) |sep|
-        if (mode != null and !std.mem.eql(u8, mode.?, name[0..sep]))
+        if (mode != null and !std.mem.eql(u8, mode orelse unreachable, name[0..sep]))
             null
         else if (sep == name.len - 1)
             name[0..sep]
