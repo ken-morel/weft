@@ -6,6 +6,10 @@ While there are already many tools built for machines with 512MB+ RAM, Weft is s
 
 Weft is currently in active development. Breaking changes may occur frequently.
 
+## Command-line arguments
+
+Weft parses its CLI with the in-tree `argz` library (`src/util/argz.zig`): every positional argument can also be given as a keyword under its own name, and every keyword can be given positionally. `weft kill prod-server 2EWbDg3L server-run` and `weft kill --remote prod-server --deployment 2EWbDg3L --pipeline server-run` are the same command. Positionals fill the fields in their declared order, so the keyword form is there for when you want to skip one. The examples below prefer positionals.
+
 ## Concepts
 
 - **Workspace**: A project containing its resources, configuration, and pipelines. Workspaces are isolated from one another on remotes; each receives its own run directory, artifacts, cache, and home directory under `/var/lib/weft/`. A single remote host can run tasks for multiple workspaces concurrently.
@@ -63,7 +67,7 @@ sudo weft daemon install
 
 The installer provisions the unprivileged `weft-runner` system user via `systemd-sysusers`, creates `/etc/weft/config.zon` with restrictive permissions (`0600`), creates task directory hierarchies under `/var/lib/weft/`, installs the `weftd.service` systemd unit, and immediately starts the daemon.
 
-To run tasks under an existing user instead of creating `weft-runner`, specify the user via `--user <username>` or as a positional argument (e.g. `sudo weft daemon install --user myuser` or `sudo weft daemon install myuser`).
+To run tasks under an existing user instead of creating `weft-runner`, pass the user as a positional argument or via `--user <username>` (e.g. `sudo weft daemon install myuser`).
 
 After installing the daemon, register your client public key so it can run tasks:
 
@@ -406,9 +410,9 @@ Weft resumes execution from the failed pipeline without repeating completed task
 Follow or retrieve logs for active or past pipeline runs:
 
 ```bash
-weft logs --pipeline server-run
-weft logs --pipeline server-run --remote prod-server
-weft logs --pipeline server-run --deployment 2EWbDg3L
+weft logs server-run
+weft logs server-run --deployment 2EWbDg3L
+weft logs server-run 2EWbDg3L prod-server
 ```
 
 ### Stopping Tasks
@@ -416,7 +420,7 @@ weft logs --pipeline server-run --deployment 2EWbDg3L
 Terminate a running pipeline instance on a remote:
 
 ```bash
-weft kill --remote prod-server --deployment 2EWbDg3L --pipeline server-run
+weft kill prod-server 2EWbDg3L server-run
 ```
 
 ### Artifacts
@@ -428,10 +432,10 @@ Artifacts live per deployment under `.weft/<deployment_id>/artifacts/<name>/`. P
 weft artifact push bin
 
 # Push to a named remote
-weft artifact push bin --remote prod-server
+weft artifact push bin prod-server
 
 # Pull that artifact back, replacing the local copy
-weft artifact pull bin --remote prod-server
+weft artifact pull bin prod-server
 
 # Print where the 'bin' artifact lives
 weft artifact path bin
