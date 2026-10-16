@@ -10,7 +10,6 @@
 
 ## v0.1.0
 
-### Added
 - Weft daemon, running pipelines on remotes using systemd. 
 - Weft client, in the same binary and querying the remote.
 - Initial weft.zon schema version, firuging remotes, pipelines, environments, sources.

@@ -1,0 +1,15 @@
+[book]
+title = "Weft Documentation"
+authors = ["Engon Ken Morel"]
+language = "en"
+
+[preprocessor.embedify]
+optional = true
+footer.enable = true
+footer.message = "Copyright © 2026 • Created with ❤  by [Engon Ken Morel](https://engon.cm/)"
+
+[output.html]
+git-repository-url = "https://github.com/ken-morel/weft"
+git-repository-icon = "fab-github"
+edit-url-template = "https://github.com/ken-morel/weft/edit/main/{path}"
+
