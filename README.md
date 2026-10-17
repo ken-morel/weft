@@ -15,7 +15,7 @@ There are many deployment tools built for large servers, but Weft is specificall
 - **Client**: The `weft` CLI running on your development machine or CI. It computes dependency DAGs, packages sources, syncs artifacts, and streams logs. Only the client holds the full picture of the deployment; remotes manage individual tasks.
 - **Deployment**: A single execution run identified by an 8-character ID (e.g. `2EWbDg3L`), tracking all target pipelines and artifacts.
 - **Pipeline**: A declarative step in `weft/weft.zon` associated with a script, required inputs, outputs, environment variables, resource limits, and caching policies.
-- **Task**: An active running instance of a pipeline dispatched to a remote and supervised by a detached `weft daemon shim` process.
+- **Task**: An active running instance of a pipeline dispatched to a remote and supervised directly by `weftd` inside an isolated cgroup and namespace sandbox.
 - **Artifact**: A directory tree produced by a pipeline. Source directories are packaged as source artifacts prefixed with `-` (e.g. `-backend` or `-`).
 - **Modes**: Named configuration overlays (e.g. `default`, `prod`, `dev`) that modify environment variables, packages, or targets without duplicating pipelines.
 

@@ -26,7 +26,7 @@
   - [Daemon Configuration (`/etc/weft/config.zon`)](daemon/config.md)
   - [Host Filesystem Layout (`/var/lib/weft`)](daemon/filesystem.md)
   - [Multi-Workspace UID Isolation](daemon/workspace-isolation.md)
-  - [The Task Shim (`weft daemon shim`)](daemon/shim.md)
+  - [The Task Runner (`Runner.zig`)](daemon/runner.md)
   - [Sandbox & Linux Namespaces](daemon/sandbox.md)
   - [Cgroups v2 & Rlimit Fallbacks](daemon/cgroups.md)
 

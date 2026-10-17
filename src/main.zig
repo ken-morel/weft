@@ -32,6 +32,34 @@ pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
 };
 
+pub fn parse_target(name: []const u8, mode: []const u8) !Step {
+    var m = mode;
+    const mode_sep = std.mem.findScalar(u8, name, ':');
+    if (mode_sep) |sep|
+        m = name[0..sep];
+    const slice = if (mode_sep) |sep|
+        name[sep + 1 ..]
+    else
+        name;
+
+    const remote_sep = std.mem.findScalar(u8, slice, '.');
+    const remote = if (remote_sep) |sep|
+        slice[0..sep]
+    else
+        "local";
+    const pipeline = if (remote_sep) |sep|
+        slice[sep + 1 ..]
+    else
+        slice;
+    if (!Step.is_valid_name(m) or !Step.is_valid_name(remote) or !Step.is_valid_name(pipeline))
+        return error.InvalidStep;
+    return .{
+        .mode = m,
+        .remote = remote,
+        .pipeline = pipeline,
+    };
+}
+
 const Argz = union(enum) {
     pub const doc =
         \\Weft, a deployment tool
@@ -139,12 +167,10 @@ const Argz = union(enum) {
 
         spawn: struct {
             pub const doc = "Spawn a single pipeline in a deployment without touching its targets";
-            pub const doc_pipeline = "The pipeline to spawn";
-            pub const doc_remote = "The remote to spawn the pipeline on. Defaults to first matching remote if null";
+            pub const doc_step = "The target spec to spawn can be <pipeline>, <remote>.<pipeline>, or <mode>:<remote>.<pipeline>";
             pub const doc_deployment = "The deployment matcher for the deployment to spawn the pipeline in, default to the latest deployment";
 
-            pipeline: []const u8,
-            remote: ?[]const u8 = null,
+            step: []const u8,
             deployment: ?[]const u8 = null,
         },
     },
@@ -278,31 +304,8 @@ pub fn main(init: std.process.Init) !void {
             defer gpa.free(targets);
             var last_mode: []const u8 = "default";
             for (cmd.targets, targets) |name, *tgt| {
-                const mode_sep = std.mem.findScalar(u8, name, ':');
-                if (mode_sep) |sep|
-                    last_mode = name[0..sep];
-                const slice = if (mode_sep) |sep|
-                    name[sep + 1 ..]
-                else
-                    name;
-
-                const remote_sep = std.mem.findScalar(u8, slice, '.');
-                const remote = if (remote_sep) |sep|
-                    slice[0..sep]
-                else
-                    "local";
-                const pipeline = if (remote_sep) |sep|
-                    slice[sep + 1 ..]
-                else
-                    slice;
-                if (!Step.is_valid_name(last_mode) or !Step.is_valid_name(remote) or !Step.is_valid_name(pipeline))
-                    return error.InvalidStep;
-
-                tgt.* = .{
-                    .mode = last_mode,
-                    .remote = remote,
-                    .pipeline = pipeline,
-                };
+                tgt.* = try parse_target(name, last_mode);
+                last_mode = tgt.mode;
             }
 
             const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
@@ -406,14 +409,19 @@ pub fn main(init: std.process.Init) !void {
                 defer project_dir.close(init.io);
                 const project = try Project.open_leaky(alloc, init.io, project_dir);
 
+                const target = parse_target(c.step, "default") catch |e| {
+                    log.err("Invalid target: {any}: '{s}':", .{ e, c.step });
+                    return e;
+                };
+
                 return cmd_task.spawn(
                     gpa,
                     init.io,
                     &term,
                     project,
                     &installation,
-                    c.pipeline,
-                    c.remote,
+                    target,
+
                     c.deployment,
                 );
             },
