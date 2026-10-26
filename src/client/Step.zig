@@ -23,3 +23,31 @@ pub fn eq(a: @This(), b: @This()) bool {
     else
         return std.mem.eql(u8, a.remote, b.remote);
 }
+
+pub fn parse_target(name: []const u8, mode: []const u8) !@This() {
+    var m = mode;
+    const mode_sep = std.mem.findScalar(u8, name, ':');
+    if (mode_sep) |sep|
+        m = name[0..sep];
+    const slice = if (mode_sep) |sep|
+        name[sep + 1 ..]
+    else
+        name;
+
+    const remote_sep = std.mem.findScalar(u8, slice, '.');
+    const remote = if (remote_sep) |sep|
+        slice[0..sep]
+    else
+        "local";
+    const pipeline = if (remote_sep) |sep|
+        slice[sep + 1 ..]
+    else
+        slice;
+    if (!is_valid_name(m) or !is_valid_name(remote) or !is_valid_name(pipeline))
+        return error.InvalidStep;
+    return .{
+        .mode = m,
+        .remote = remote,
+        .pipeline = pipeline,
+    };
+}

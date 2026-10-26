@@ -2,12 +2,11 @@ const std = @import("std");
 
 const proto = @import("../domain/proto.zig");
 const Weft = @import("../domain/Weft.zig");
+const Remote = Weft.Remote;
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
 const Pressor = @import("../wire/Pressor.zig");
 const DeploymentState = @import("DeploymentState.zig");
-
-const Remote = Weft.Remote;
 
 pub fn pull_dir(
     gpa: std.mem.Allocator,

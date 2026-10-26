@@ -14,5 +14,5 @@ runs:
         echo "Installing Weft (${{ inputs.version }})..."
         curl -fsSL "https://github.com/ken-morel/weft/releases/download/${{ inputs.version }}/weft-linux-x86_64.tar.gz" | sudo tar -xz -C /usr/local/bin
         sudo chmod +x /usr/local/bin/weft
-        weft --help > /dev/null
+        weft version
         echo "Weft installed successfully to /usr/local/bin/weft"

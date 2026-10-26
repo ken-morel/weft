@@ -15,7 +15,7 @@ raw: u64,
 
 pub fn now(io: std.Io) !@This() {
     const wall_ms = @as(u64, @intCast(std.Io.Clock.now(.real, io).toMilliseconds()));
-    const ms_since_epoch = if (wall_ms > epoch_ms) wall_ms - epoch_ms else 0;
+    const ms_since_epoch = wall_ms -| epoch_ms;
     const ticks = ms_since_epoch / 100;
     var salt: [2]u8 = undefined;
     try io.randomSecure(&salt);

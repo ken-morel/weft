@@ -3,9 +3,11 @@ const Ed25519 = std.crypto.sign.Ed25519;
 pub const seed_length = Ed25519.KeyPair.seed_length;
 pub const public_length = Ed25519.PublicKey.encoded_length;
 pub const signature_length = Ed25519.Signature.encoded_length;
+const builtin = @import("builtin");
 
 const ClientInstall = @import("../client/ClientInstall.zig");
-const read_only_user_permissions = ClientInstall.read_only_user_permissions;
+const paths = @import("../domain/paths.zig");
+const read_only_user_permissions = paths.read_only_user_permissions;
 
 seed: [seed_length]u8,
 key_pair: Ed25519.KeyPair,
@@ -43,10 +45,11 @@ pub fn read(io: std.Io, dir: std.Io.Dir, filename: []const u8) !@This() {
     defer file.close(io);
 
     const stat = try file.stat(io);
-    if ((stat.permissions.toMode() & 0o777) != read_only_user_permissions.toMode())
-        return error.InsecurePermissions
-    else if (stat.size != seed_length)
-        return error.InvalidKeyFile;
+    if (builtin.os.tag != .windows)
+        if ((stat.permissions.toMode() & 0o777) != read_only_user_permissions.toMode())
+            return error.InsecurePermissions
+        else if (stat.size != seed_length)
+            return error.InvalidKeyFile;
 
     var seed: [seed_length]u8 = undefined;
     _ = try file.readPositionalAll(io, &seed, 0);

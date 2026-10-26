@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
 
     const options = b.addOptions();
     options.addOption([]const u8, "version_str", version_str);
+    options.addOption([]const u8, "app_id", "cm.engon.weft");
     exe.root_module.addImport("build", options.createModule());
 
     const run_step = b.step("run", "Run the app");

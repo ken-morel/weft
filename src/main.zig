@@ -6,13 +6,14 @@ const builtin = @import("builtin");
 const build = @import("build");
 
 const ClientInstall = @import("client/ClientInstall.zig");
+const cmd_artifact = @import("client/cmd_artifact.zig");
+const cmd_cache = @import("client/cmd_cache.zig");
 const cmd_check = @import("client/cmd_check.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
 const cmd_logs = @import("client/cmd_logs.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
 const cmd_remote = @import("client/cmd_remote.zig");
 const cmd_task = @import("client/cmd_task.zig");
-const cmd_transfer = @import("client/cmd_transfer.zig");
 const Deployment = @import("client/Deployment.zig");
 const cmd_do = @import("client/do.zig");
 const Project = @import("client/Project.zig");
@@ -27,44 +28,20 @@ const Term = @import("domain/Term.zig");
 const Weft = @import("domain/Weft.zig");
 const argz = @import("util/argz.zig");
 const Monitor = @import("util/Monitor.zig");
+const sizes = @import("util/sizes.zig");
+
+const include_daemon = builtin.target.os.tag == .linux;
 
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
 };
 
-pub fn parse_target(name: []const u8, mode: []const u8) !Step {
-    var m = mode;
-    const mode_sep = std.mem.findScalar(u8, name, ':');
-    if (mode_sep) |sep|
-        m = name[0..sep];
-    const slice = if (mode_sep) |sep|
-        name[sep + 1 ..]
-    else
-        name;
-
-    const remote_sep = std.mem.findScalar(u8, slice, '.');
-    const remote = if (remote_sep) |sep|
-        slice[0..sep]
-    else
-        "local";
-    const pipeline = if (remote_sep) |sep|
-        slice[sep + 1 ..]
-    else
-        slice;
-    if (!Step.is_valid_name(m) or !Step.is_valid_name(remote) or !Step.is_valid_name(pipeline))
-        return error.InvalidStep;
-    return .{
-        .mode = m,
-        .remote = remote,
-        .pipeline = pipeline,
-    };
-}
-
 const Argz = union(enum) {
     pub const doc =
         \\Weft, a deployment tool
     ;
-    daemon: union(enum) {
+
+    daemon: if (include_daemon) union(enum) {
         pub const doc = "Perform actions on the local daemon";
         install: struct {
             pub const doc = "Install the weft daemon locally, requires superuser priviledges";
@@ -86,7 +63,10 @@ const Argz = union(enum) {
             },
             reload_keys: struct {},
         },
+    } else struct {
+        const hidden = true;
     },
+
     version: struct {
         pub const doc = "Display information about the weft build";
     },
@@ -162,6 +142,33 @@ const Argz = union(enum) {
             deployment: ?[]const u8 = null,
         },
     },
+    cache: union(enum) {
+        pub const doc = "Interact with workspace caches on a remote";
+        pull: struct {
+            const doc = "Pull one or more caches from a remote";
+            const doc_remote = "The remote to pull the cache from";
+            const doc_cache = "The name of the cache to pull from the remote. Ommit to pull all caches stored on the remote for this workspace";
+
+            remote: []const u8,
+            cache: ?[]const u8 = null,
+        },
+        push: struct {
+            const doc = "Push one or more caches from a remote";
+            const doc_remote = "The remote to push the cache to";
+            const doc_cache = "The name of the cache to push to the remote. Ommiting to push all caches in $(weft cache path $remote) to the remote for this workspace";
+
+            remote: []const u8,
+            cache: ?[]const u8 = null,
+        },
+        path: struct {
+            const doc = "Get the path where a cache would be stored";
+            const doc_remote = "The remote name";
+            const doc_cache = "The cache name, ommiting this gives the root path for all caches";
+
+            remote: []const u8,
+            cache: ?[]const u8 = null,
+        },
+    },
     task: union(enum) {
         pub const doc = "Perform actions on a task";
 
@@ -172,6 +179,16 @@ const Argz = union(enum) {
 
             step: []const u8,
             deployment: ?[]const u8 = null,
+        },
+        kill: struct {
+            pub const doc = "Kill a deployment or a specific pipeline in a deployment";
+            pub const doc_remote = "The remote where to kill the task";
+            pub const doc_deployment = "The deployment id";
+            pub const doc_pipeline = "The pipeline name to kill";
+
+            remote: []const u8,
+            deployment: []const u8,
+            pipeline: []const u8,
         },
     },
 
@@ -199,21 +216,12 @@ const Argz = union(enum) {
         },
         monitor: struct {
             pub const doc = "Monitor a remote";
-            pub const doc_remote = "The remote name to monitor or it's ip:port tuple. Follows 'local' by default.";
+            pub const doc_remote = "The remote name to monitor or it's 'ip:[port]' tuple. Follows 'local' by default.";
 
             remote: []const u8 = "local",
         },
     },
-    kill: struct {
-        pub const doc = "Kill a deployment or a specific pipeline in a deployment";
-        pub const doc_remote = "The remote where to kill the task";
-        pub const doc_deployment = "The deployment id";
-        pub const doc_pipeline = "The pipeline name to kill";
 
-        remote: []const u8,
-        deployment: []const u8,
-        pipeline: []const u8,
-    },
     nix: union(enum) {
         pub const doc = "Perform nix operations";
         show: struct {
@@ -260,7 +268,7 @@ pub fn main(init: std.process.Init) !void {
             term.println("{s}", .{version_str});
         },
 
-        .daemon => |d| switch (d) {
+        .daemon => |d| if (include_daemon) switch (d) {
             .install => |i| {
                 try DaemonInstall.install(gpa, init.io, i.user);
             },
@@ -304,7 +312,7 @@ pub fn main(init: std.process.Init) !void {
             defer gpa.free(targets);
             var last_mode: []const u8 = "default";
             for (cmd.targets, targets) |name, *tgt| {
-                tgt.* = try parse_target(name, last_mode);
+                tgt.* = try .parse_target(name, last_mode);
                 last_mode = tgt.mode;
             }
 
@@ -361,7 +369,7 @@ pub fn main(init: std.process.Init) !void {
             const project = try Project.open_leaky(alloc, init.io, project_dir);
 
             return switch (cmd) {
-                .pull => |c| cmd_transfer.run(
+                .pull => |c| cmd_artifact.run(
                     gpa,
                     init.io,
                     &term,
@@ -372,7 +380,7 @@ pub fn main(init: std.process.Init) !void {
                     c.remote,
                     c.deployment,
                 ),
-                .push => |c| cmd_transfer.run(
+                .push => |c| cmd_artifact.run(
                     gpa,
                     init.io,
                     &term,
@@ -383,7 +391,7 @@ pub fn main(init: std.process.Init) !void {
                     c.remote,
                     c.deployment,
                 ),
-                .register => |c| cmd_transfer.register(
+                .register => |c| cmd_artifact.register(
                     gpa,
                     init.io,
                     &term,
@@ -392,7 +400,7 @@ pub fn main(init: std.process.Init) !void {
                     c.remote,
                     c.deployment,
                 ),
-                .path => |c| cmd_transfer.path(
+                .path => |c| cmd_artifact.path(
                     gpa,
                     init.io,
                     &term,
@@ -402,15 +410,75 @@ pub fn main(init: std.process.Init) !void {
                 ),
             };
         },
+        .cache => |cmd| {
+            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+            defer project_dir.close(init.io);
+            const project = try Project.open_leaky(alloc, init.io, project_dir);
+            //TODO: Find a better way to non-repeat, maybe forcing it to be one type and represent all of
+            // them in the same way
+            const config = try project.get_config_leaky(alloc, init.io);
+            const cache = switch (cmd) {
+                .pull => |c| c.cache,
+                .push => |c| c.cache,
+                .path => |c| c.cache,
+            };
+            const caches = if (cache) |c|
+                try alloc.dupe([]const u8, &.{c})
+            else caches: {
+                var keep: std.ArrayList([]const u8) = .empty;
+                defer keep.deinit(gpa);
+                for (config.pipelines) |p|
+                    for (p.keep) |k|
+                        for (keep.items) |i|
+                            if (std.mem.eql(u8, i, k.@"0"))
+                                break
+                            else
+                                try keep.append(gpa, k.@"0");
+                break :caches try keep.toOwnedSlice(alloc);
+            };
+            try switch (cmd) {
+                .pull => |c| cmd_cache.run(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    config,
+                    &installation,
+                    .pull,
+                    caches,
+                    c.remote,
+                ),
+                .push => |c| cmd_cache.run(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    config,
+                    &installation,
+                    .push,
+                    caches,
+                    c.remote,
+                ),
+                .path => |c| cmd_cache.path(
+                    gpa,
+                    init.io,
+                    &term,
+                    project,
+                    c.remote,
+                    c.cache,
+                ),
+            };
+        },
         .task => |cmd| switch (cmd) {
-            .spawn => |c| {
+            .spawn => |s| {
                 const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
                 const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
                 defer project_dir.close(init.io);
                 const project = try Project.open_leaky(alloc, init.io, project_dir);
 
-                const target = parse_target(c.step, "default") catch |e| {
-                    log.err("Invalid target: {any}: '{s}':", .{ e, c.step });
+                const target: Step = Step.parse_target(s.step, "default") catch |e| {
+                    log.err("Invalid target: {any}: '{s}':", .{ e, s.step });
                     return e;
                 };
 
@@ -422,8 +490,16 @@ pub fn main(init: std.process.Init) !void {
                     &installation,
                     target,
 
-                    c.deployment,
+                    s.deployment,
                 );
+            },
+            .kill => |k| {
+                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+                const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
+                defer project_dir.close(init.io);
+                const project = try Project.open_leaky(alloc, init.io, project_dir);
+
+                return try cmd_kill.run(gpa, init.io, project, &installation, k.pipeline, k.remote, k.deployment);
             },
         },
         .remote => |r| switch (r) {
@@ -482,14 +558,6 @@ pub fn main(init: std.process.Init) !void {
             term.print("{s}", .{&hex});
             return;
         },
-        .kill => |cmd| {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-            defer project_dir.close(init.io);
-            const project = try Project.open_leaky(alloc, init.io, project_dir);
-
-            return try cmd_kill.run(gpa, init.io, project, &installation, cmd.pipeline, cmd.remote, cmd.deployment);
-        },
 
         .nix => |n| switch (n) {
             .show => |cmd| {
@@ -505,8 +573,15 @@ pub fn main(init: std.process.Init) !void {
                     return err;
                 };
                 defer gpa.free(basename);
-
                 term.println("{s}", .{basename});
+                log.info("Fetching narinfo", .{});
+                const nar_info = try nix.fetch_narinfo(
+                    std.heap.page_allocator,
+                    &client,
+                    basename[0..32],
+                );
+
+                term.println("{s}", .{nar_info._buffer});
             },
         },
         .argz_help => |cmd| cmd.handle(),

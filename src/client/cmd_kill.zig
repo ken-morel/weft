@@ -40,7 +40,10 @@ pub fn run(
         return error.RemoteNotFound;
     };
 
-    const addr = (Weft.parse_remote_address(remote.*) catch null) orelse return error.InvalidRemoteConfig;
+    const addr = Weft.parse_remote_address(
+        io,
+        remote.*,
+    ) catch return error.InvalidRemoteConfig;
 
     const client = Client.connect(alloc, io, addr, inst.identity) catch |err| {
         l.err("could not reach remote '{s}': {any}", .{ remote_name, err });

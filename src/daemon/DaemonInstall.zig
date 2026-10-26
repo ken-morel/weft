@@ -2,9 +2,9 @@ const std = @import("std");
 const log = std.log.scoped;
 
 const ClientInstall = @import("../client/ClientInstall.zig");
-const read_only_user_permissions = ClientInstall.read_only_user_permissions;
 const Deployment = @import("../client/Deployment.zig");
 const paths = @import("../domain/paths.zig");
+const read_only_user_permissions = paths.read_only_user_permissions;
 const proto = @import("../domain/proto.zig");
 
 pub const Config = struct {
@@ -67,9 +67,7 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
     var child_stop = try std.process.spawn(io, .{
         .argv = &.{ "systemctl", "stop", "weftd.service" },
     });
-    const stop_term = try child_stop.wait(io);
-    if (stop_term != .exited or stop_term.exited != 0)
-        return error.SystemctlStopFailed;
+    _ = try child_stop.wait(io);
 
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);

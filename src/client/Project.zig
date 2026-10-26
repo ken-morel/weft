@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const DotEnv = @import("../domain/DotEnv.zig");
 const Term = @import("../domain/Term.zig");
@@ -13,6 +14,20 @@ pub fn open_leaky(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() 
         .dir = dir,
         .env = try .load_leaky(ara, io, dir),
     };
+}
+
+pub fn resolve_deployment_id(self: @This(), io: std.Io, spec: ?[]const u8) !Deployment.Id {
+    const l = log(.resolve_deployment);
+    return if (spec) |dep_str|
+        self.find_deployment_id(io, dep_str) catch |err| {
+            l.err("deployment '{s}' not found or ambiguous: {any}", .{ dep_str, err });
+            return error.InvalidDeploymentId;
+        }
+    else
+        try self.latest_deployment_id(io) orelse {
+            l.err("no deployments found in .weft", .{});
+            return error.NoDeployments;
+        };
 }
 
 pub fn get_config_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io) !Weft {
@@ -47,14 +62,12 @@ pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: Deployment.Id)
 
     const deployment_name = deployment.to_string();
 
-    weft_dir.createDirPath(
+    //TODO: Log error here
+    return weft_dir.createDirPathOpen(
         io,
         &deployment_name,
-    ) catch |err|
-        if (err != error.PathAlreadyExists)
-            return err;
-
-    return weft_dir.openDir(io, &deployment_name, .{ .iterate = true });
+        .{ .open_options = .{ .iterate = true } },
+    );
 }
 
 pub fn artifact_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, deployment_id: Deployment.Id, pipeline: []const u8) ![]const u8 {
@@ -68,6 +81,21 @@ pub fn artifact_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, depl
         gpa,
         &.{ deployment_dir_path, "artifacts", pipeline },
     );
+}
+pub fn cache_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, remote: []const u8, cache: ?[]const u8) ![]const u8 {
+    const rel_path = try std.fs.path.join(gpa, if (cache) |c| &.{
+        ".weft",
+        "caches",
+        remote,
+        c,
+    } else &.{
+        ".weft",
+        "caches",
+        remote,
+    });
+    defer gpa.free(rel_path);
+    try self.dir.createDirPath(io, rel_path);
+    return try self.dir.realPathFileAlloc(io, rel_path, gpa);
 }
 
 pub fn latest_deployment_id(self: @This(), io: std.Io) !?Deployment.Id {
@@ -125,38 +153,27 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
     return match orelse unreachable;
 }
 
-pub fn load_deployment_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
+pub fn load_deployment_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
+    const l = log(.load_deployment);
     @setEvalBranchQuota(100_000);
     var dep_dir = try self.open_deployment_dir(io, id);
     defer dep_dir.close(io);
 
-    var iter = dep_dir.iterate();
-    var content: ?[]u8 = null;
-    defer if (content) |c| ara.free(c);
-
-    while (try iter.next(io)) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zon")) {
-            var file = try dep_dir.openFile(io, entry.name, .{});
-            defer file.close(io);
-            var buffer: [1 << 10]u8 = undefined;
-            var reader = file.reader(io, &buffer);
-            content = try reader.interface.allocRemaining(ara, .limited(512 << 10));
-            break;
+    const content = dep_dir.readFileAllocOptions(io, "deployment.zon", ara, .unlimited, .of(u8), 0) catch |err| {
+        if (err == error.FileNotFound) {
+            l.err("Deployment {d} does not exist", .{id});
+            return error.DeploymentNotFound;
         }
-    }
+        return err;
+    };
 
-    const zon_content = content orelse return error.DeploymentNotFound;
-    const null_terminated = try ara.dupeSentinel(u8, zon_content, 0);
-    defer ara.free(null_terminated);
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
 
-    var deployment = try std.zon.parse.fromSlice(Deployment, .{ .gpa = ara, .arena = ara, .source = null_terminated, .diagnostics = &diag });
-    deployment.id = id;
-    deployment.running = &.{};
-    return deployment;
+    //TODO: Log diagnostics and errors here
+    return try std.zon.parse.fromSlice(Deployment, .{ .gpa = gpa, .arena = ara, .source = content, .diagnostics = &diag });
 }
 
-pub fn locate_script(self: @This(), gpa: std.mem.Allocator, io: std.Io, name: []const u8) !?[]const u8 {
+pub fn locate_script(self: @This(), gpa: std.mem.Allocator, io: std.Io, name: []const u8) !?[:0]const u8 {
     const script_with_dot = try std.mem.join(gpa, "", &.{ name, "." });
     defer gpa.free(script_with_dot);
     const script_dir = self.dir.openDir(

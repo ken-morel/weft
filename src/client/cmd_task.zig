@@ -34,7 +34,7 @@ pub fn spawn(
             return error.NoDeployments;
         };
 
-    var deployment = try project.load_deployment_leaky(alloc, io, dep_id);
+    var deployment = try project.load_deployment_leaky(alloc, gpa, io, dep_id);
     deployment.config = config;
 
     return runner.run_task(gpa, io, term, project, inst, &deployment, step);

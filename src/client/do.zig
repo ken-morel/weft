@@ -11,7 +11,7 @@ const src = @import("src.zig");
 const Step = @import("Step.zig");
 
 pub fn run(
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     io: std.Io,
     term: *Term,
     project: Project,
@@ -23,7 +23,7 @@ pub fn run(
         retry: Deployment.Id,
     },
 ) !void {
-    var arena: std.heap.ArenaAllocator = .init(allocator);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     var alloc = arena.allocator();
 
@@ -32,11 +32,11 @@ pub fn run(
             const owned_targets = try alloc.dupe(Step, start.targets);
             const config = try project.get_config_leaky(alloc, io);
             const deployment = try Deployment.init(io, config, owned_targets);
-            try deployment.save(alloc, io, project);
+            try deployment.save(io, project);
             break :blk deployment;
         },
         .retry => |id| blk: {
-            var deployment = try project.load_deployment_leaky(alloc, io, id);
+            var deployment = try project.load_deployment_leaky(gpa, alloc, io, id);
             if (project.get_config_leaky(alloc, io)) |config| {
                 deployment.config = config;
             } else |_| {}

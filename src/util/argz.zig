@@ -450,9 +450,9 @@ const docs = struct {
                 continue;
 
             var arg_line: []const u8 = field_name;
-            if (field_attrs.defaultValue(field_type) != null) {
+            if (field_attrs.defaultValue(field_type) != null)
                 arg_line = arg_line ++ " [default]";
-            }
+
             out = out ++ "  " ++ pad_right(arg_line, 22);
 
             if (docstring_arg(T, field_name)) |description| {

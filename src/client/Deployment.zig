@@ -224,15 +224,12 @@ pub fn add_failed(self: *@This(), gpa: std.mem.Allocator, failed: Failed) !void 
     }
 }
 
-pub fn save(self: @This(), gpa: std.mem.Allocator, io: std.Io, proj: Project) !void {
+pub fn save(self: @This(), io: std.Io, proj: Project) !void {
     var buffer: [1 << 5]u8 = undefined;
-
-    const filename = try gpa.print("{s}.zon", .{&self.id.to_string()});
-    defer gpa.free(filename);
 
     const deployments_dir = try proj.open_deployment_dir(io, self.id);
     defer deployments_dir.close(io);
-    var atomic = try deployments_dir.createFileAtomic(io, filename, .{
+    var atomic = try deployments_dir.createFileAtomic(io, "deployment.zon", .{
         .make_path = true,
         .replace = true,
     });

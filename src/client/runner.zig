@@ -55,7 +55,7 @@ pub fn run_deployment(
     defer view.deinit();
     errdefer {
         view.update(io) catch {};
-        l.err("Deployment failed", .{});
+        l.err("Deployment {d} failed", .{deployment.id});
         group.await(io) catch {};
     }
 
@@ -72,7 +72,7 @@ pub fn run_deployment(
             break;
 
         if (state.has_error(io) and deployment.running.len == 0) {
-            try deployment.save(gpa, io, project);
+            try deployment.save(io, project);
             l.err("Error during deployment", .{});
             try std.Io.sleep(io, .fromSeconds(1), .awake);
             try view.update(io);
@@ -125,7 +125,10 @@ pub fn run_deployment(
 
             if (batch_tasks.items.len == 0) continue;
 
-            const addr = Weft.parse_remote_address(remote.*) catch continue;
+            const addr = Weft.parse_remote_address(
+                io,
+                remote.*,
+            ) catch continue;
             var poll_client = Client.connect(gpa, io, addr, identity) catch continue;
             defer poll_client.destroy(gpa, io);
 
@@ -263,7 +266,7 @@ fn poll_item(
                 });
         },
     }
-    deployment.save(gpa, io, project) catch {};
+    deployment.save(io, project) catch {};
 }
 
 pub fn run_task(
@@ -313,7 +316,7 @@ pub fn run_task(
 
     var group: std.Io.Group = .init;
     errdefer group.await(io) catch {};
-    errdefer deployment.save(gpa, io, project) catch {};
+    errdefer deployment.save(io, project) catch {};
 
     try src.create_sources(alloc, io, term, inst, project, deployment);
 
@@ -348,7 +351,10 @@ pub fn run_task(
         if (step_state.status != .running and step_state.status != .initializing)
             continue;
 
-        const addr = Weft.parse_remote_address(remote.*) catch continue;
+        const addr = Weft.parse_remote_address(
+            io,
+            remote.*,
+        ) catch continue;
         var poll_client = Client.connect(gpa, io, addr, identity) catch continue;
         defer poll_client.destroy(gpa, io);
 
@@ -437,7 +443,7 @@ pub fn spawn_step(
     errdefer if (depl.lock(io)) |_| {
         dep.remove_running(gpa, step.remote, step.pipeline);
         state.err(io, step.remote, step.pipeline, "failed to spawn task");
-        dep.save(gpa, io, project) catch {};
+        dep.save(io, project) catch {};
         depl.unlock(io);
     } else |_| {};
 
@@ -508,7 +514,7 @@ pub fn spawn_step(
     state.initializing(io, step.remote, step.pipeline);
 
     spawn_task: {
-        const client = try Client.connect(gpa, io, try Weft.parse_remote_address(remote.*), fetcher.identity);
+        const client = try Client.connect(gpa, io, try Weft.parse_remote_address(io, remote.*), fetcher.identity);
         defer client.destroy(gpa, io);
 
         try client.conn.send_object(buffer, proto.Request, .task_spawn);
@@ -524,7 +530,7 @@ pub fn spawn_step(
             defer depl.unlock(io);
             dep.remove_running(gpa, step.remote, step.pipeline);
             state.err(io, step.remote, step.pipeline, @errorName(err));
-            dep.save(gpa, io, project) catch {};
+            dep.save(io, project) catch {};
             return;
         };
 
@@ -539,7 +545,7 @@ pub fn spawn_step(
             else
                 @errorName(err);
             state.err(io, step.remote, step.pipeline, msg);
-            dep.save(gpa, io, project) catch {};
+            dep.save(io, project) catch {};
             return;
         }
         break :spawn_task;

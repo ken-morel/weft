@@ -110,7 +110,7 @@ fn connect(
     var client = Client.connect(
         gpa,
         io,
-        try Weft.parse_remote_address(remote),
+        try Weft.parse_remote_address(io, remote),
         identity,
     ) catch |err| {
         l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.@"0", err });

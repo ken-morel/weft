@@ -13,20 +13,6 @@ const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const transfer = @import("transfer.zig");
 
-fn deployment_id(io: std.Io, project: Project, deployment_spec: ?[]const u8) !Deployment.Id {
-    const l = log(.artifact);
-    return if (deployment_spec) |dep_str|
-        project.find_deployment_id(io, dep_str) catch |err| {
-            l.err("deployment '{s}' not found or ambiguous: {any}", .{ dep_str, err });
-            return error.InvalidDeploymentId;
-        }
-    else
-        try project.latest_deployment_id(io) orelse {
-            l.err("no deployments found in .weft", .{});
-            return error.NoDeployments;
-        };
-}
-
 fn is_valid_artifact_name(name: []const u8) bool {
     return name.len > 0 and
         (std.ascii.isAlphanumeric(name[0]) or name[0] == '-') and
@@ -54,7 +40,7 @@ pub fn run(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const dep_id = try deployment_id(io, project, deployment_spec);
+    const dep_id = try project.resolve_deployment_id(io, deployment_spec);
 
     const config = try project.get_config_leaky(alloc, io);
     const remotes = try config.remotes_with_local_leaky(alloc);
@@ -88,7 +74,7 @@ pub fn run(
     var client = Client.connect(
         gpa,
         io,
-        try Weft.parse_remote_address(remote.*),
+        try Weft.parse_remote_address(io, remote.*),
         inst.identity,
     ) catch |err| {
         l.err("connection to remote '{s}' failed: {any}", .{ remote_name, err });
@@ -137,7 +123,7 @@ pub fn register(
         return error.InvalidArtifactName;
     }
 
-    const dep_id = try deployment_id(io, project, deployment_spec);
+    const dep_id = try project.resolve_deployment_id(io, deployment_spec);
     const config = try project.get_config_leaky(alloc, io);
 
     const remote = config.find_remote(remote_name) orelse {
@@ -145,13 +131,13 @@ pub fn register(
         return error.InvalidRemote;
     };
 
-    var deployment = try project.load_deployment_leaky(alloc, io, dep_id);
+    var deployment = try project.load_deployment_leaky(gpa, alloc, io, dep_id);
     try deployment.add_artifact(alloc, .{
         .remote = remote.@"0",
         .pipeline = if (config.get_producer(name)) |producer| producer.name else name,
         .name = name,
     });
-    try deployment.save(alloc, io, project);
+    try deployment.save(io, project);
 
     const artifact_path = try project.artifact_dir_path(gpa, io, dep_id, name);
     defer gpa.free(artifact_path);
@@ -177,7 +163,7 @@ pub fn path(
         return error.InvalidArtifactName;
     }
 
-    const dep_id = try deployment_id(io, project, deployment_spec);
+    const dep_id = try project.resolve_deployment_id(io, deployment_spec);
     const artifact_path = try project.artifact_dir_path(gpa, io, dep_id, name);
     defer gpa.free(artifact_path);
 

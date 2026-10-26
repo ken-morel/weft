@@ -135,12 +135,32 @@ remotes: []const Remote = &.{},
 
 retention: Retention = .{},
 
-pub fn parse_remote_address(remote: Remote) !std.Io.net.IpAddress {
+pub fn parse_remote_address(io: std.Io, remote: Remote) !std.Io.net.IpAddress {
     const addr_str = remote.@"1";
-    return if (std.mem.lastIndexOfScalar(u8, addr_str, ':')) |colon|
-        try .parse(addr_str[0..colon], try std.fmt.parseInt(u16, addr_str[colon + 1 ..], 10))
+    const host, const port = if (std.mem.lastIndexOfScalar(u8, addr_str, ':')) |colon|
+        .{ addr_str[0..colon], try std.fmt.parseInt(u16, addr_str[colon + 1 ..], 10) }
     else
-        try .parse(addr_str, 9338);
+        .{ addr_str, 9338 };
+
+    return std.Io.net.IpAddress.parse(
+        host,
+        port,
+    ) catch {
+        var results: [16]std.Io.net.HostName.LookupResult = undefined;
+        var queue: std.Io.Queue(std.Io.net.HostName.LookupResult) = .init(&results);
+        const host_name: std.Io.net.HostName = try .init(host);
+        try host_name.lookup(io, &queue, .{ .port = port });
+
+        return result: while (queue.getOne(io)) |result|
+            switch (result) {
+                .address => |addr| break :result addr,
+                .canonical_name => {},
+            }
+        else |err| switch (err) {
+            error.Closed => error.UnknownHostName,
+            else => |e| e,
+        };
+    };
 }
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {

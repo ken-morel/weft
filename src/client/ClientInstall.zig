@@ -1,10 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+const build = @import("build");
 
 const Term = @import("../domain/Term.zig");
 const Identity = @import("../wire/Identity.zig");
 const Deployment = @import("Deployment.zig");
-
-pub const read_only_user_permissions = @as(std.Io.File.Permissions, @fromBackingInt(@intCast(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR))));
 
 pub const key_file_name = "key";
 
@@ -43,22 +44,46 @@ pub fn open_temp(self: @This(), io: std.Io, sub: []const u8) !std.Io.Dir {
 }
 
 pub fn open_config_dir(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !std.Io.Dir {
-    const path = try if (env.get("XDG_CONFIG_HOME")) |xdg|
-        std.fs.path.join(gpa, &.{ xdg, "weft" })
-    else if (env.get("HOME")) |home|
-        std.fs.path.join(gpa, &.{ home, ".config", "weft" })
-    else
-        return error.NoHomeFound;
+    const path = path: {
+        if (builtin.os.tag == .windows) {
+            if (env.get("APPDATA")) |appdata| {
+                const path = try std.fs.path.join(gpa, &.{ appdata, build.app_id });
+                break :path path;
+            } else {
+                return error.NoAppData;
+            }
+        } else {
+            const path = try if (env.get("XDG_CONFIG_HOME")) |xdg|
+                std.fs.path.join(gpa, &.{ xdg, "weft" })
+            else if (env.get("HOME")) |home|
+                std.fs.path.join(gpa, &.{ home, ".config", "weft" })
+            else
+                return error.NoHomeFound;
+            try std.Io.Dir.cwd().createDirPath(io, path);
+            break :path path;
+        }
+    };
     defer gpa.free(path);
-    try std.Io.Dir.cwd().createDirPath(io, path);
     return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
 }
 
 pub fn open_data_dir(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !std.Io.Dir {
-    const path = try if (env.get("HOME")) |home|
-        std.fs.path.join(gpa, &.{ home, ".weft" })
-    else
-        return error.NoHomeFound;
+    const path = path: {
+        if (builtin.os.tag == .windows) {
+            if (env.get("LOCALAPPDATA")) |appdata| {
+                const path = try std.fs.path.join(gpa, &.{ appdata, build.app_id });
+                break :path path;
+            } else {
+                return error.NoAppData;
+            }
+        } else {
+            break :path try if (env.get("HOME")) |home|
+                std.fs.path.join(gpa, &.{ home, ".weft" })
+            else
+                return error.NoHomeFound;
+        }
+    };
+
     defer gpa.free(path);
     try std.Io.Dir.cwd().createDirPath(io, path);
     return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });

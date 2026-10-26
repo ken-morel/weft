@@ -26,18 +26,9 @@ pub fn run(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const dep_id = if (deployment_spec) |dep_str|
-        project.find_deployment_id(io, dep_str) catch |err| {
-            l.err("deployment '{s}' not found or ambiguous: {any}", .{ dep_str, err });
-            return error.InvalidDeploymentId;
-        }
-    else
-        try project.latest_deployment_id(io) orelse {
-            l.err("no deployments found in .weft", .{});
-            return error.NoDeployments;
-        };
+    const dep_id = try project.resolve_deployment_id(io, deployment_spec);
 
-    var deployment = project.load_deployment_leaky(alloc, io, dep_id) catch |err| {
+    var deployment = project.load_deployment_leaky(gpa, alloc, io, dep_id) catch |err| {
         l.err("failed to load deployment: {any}", .{err});
         return err;
     };
@@ -85,7 +76,7 @@ pub fn run(
     var client = Client.connect(
         alloc,
         io,
-        try Weft.parse_remote_address(remote.*),
+        try Weft.parse_remote_address(io, remote.*),
         inst.identity,
     ) catch |e| {
         l.err("connection to remote '{s}' failed: {any}", .{ remote_name, e });

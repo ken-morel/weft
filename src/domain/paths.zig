@@ -127,3 +127,5 @@ pub inline fn nix_to_weft_store(
         &.{ weft_store_dir, s[0..11] },
     );
 }
+
+pub const read_only_user_permissions = @as(std.Io.File.Permissions, @fromBackingInt(@intCast(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR))));

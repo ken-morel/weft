@@ -5,7 +5,9 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
+const Remote = Weft.Remote;
 const Connection = @import("../wire/Connection.zig");
+const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
@@ -13,8 +15,6 @@ const DeploymentState = @import("DeploymentState.zig");
 const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const transfer = @import("transfer.zig");
-const Remote = Weft.Remote;
-const Identity = @import("../wire/Identity.zig");
 
 dep: *Deployment,
 identity: Identity,
@@ -49,7 +49,7 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
-    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(remote.*), self.identity);
+    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(io, remote.*), self.identity);
     defer client.destroy(self.gpa, io);
 
     const task_id: proto.task.Id = .{
@@ -139,7 +139,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     const artifact_dir_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_dir_path);
 
-    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(remote.*), self.identity);
+    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(io, remote.*), self.identity);
     defer client.destroy(self.gpa, io);
 
     const task_id: proto.task.Id = .{
@@ -175,7 +175,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     try self.state.artifact_progress(io, artifact, remote, .pulling, 0.0);
     defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
 
-    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(remote.*), self.identity);
+    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(io, remote.*), self.identity);
     defer client.destroy(self.gpa, io);
 
     const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
