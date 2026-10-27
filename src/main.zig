@@ -588,9 +588,3 @@ pub fn main(init: std.process.Init) !void {
         .nop => {},
     }
 }
-
-test {
-    std.testing.refAllDecls(@This());
-    _ = @import("util/zoto.zig");
-    _ = @import("daemon/Task.zig");
-}

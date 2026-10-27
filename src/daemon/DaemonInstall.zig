@@ -167,112 +167,14 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
     }
 }
 
-const allowed_tools = [_][]const u8{
-    "sh",
-    "bash",
-    "dash",
-    "cat",
-    "cp",
-    "mv",
-    "rm",
-    "mkdir",
-    "rmdir",
-    "touch",
-    "chmod",
-    "chown",
-    "chgrp",
-    "ln",
-    "ls",
-    "readlink",
-    "realpath",
-    "basename",
-    "dirname",
-    "mktemp",
-    "stat",
-    "sync",
-    "pwd",
-    "df",
-    "du",
-    "head",
-    "tail",
-    "sort",
-    "uniq",
-    "wc",
-    "cut",
-    "tr",
-    "tee",
-    "paste",
-    "split",
-    "fold",
-    "fmt",
-    "nl",
-    "comm",
-    "csplit",
-    "join",
-    "expand",
-    "unexpand",
-    "od",
-    "tac",
-    "rev",
-    "md5sum",
-    "sha1sum",
-    "sha224sum",
-    "sha256sum",
-    "sha384sum",
-    "sha512sum",
-    "b2sum",
-    "base64",
-    "base32",
-    "cksum",
-    "echo",
-    "printf",
-    "test",
-    "[",
-    "true",
-    "false",
-    "sleep",
-    "env",
-    "printenv",
-    "date",
-    "uname",
-    "which",
-    "id",
-    "whoami",
-    "groups",
-    "timeout",
-    "kill",
-    "yes",
-    "nohup",
-    "expr",
-    "seq",
-    "grep",
-    "egrep",
-    "fgrep",
-    "sed",
-    "awk",
-    "gawk",
-    "find",
-    "xargs",
-    "tar",
-    "gzip",
-    "gunzip",
-    "zcat",
-    "bzip2",
-    "bunzip2",
-    "bzcat",
-    "xz",
-    "unxz",
-    "xzcat",
-    "zstd",
-    "unzstd",
-    "zip",
-    "unzip",
-    "diff",
-    "diff3",
-    "patch",
-    "cmp",
-    "file",
-};
+const allowed_tools =
+    "sh,bash,dash,cat,cp,mv,rm,mkdir,rmdir,touch,chmod,chown,chgrp,ln,ls,readlink,realpath," ++
+    "basename,dirname,mktemp,stat,sync,pwd,df,du,head,tail,sort,uniq,wc,cut,tr,tee,paste,split," ++
+    "fold,fmt,nl,comm,csplit,join,expand,unexpand,od,tac,rev,md5sum,sha1sum,sha224sum," ++
+    "sha256sum,sha384sum,sha512sum,b2sum,base64,base32,cksum,echo,printf,test,[,true,false," ++
+    "sleep,env,printenv,date,uname,which,id,whoami,groups,timeout,kill,yes,nohup,expr,seq,grep," ++
+    "egrep,fgrep,sed,awk,gawk,find,xargs,tar,gzip,gunzip,zcat,bzip2,bunzip2,bzcat,xz,unxz," ++
+    "xzcat,zstd,unzstd,zip,unzip,diff,diff3,patch,cmp,file";
 
 pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -283,7 +185,8 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     var bin_dir: std.Io.Dir = try std.Io.Dir.cwd().openDir(io, paths.weft_bin_dir, .{});
     defer bin_dir.close(io);
 
-    for (allowed_tools) |tool| {
+    var tools = std.mem.splitScalar(u8, allowed_tools, ',');
+    while (tools.next()) |tool| {
         const target = try alloc.print("/bin/{s}", .{tool});
         bin_dir.deleteFile(io, tool) catch {};
         bin_dir.symLink(

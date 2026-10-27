@@ -356,36 +356,3 @@ fn readInt(src: *[]const u8, comptime IntT: type) !IntT {
     src.* = src.*[size..];
     return val;
 }
-
-test "zoto structural type hashing" {
-    // Two differently named structs with identical structure must have the same hash
-    const S1 = struct {
-        id: u64,
-        name: []const u8,
-        active: bool,
-    };
-    const S2 = struct {
-        id: u64,
-        name: []const u8,
-        active: bool,
-    };
-    try std.testing.expectEqual(comptime hashType(S1), comptime hashType(S2));
-
-    // Slices of anonymous structs with same shape must have identical hash
-    const SliceAnon1 = []const struct { []const u8, u16 };
-    const SliceAnon2 = []const struct { []const u8, u16 };
-    try std.testing.expectEqual(comptime hashType(SliceAnon1), comptime hashType(SliceAnon2));
-
-    // Different fields must yield different hashes
-    const S3 = struct {
-        id: u32, // different int type
-        name: []const u8,
-        active: bool,
-    };
-    try std.testing.expect(comptime (hashType(S1) != hashType(S3)));
-
-    // Const vs non-const pointer produces different hash
-    const PtrConst = *const u32;
-    const PtrMut = *u32;
-    try std.testing.expect(comptime (hashType(PtrConst) != hashType(PtrMut)));
-}

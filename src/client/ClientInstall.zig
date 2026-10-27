@@ -59,12 +59,11 @@ pub fn open_config_dir(gpa: std.mem.Allocator, io: std.Io, env: *const std.proce
                 std.fs.path.join(gpa, &.{ home, ".config", "weft" })
             else
                 return error.NoHomeFound;
-            try std.Io.Dir.cwd().createDirPath(io, path);
             break :path path;
         }
     };
     defer gpa.free(path);
-    return try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
+    return try std.Io.Dir.cwd().createDirPathOpen(io, path, .{});
 }
 
 pub fn open_data_dir(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !std.Io.Dir {
