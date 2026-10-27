@@ -99,7 +99,7 @@ pub fn procs_list(self: @This(), gpa: std.mem.Allocator, io: std.Io) ![]i64 {
     defer f.close(io);
     var pos: usize = 0;
     var buffer: [20]u8 = undefined;
-    var pids: std.ArrayListUnmanaged(i64) = .empty;
+    var pids: std.ArrayList(i64) = .empty;
     defer pids.deinit(gpa);
 
     var n_read = try f.readPositional(io, &.{&buffer}, pos);

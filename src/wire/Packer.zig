@@ -12,7 +12,14 @@ root: std.Io.Dir,
 walker: ?std.Io.Dir.Walker = null,
 handle: ?std.Io.File = null,
 
-pub fn packer(gpa: std.mem.Allocator, dir: std.Io.Dir) !@This() {
+pub fn packer_take(gpa: std.mem.Allocator, dir: std.Io.Dir) !@This() {
+    return .{
+        .root = dir,
+        .walker = try dir.walk(gpa),
+    };
+}
+pub fn packer(gpa: std.mem.Allocator, io: std.Io, folder: std.Io.Dir) !@This() {
+    const dir = folder.openDir(io, ".", .{ .iterate = true });
     return .{
         .root = dir,
         .walker = try dir.walk(gpa),

@@ -253,3 +253,14 @@ pub fn strip_mode(mode: ?[]const u8, name: []const u8) ?[]const u8 {
     else
         name;
 }
+
+pub fn is_valid_artifact_name(name: []const u8) bool {
+    return name.len > 0 and
+        (std.ascii.isAlphanumeric(name[0]) or name[0] == '-') and
+        for (name[1..]) |c|
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.')
+                break false
+            else {}
+        else
+            true;
+}

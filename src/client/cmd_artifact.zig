@@ -13,17 +13,6 @@ const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
 const transfer = @import("transfer.zig");
 
-fn is_valid_artifact_name(name: []const u8) bool {
-    return name.len > 0 and
-        (std.ascii.isAlphanumeric(name[0]) or name[0] == '-') and
-        for (name[1..]) |c|
-            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.')
-                break false
-            else {}
-        else
-            true;
-}
-
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
@@ -118,7 +107,7 @@ pub fn register(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    if (!is_valid_artifact_name(name)) {
+    if (!Weft.is_valid_artifact_name(name)) {
         l.err("invalid artifact name '{s}'", .{name});
         return error.InvalidArtifactName;
     }
@@ -158,7 +147,7 @@ pub fn path(
 ) !void {
     const l = log(.artifact);
 
-    if (!is_valid_artifact_name(name)) {
+    if (!Weft.is_valid_artifact_name(name)) {
         l.err("invalid artifact name '{s}'", .{name});
         return error.InvalidArtifactName;
     }

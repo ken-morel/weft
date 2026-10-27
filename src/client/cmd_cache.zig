@@ -58,20 +58,14 @@ pub fn run(
         var view: DeploymentView = .init(gpa, term, &state, undefined);
         defer view.deinit();
 
-        // const status: DeploymentState.Artifact.Status = if (direction == .pull) .pulling else .pushing;
-
-        // try state.artifact_progress(io, name, remote, status, 0.0);
         try view.update(io);
 
-        var client = Client.connect(
+        var client = try Client.connect(
             gpa,
             io,
             try Weft.parse_remote_address(io, remote.*),
             inst.identity,
-        ) catch |err| {
-            l.err("connection to remote '{s}' failed: {any}", .{ remote_name, err });
-            return err;
-        };
+        );
         defer client.destroy(gpa, io);
 
         if (direction == .push) {

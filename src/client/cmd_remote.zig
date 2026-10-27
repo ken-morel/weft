@@ -60,7 +60,7 @@ pub fn register(
     };
 
     l.info("registering client key on {s}...", .{target.ssh_dest});
-    var reg_argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    var reg_argv: std.ArrayList([]const u8) = .empty;
     try reg_argv.append(alloc, "ssh");
     if (target.port) |p|
         try reg_argv.appendSlice(alloc, &.{ "-p", p });
@@ -119,7 +119,7 @@ pub fn install(
     }
 
     l.info("installing weft daemon on {s}...", .{target.ssh_dest});
-    var install_argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    var install_argv: std.ArrayList([]const u8) = .empty;
     try install_argv.append(alloc, "ssh");
     if (target.port) |p|
         try install_argv.appendSlice(alloc, &.{ "-p", p });
@@ -136,7 +136,7 @@ pub fn install(
         return error.RemoteInstallFailed;
     }
 
-    var daemon_argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    var daemon_argv: std.ArrayList([]const u8) = .empty;
     try daemon_argv.append(alloc, "ssh");
     if (target.port) |p|
         try daemon_argv.appendSlice(alloc, &.{ "-p", p });

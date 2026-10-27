@@ -245,7 +245,7 @@ pub const Spec = struct {
             return error.EnvCycle;
         }
 
-        var parents: std.ArrayListUnmanaged(Env) = try .initCapacity(alloc, env.uses.len);
+        var parents: std.ArrayList(Env) = try .initCapacity(alloc, env.uses.len);
         for (env.uses) |use_spec| {
             if (Weft.strip_mode(mode, use_spec)) |use_name| {
                 const use: Env = for (envs) |envs_entry| {
@@ -267,7 +267,7 @@ pub const Spec = struct {
                 parents.appendAssumeCapacity(use);
             }
         }
-        var pkgs: std.ArrayListUnmanaged([]const u8) = try .initCapacity(ara, env.pkgs.len);
+        var pkgs: std.ArrayList([]const u8) = try .initCapacity(ara, env.pkgs.len);
         for (env.pkgs) |pkg|
             if (Weft.strip_mode(mode, pkg)) |p|
                 pkgs.appendAssumeCapacity(try ara.dupe(u8, p));

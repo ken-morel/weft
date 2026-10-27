@@ -67,9 +67,9 @@ pub fn recv_buf(self: *@This(), buf: []u8) ![]u8 {
     };
 }
 
-pub fn recv_object(self: *@This(), alloc: std.mem.Allocator, comptime T: type) !T {
-    var data: []const u8 = try self.recv(alloc);
-    return try zoto.deserialize(alloc, &data, T, ZotoOptions);
+pub fn recv_object(self: *@This(), ara: std.mem.Allocator, comptime T: type) !T {
+    var data: []const u8 = try self.recv(ara);
+    return try zoto.deserialize(ara, &data, T, ZotoOptions);
 }
 
 pub fn recv_object_buf(self: *@This(), buf: []u8, comptime T: type) !T {

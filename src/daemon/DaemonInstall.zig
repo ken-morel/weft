@@ -12,30 +12,8 @@ pub const Config = struct {
     port: u16 = 9338,
     max_workers: u32 = 8,
     max_nix_workers: u32 = 5,
+    compress: bool = false,
 };
-
-const service_template =
-    \\[Unit]
-    \\Description=Weft Deployment and Orchestration Daemon
-    \\After=network.target
-    \\
-    \\[Service]
-    \\Type=simple
-    \\ExecStart=/usr/local/bin/weft daemon run
-    \\Restart=always
-    \\User=root
-    \\WorkingDirectory=/var/lib/weft
-    \\RuntimeDirectory=weft
-    \\RuntimeDirectoryMode=0700
-    \\
-    \\[Install]
-    \\WantedBy=multi-user.target
-;
-
-const sysusers_config_path = "/usr/lib/sysusers.d/weft.conf";
-const sysusers_config =
-    \\ u weft-runner - "Weft pipeline runner" /var/lib/weft /usr/bin/nologin
-;
 
 pub fn init(_: std.Io) !@This() {
     return .{};
@@ -58,16 +36,158 @@ pub fn open_temp(io: std.Io, sub: []const u8) !std.Io.Dir {
     return try sub_dir.createDirPathOpen(io, &uuid, .{ .open_options = .{ .iterate = true } });
 }
 
+pub const InitSystem = enum {
+    systemd,
+    runit,
+
+    pub fn detect(io: std.Io) !?@This() {
+        const cwd = std.Io.Dir.cwd();
+        if (cwd.access(io, "/run/systemd/system", .{})) |_|
+            return .systemd
+        else |e| if (e != error.FileNotFound)
+            return .systemd;
+        if (cwd.access(io, "/run/runit/runsvdir", .{})) |_|
+            return .runit
+        else |e| if (e != error.FileNotFound)
+            return .runit;
+        return null;
+    }
+
+    pub fn stop(self: @This(), io: std.Io, svc: []const u8) !void {
+        const cmd: []const []const u8 = switch (self) {
+            .systemd => &.{ "systemctl", "stop", svc },
+            .runit => &.{ "sv", "stop", svc },
+        };
+        _ = try _do(io, cmd);
+    }
+    pub fn start(self: @This(), io: std.Io, svc: []const u8) !void {
+        const cmd: []const []const u8 = switch (self) {
+            .systemd => &.{ "systemctl", "start", svc },
+            .runit => &.{ "sv", "start", svc },
+        };
+        _ = try _do(io, cmd);
+    }
+    pub fn restart(self: @This(), io: std.Io, svc: []const u8) !void {
+        const cmd: []const []const u8 = switch (self) {
+            .systemd => &.{ "systemctl", "restart", svc },
+            .runit => &.{ "sv", "restart", svc },
+        };
+        _ = try _do(io, cmd);
+    }
+    pub fn _do(io: std.Io, cmd: []const []const u8) !std.process.Child.Term {
+        const l = log(.init_system_manager);
+        var child = try std.process.spawn(io, .{
+            .argv = cmd,
+        });
+        const term = try child.wait(io);
+        if (!term.success() or term.exited != 0) {
+            l.err("Error spawning task: {any}", .{term});
+            return error.CallFailed;
+        }
+        return term;
+    }
+    pub fn setup_weft_svc(self: @This(), io: std.Io) !void {
+        const cwd: std.Io.Dir = .cwd();
+        switch (self) {
+            .systemd => {
+                try cwd.writeFile(io, .{
+                    .data =
+                    \\[Unit]
+                    \\Description=Weft daemon
+                    \\After=network.target
+                    \\
+                    \\[Service]
+                    \\Type=simple
+                    \\ExecStart=/usr/local/bin/weft daemon run
+                    \\Restart=always
+                    \\User=root
+                    \\WorkingDirectory=/var/lib/weft
+                    \\RuntimeDirectory=weft
+                    \\RuntimeDirectoryMode=0700
+                    \\
+                    \\[Install]
+                    \\WantedBy=multi-user.target
+                    ,
+                    .sub_path = "/etc/systemd/system/weft.service",
+                });
+
+                _ = try _do(io, &.{ "systemctl", "daemon-reload" });
+                _ = try _do(io, &.{ "systemctl", "enable", "--now", "weft.service" });
+                _ = try _do(io, &.{ "systemctl", "restart", "weft.service" });
+            },
+            .runit => {
+                try cwd.createDirPath(io, "/etc/sv/weft");
+                try cwd.writeFile(io, .{ .data =
+                    \\ #!/usr/bin/sh
+                    \\
+                    \\ exec 2>&1
+                    \\
+                    \\ /usr/local/bin/weft daemon run
+                , .sub_path = "/etc/sv/weft/run", .flags = .{
+                    .permissions = .executable_file,
+                } });
+                cwd.symLink(
+                    io,
+                    "/etc/sv/weft",
+                    "/var/service/weft",
+                    .{ .is_directory = true },
+                ) catch |err|
+                    if (err != error.FileExists)
+                        return err;
+                _ = try _do(io, &.{ "sv", "restart", "weft" });
+            },
+        }
+    }
+    pub fn setup_runner(self: @This(), io: std.Io) !void {
+        const l = log(.init_system_manager);
+        const cwd: std.Io.Dir = .cwd();
+        switch (self) {
+            .systemd => {
+                try cwd.writeFile(io, .{
+                    .data = "u weft - \"Weft pipeline runner\" /var/lib/weft /usr/bin/nologin",
+                    .sub_path = "/usr/lib/sysusers.d/weft.conf",
+                });
+                _ = try _do(io, &.{ "systemd-sysusers", "/usr/lib/sysusers.d/weft.conf" });
+            },
+            .runit => {
+                var child = try std.process.spawn(io, .{
+                    .argv = &.{
+                        "useradd",
+                        "--system",
+                        "--shell",
+                        "/usr/bin/nologin",
+                        "--home-dir",
+                        "/var/lib/weft",
+                        "--comment",
+                        "Weft pipeline runner",
+                        "weft",
+                    },
+                });
+                const term = try child.wait(io);
+                if (!term.success() or term.exited != 0 or term.exited != 9) {
+                    l.err("Error adding 'weft' user task: {any}", .{term});
+                    return error.CallFailed;
+                }
+            },
+        }
+    }
+};
+
 pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !void {
+    const l = log(.daemon_install);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
     const cwd = std.Io.Dir.cwd();
 
-    var child_stop = try std.process.spawn(io, .{
-        .argv = &.{ "systemctl", "stop", "weftd.service" },
-    });
-    _ = try child_stop.wait(io);
+    const pid1: InitSystem = try InitSystem.detect(io) orelse {
+        l.err("No supported init system found", .{});
+        return error.NoInitSystemFound;
+    };
+
+    pid1.stop(io, "weft") catch |err| {
+        l.info("Could not stop existing service: {any}", .{err});
+    };
 
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);
@@ -81,7 +201,7 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
         break :install_exe;
     }
 
-    log(.daemon_install).debug("installed binary to /usr/local/bin/weft", .{});
+    l.debug("installed binary to /usr/local/bin/weft", .{});
 
     write_config: {
         const current_config: ?Config = read_config_leaky(alloc, io) catch null;
@@ -94,8 +214,14 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
             null;
 
         const config = Config{
-            .port = if (current_config) |c| c.port else 9338,
-            .max_workers = if (current_config) |c| c.max_workers else 8,
+            .port = if (current_config) |c|
+                c.port
+            else
+                9338,
+            .max_workers = if (current_config) |c|
+                c.max_workers
+            else
+                8,
             .runner_user = runner_user,
         };
 
@@ -115,56 +241,11 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
         try config_file.replace(io);
         break :write_config;
     }
+    paths.ensure_dirs(io);
 
-    setup_service: {
-        const systemd_dir = try cwd.openDir(io, "/etc/systemd/system", .{});
-        defer systemd_dir.close(io);
-
-        var service_file = try systemd_dir.createFile(io, "weftd.service", .{});
-        defer service_file.close(io);
-
-        try service_file.writeStreamingAll(io, service_template);
-
-        var child_sdr = try std.process.spawn(io, .{
-            .argv = &.{ "systemctl", "daemon-reload" },
-        });
-        _ = try child_sdr.wait(io);
-
-        var child_en = try std.process.spawn(io, .{
-            .argv = &.{ "systemctl", "enable", "--now", "weftd.service" },
-        });
-        const child_term = try child_en.wait(io);
-        if (child_term != .exited or child_term.exited != 0)
-            return error.SystemctlEnableFailed;
-
-        var child_restart = try std.process.spawn(io, .{
-            .argv = &.{ "systemctl", "restart", "weftd.service" },
-        });
-        const childr_term = try child_restart.wait(io);
-        if (childr_term != .exited or childr_term.exited != 0)
-            return error.SystemctlRestartFailed;
-
-        break :setup_service;
-    }
-    setup_sysusers: {
-        var sysusers_file = try cwd.createFile(io, sysusers_config_path, .{});
-        defer sysusers_file.close(io);
-        try sysusers_file.writeStreamingAll(io, sysusers_config);
-
-        var child_en = try std.process.spawn(io, .{
-            .argv = &.{ "systemd-sysusers", sysusers_config_path },
-        });
-        const t = try child_en.wait(io);
-        if (t != .exited or t.exited != 0)
-            return error.SystemdFailed;
-
-        break :setup_sysusers;
-    }
-
-    setup_bin: {
-        try setup_bin(gpa, io);
-        break :setup_bin;
-    }
+    try pid1.setup_weft_svc(io);
+    try pid1.setup_runner(io);
+    try setup_bin(gpa, io);
 }
 
 const allowed_tools =
@@ -255,7 +336,7 @@ pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
     const content = try reader.interface.allocRemaining(gpa, .unlimited);
     defer gpa.free(content);
 
-    var list: std.ArrayListUnmanaged([32]u8) = .empty;
+    var list: std.ArrayList([32]u8) = .empty;
     defer list.deinit(gpa);
 
     var iter = std.mem.splitScalar(u8, content, '\n');

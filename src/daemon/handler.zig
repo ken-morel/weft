@@ -160,6 +160,7 @@ fn handle_artifact_pull(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
     const id = &req.header.id;
     const deployment = id.deployment.to_string();
 
+    //TAKEN: by packer
     const artifact_dir = artifact_dir: {
         const artifact_dir_path = try paths.artifact(
             gpa,
@@ -178,7 +179,6 @@ fn handle_artifact_pull(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
             else
                 err;
     };
-    defer artifact_dir.close(io);
 
     const file_count = file_count: {
         var walker = try artifact_dir.walk(gpa);
@@ -193,7 +193,7 @@ fn handle_artifact_pull(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: 
     };
 
     send_files: {
-        var packer: Packer = try .packer(gpa, artifact_dir);
+        var packer: Packer = try .packer_take(gpa, artifact_dir);
         defer packer.deinit(io);
         const buffer = try gpa.alloc(u8, Pressor.chunk_size + 5);
         defer gpa.free(buffer);
@@ -479,7 +479,7 @@ fn handle_task_spawn(daemon: *Daemon, arena: *std.heap.ArenaAllocator, conn: *Co
 
         const base_path = paths.weft_bin_dir[0 .. paths.weft_bin_dir.len - 1];
         if (spec.pkgs.len > 0) {
-            var pkg_bin_paths: std.ArrayListUnmanaged([]const u8) = .empty;
+            var pkg_bin_paths: std.ArrayList([]const u8) = .empty;
             for (spec.pkgs) |basename| {
                 const bin_dir = try alloc.print("/nix/store/{s}/bin", .{basename});
                 try pkg_bin_paths.append(alloc, bin_dir);

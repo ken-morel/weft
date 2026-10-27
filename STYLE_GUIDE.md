@@ -148,11 +148,11 @@ Avoid managed container types where the allocator is stored inside the container
 ```zig
 {
   // GOOD
-  var list: std.ArrayListUnmanaged(u8) = .empty;
+  var list: std.ArrayList(u8) = .empty;
   defer list.deinit(gpa);
   try list.append(gpa, 42);
 
-  var map: std.StringHashMapUnmanaged(Item) = .empty;
+  var map: std.StringHashMap(Item) = .empty;
   defer map.deinit(gpa);
 }
 ```

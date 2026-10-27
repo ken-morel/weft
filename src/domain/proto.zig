@@ -9,11 +9,10 @@ pub fn Res(comptime T: type) type {
     return anyerror!T;
 }
 
+pub const header: u8 = 0x7a;
 pub const file: u8 = 0xaa;
 pub const folder: u8 = 0xab;
-
 pub const end: u8 = 0xff;
-
 pub const data: u8 = 0xea;
 pub const compressed_data: u8 = 0xeb;
 
@@ -52,6 +51,9 @@ pub const artifact = struct {
         };
     };
     pub const Id = task.Id;
+};
+pub const cache = struct {
+    pub const push = struct {};
 };
 pub const task = struct {
     pub const Id = struct {

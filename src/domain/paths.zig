@@ -22,7 +22,7 @@ pub const weft_runtime_dir = "/run/weft/";
 pub const weft_socket = weft_runtime_dir ++ "weft.pipe";
 
 pub fn ensure_dirs(io: std.Io) void {
-    const cwd = std.Io.Dir.cwd();
+    const cwd: std.Io.Dir = .cwd();
     cwd.createDirPath(io, weft_dir) catch {};
     cwd.createDirPath(io, weft_artifacts_dir) catch {};
     cwd.createDirPath(io, weft_run_dir) catch {};

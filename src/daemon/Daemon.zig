@@ -218,7 +218,7 @@ pub fn run(self: *@This()) !void {
 pub fn finalize_task(self: *@This(), task: Task, status: i32) !void {
     const l = log(.task_finalize);
     defer task.free_duped(self.gpa);
-    const cwd = std.Io.Dir.cwd();
+    const cwd: std.Io.Dir = .cwd();
     const run_dir_path = try task.run_dir_path(self.gpa);
     defer self.gpa.free(run_dir_path);
 

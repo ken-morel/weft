@@ -122,10 +122,10 @@ pub fn push_dir(
         break :files count;
     };
 
-    var artifact_dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
-    defer artifact_dir.close(io);
-
-    var packer: Packer = try .packer(gpa, artifact_dir);
+    var packer: Packer = try .packer_take(
+        gpa,
+        try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }),
+    );
     defer packer.deinit(io);
     const pressor_buffer = try gpa.alloc(u8, Pressor.buffer_size);
     defer gpa.free(pressor_buffer);

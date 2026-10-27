@@ -389,7 +389,7 @@ fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
             return &.{};
     defer cgroup_dir.close(io);
 
-    var list = std.ArrayListUnmanaged(Stats.Service).empty;
+    var list = std.ArrayList(Stats.Service).empty;
     errdefer list.deinit(gpa);
 
     var iter = cgroup_dir.iterate();
