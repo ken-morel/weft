@@ -95,7 +95,7 @@ pub fn run_deployment(
 
             _ = try state.add(io, remote, pipeline);
             try deployment.add_running(gpa, step);
-            try spawn(
+            _ = try spawn(
                 io,
                 &group,
                 spawn_step,
@@ -322,7 +322,7 @@ pub fn run_task(
 
     _ = try state.add(io, remote, pipeline);
     try deployment.add_running(gpa, step);
-    try spawn(
+    _ = try spawn(
         io,
         &group,
         spawn_step,

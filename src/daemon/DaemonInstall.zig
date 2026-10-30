@@ -87,6 +87,7 @@ pub const InitSystem = enum {
         return term;
     }
     pub fn setup_weft_svc(self: @This(), io: std.Io) !void {
+        const l = log(.init_system);
         const cwd: std.Io.Dir = .cwd();
         switch (self) {
             .systemd => {
@@ -116,25 +117,38 @@ pub const InitSystem = enum {
                 _ = try _do(io, &.{ "systemctl", "restart", "weft.service" });
             },
             .runit => {
+                l.info("Creating sv folder", .{});
                 try cwd.createDirPath(io, "/etc/sv/weft");
                 try cwd.writeFile(io, .{ .data =
-                    \\ #!/usr/bin/sh
-                    \\
-                    \\ exec 2>&1
-                    \\
-                    \\ /usr/local/bin/weft daemon run
+                    \\#!/usr/bin/sh
+                    \\exec 2>&1
+                    \\/usr/local/bin/weft daemon run
                 , .sub_path = "/etc/sv/weft/run", .flags = .{
                     .permissions = .executable_file,
                 } });
+                const already_supervised = if (cwd.access(io, "/etc/sv/weft/supervise/ok", .{})) |_| true else |_| false;
                 cwd.symLink(
                     io,
                     "/etc/sv/weft",
                     "/var/service/weft",
                     .{ .is_directory = true },
-                ) catch |err|
-                    if (err != error.FileExists)
-                        return err;
-                _ = try _do(io, &.{ "sv", "restart", "weft" });
+                ) catch |err| if (err != error.PathAlreadyExists)
+                    return err;
+
+                var waited: usize = 0;
+                while (waited < 5) : (waited += 1) {
+                    if (cwd.access(io, "/etc/sv/weft/supervise/ok", .{})) |_|
+                        break
+                    else |err| if (err == error.Cancelled)
+                        return err
+                    else
+                        try io.sleep(.fromSeconds(1), .awake);
+                }
+                if (already_supervised) {
+                    _ = try _do(io, &.{ "sv", "restart", "weft" });
+                } else {
+                    _ = try _do(io, &.{ "sv", "up", "weft" });
+                }
             },
         }
     }
@@ -164,7 +178,7 @@ pub const InitSystem = enum {
                     },
                 });
                 const term = try child.wait(io);
-                if (!term.success() or term.exited != 0 or term.exited != 9) {
+                if (!term.success() or (term.exited != 0 and term.exited != 9)) {
                     l.err("Error adding 'weft' user task: {any}", .{term});
                     return error.CallFailed;
                 }
@@ -284,9 +298,7 @@ pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
 
     var file = cwd.openFile(io, "/etc/weft/config.zon", .{}) catch |err| {
         if (err == error.AccessDenied)
-            log(.config).err("cannot read /etc/weft/config.zon: permission denied (must be run as root)", .{})
-        else if (err == error.FileNotFound)
-            log(.config).err("daemon configuration missing, run 'weft daemon install' first: {any}", .{err});
+            log(.config).err("cannot read /etc/weft/config.zon: permission denied (must be run as root)", .{});
         return err;
     };
     defer file.close(io);

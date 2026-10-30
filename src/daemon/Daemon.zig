@@ -10,7 +10,6 @@ const Crypt = @import("../wire/Crypt.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const handler = @import("handler.zig");
 const Server = @import("Server.zig");
-const SharedPressor = @import("SharedPressor.zig");
 const StatsServer = @import("StatsServer.zig");
 const Store = @import("Store.zig");
 const Task = @import("Task.zig");
@@ -21,7 +20,6 @@ arena: std.heap.ArenaAllocator,
 install: DaemonInstall,
 server: Server,
 config: DaemonInstall.Config,
-pressor: SharedPressor,
 stats_server: StatsServer,
 store: Store,
 keys: [][32]u8,
@@ -30,7 +28,6 @@ keys_lock: std.Io.Mutex,
 pub fn deinit(self: *@This()) void {
     self.gpa.free(self.keys);
     self.server.deinit(self.io);
-    self.pressor.deinit(self.gpa);
     self.stats_server.deinit();
     self.store.deinit();
     self.arena.deinit();
@@ -57,7 +54,6 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This()
         .install = install,
         .config = config,
         .server = server,
-        .pressor = try .init(gpa, io),
         .stats_server = try .init(gpa, io),
         .store = .init(gpa, config.max_nix_workers),
         .keys = keys,
@@ -105,7 +101,7 @@ pub fn run_client_server(self: *@This()) !void {
                 continue :req;
             };
 
-        try spawn(self.io, &group, handler.handle, .{ self, &permits, stream });
+        _ = try spawn(self.io, &group, handler.handle, .{ self, &permits, stream });
     }
 }
 
@@ -174,7 +170,7 @@ pub fn _run_system_server(self: *@This()) !void {
             l.info("daemon cmd: {any}", .{cmd});
             switch (cmd) {
                 .task_completed => |msg| {
-                    try spawn(self.io, &group, finalize_task, .{ self, Task{ .id = try msg.task.dupe(self.gpa) }, msg.status });
+                    _ = try spawn(self.io, &group, finalize_task, .{ self, Task{ .id = try msg.task.dupe(self.gpa) }, msg.status });
                     continue :run .done;
                 },
                 .reload_keys => {
@@ -208,9 +204,9 @@ pub fn run(self: *@This()) !void {
 
     var group: std.Io.Group = .init;
 
-    try spawn(self.io, &group, run_client_server, .{self});
-    try spawn(self.io, &group, StatsServer.run, .{&self.stats_server});
-    try spawn(self.io, &group, run_system_server, .{self});
+    _ = try spawn(self.io, &group, run_client_server, .{self});
+    _ = try spawn(self.io, &group, StatsServer.run, .{&self.stats_server});
+    _ = try spawn(self.io, &group, run_system_server, .{self});
 
     try group.await(self.io);
 }

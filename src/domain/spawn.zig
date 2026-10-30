@@ -13,5 +13,6 @@ pub fn spawn(io: std.Io, group: *std.Io.Group, comptime func: anytype, args: any
                 };
         }
     };
+
     try group.concurrent(io, S.runner, .{args});
 }

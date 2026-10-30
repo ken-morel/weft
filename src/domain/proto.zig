@@ -9,7 +9,23 @@ pub fn Res(comptime T: type) type {
     return anyerror!T;
 }
 
+pub const Pack = union(enum(u8)) {
+    pub const Pull = extern struct {
+        allow_compress: bool,
+    };
+    pub const Push = extern struct {
+        total_files: u64,
+    };
+    pull: Pull,
+    push: Push,
+    folder,
+    file,
+    data,
+    compressed_data,
+    end,
+};
 pub const header: u8 = 0x7a;
+
 pub const file: u8 = 0xaa;
 pub const folder: u8 = 0xab;
 pub const end: u8 = 0xff;
@@ -18,18 +34,8 @@ pub const compressed_data: u8 = 0xeb;
 
 pub const artifact = struct {
     pub const push = struct {
-        pub const Req = union(enum) {
-            header: struct { id: task.Id },
-            folder: []const u8,
-            file: []const u8,
-            data: []const u8,
-            raw: []const u8,
-            end,
-        };
-        pub const Res = union(enum) {
-            has_artifact: bool,
-            footer: struct {},
-        };
+        pub const Req = struct { id: task.Id };
+        pub const Res = struct {};
     };
     pub const has = struct {
         pub const Req = struct {
@@ -40,15 +46,10 @@ pub const artifact = struct {
         };
     };
     pub const pull = struct {
-        pub const Req = union(enum) {
-            header: struct {
-                id: task.Id,
-            },
+        pub const Req = struct {
+            id: task.Id,
         };
-        pub const Res = union(enum) {
-            files: u32,
-            footer: struct {},
-        };
+        pub const Res = struct {};
     };
     pub const Id = task.Id;
 };
@@ -81,9 +82,11 @@ pub const task = struct {
         pub const Req = struct {
             spec: Task.Spec,
         };
-        pub const Res = union(enum) {
-            skipped,
-            spawned,
+        pub const Res = struct {
+            status: union(enum) {
+                skipped,
+                spawned,
+            },
         };
     };
     pub const poll = struct {
@@ -113,14 +116,13 @@ pub const task = struct {
             cpu_usec: u64 = 0,
             memory_bytes: u64 = 0,
         };
-        pub const ItemRes = struct {
-            task: Id,
-            logs: ?Logs,
-            status: Status,
-            usage: ?TaskUsage = null,
-        };
         pub const Res = union(enum) {
-            item: ItemRes,
+            item: struct {
+                task: Id,
+                logs: ?Logs,
+                status: Status,
+                usage: ?TaskUsage = null,
+            },
             footer: struct {},
         };
     };
@@ -130,9 +132,7 @@ pub const task = struct {
             deployment: Deployment.Id,
             pipeline: []const u8,
         };
-        pub const Res = union(enum) {
-            footer: struct {},
-        };
+        pub const Res = struct {};
     };
 };
 
@@ -180,5 +180,6 @@ poll_res: task.poll.Res,
 kill_req: task.kill.Req,
 kill_res: task.kill.Res,
 stats_req: system.stats.Req,
+pack: Pack,
 
 pub const hash = zoto.hashType(@This());

@@ -203,7 +203,7 @@ pub fn spawn_fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
     const key = try self.gpa.dupe(u8, artifact);
     errdefer self.gpa.free(key);
 
-    try spawn(io, &self.group, fetch_wrapper, .{ self, io, key });
+    _ = try spawn(io, &self.group, fetch_wrapper, .{ self, io, key });
 }
 
 fn fetch_wrapper(self: *@This(), io: std.Io, key: []const u8) !void {
