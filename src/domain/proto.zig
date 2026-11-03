@@ -82,12 +82,7 @@ pub const task = struct {
         pub const Req = struct {
             spec: Task.Spec,
         };
-        pub const Res = struct {
-            status: union(enum) {
-                skipped,
-                spawned,
-            },
-        };
+        pub const Res = struct {};
     };
     pub const poll = struct {
         pub const ItemReq = struct {

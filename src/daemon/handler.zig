@@ -3,7 +3,6 @@ const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
-const systemd = @import("../util/systemd.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");

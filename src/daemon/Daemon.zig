@@ -200,7 +200,7 @@ fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
 }
 
 pub fn run(self: *@This()) !void {
-    paths.ensure_dirs(self.io);
+    try paths.ensure_dirs(self.io);
 
     var group: std.Io.Group = .init;
 

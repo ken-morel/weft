@@ -8,7 +8,7 @@ const Task = @import("Task.zig");
 
 pub fn task_completed(gpa: std.mem.Allocator, io: std.Io, task: Task, status: i32) !void {
     const l = log(.clinternal_taskcompleted);
-    const archive_path = try task.archive(gpa);
+    const archive_path = try task.archive_dir_path(gpa);
     defer gpa.free(archive_path);
     const archive_dir = try std.Io.Dir.cwd().openDir(io, archive_path, .{});
     defer archive_dir.close(io);

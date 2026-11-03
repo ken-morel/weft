@@ -1,37 +1,44 @@
 const std = @import("std");
 
-pub inline fn state_dir(path: []const u8) []const u8 {
-    return if (std.mem.startsWith(u8, path, var_lib))
-        path[var_lib.len..]
-    else
-        @panic("State directory must be a child of /var/lib");
-}
-
-pub const var_lib = "/var/lib/";
-pub const weft_dir = var_lib ++ "weft/";
-pub const weft_artifacts_dir = weft_dir ++ "artifacts/";
-pub const weft_run_dir = weft_dir ++ "run/";
-pub const weft_archive = weft_dir ++ "archive/";
-pub const weft_cache_dir = weft_dir ++ "cache/";
-pub const weft_home_dir = weft_dir ++ "home/";
-pub const weft_tmp_dir = weft_dir ++ "tmp/";
-pub const weft_store_dir = weft_dir ++ "store/";
-pub const weft_bin_dir = weft_dir ++ "bin/";
+pub const weft_path = "/var/lib/weft/";
+pub const weft_cache_path = "/var/cache/weft/";
+pub const weft_artifacts_dir = weft_path ++ "artifacts/";
+pub const weft_run_dir = weft_path ++ "run/";
+pub const weft_archive = weft_path ++ "archive/";
+pub const weft_keep_dir = weft_path ++ "keep/";
+pub const weft_home_dir = weft_path ++ "home/";
+pub const weft_tmp_dir = weft_path ++ "tmp/";
+pub const weft_store_dir = weft_path ++ "store/";
+pub const weft_bin_dir = weft_path ++ "bin/";
 
 pub const weft_runtime_dir = "/run/weft/";
 pub const weft_socket = weft_runtime_dir ++ "weft.pipe";
 
-pub fn ensure_dirs(io: std.Io) void {
+pub const weft_nix_path = weft_path ++ "nix/";
+pub const weft_nix_store_path = weft_nix_path ++ "store/";
+pub const weft_nix_nar_path = weft_nix_path ++ "nar/";
+pub const weft_nix_narinfo_path = weft_nix_path ++ "narinfo/";
+pub const weft_nix_store_lock_path = weft_nix_store_path ++ ".lock";
+
+pub const weft_config_path = "/etc/weft";
+
+pub fn ensure_dirs(io: std.Io) !void {
     const cwd: std.Io.Dir = .cwd();
-    cwd.createDirPath(io, weft_dir) catch {};
-    cwd.createDirPath(io, weft_artifacts_dir) catch {};
-    cwd.createDirPath(io, weft_run_dir) catch {};
-    cwd.createDirPath(io, weft_archive) catch {};
-    cwd.createDirPath(io, weft_cache_dir) catch {};
-    cwd.createDirPath(io, weft_home_dir) catch {};
-    cwd.createDirPath(io, weft_tmp_dir) catch {};
-    cwd.createDirPath(io, weft_store_dir) catch {};
-    cwd.createDirPath(io, weft_bin_dir) catch {};
+    try cwd.createDirPath(io, weft_artifacts_dir);
+    try cwd.createDirPath(io, weft_run_dir);
+    try cwd.createDirPath(io, weft_archive);
+    try cwd.createDirPath(io, weft_keep_dir);
+    try cwd.createDirPath(io, weft_home_dir);
+    try cwd.createDirPath(io, weft_tmp_dir);
+    try cwd.createDirPath(io, weft_store_dir);
+    try cwd.createDirPath(io, weft_bin_dir);
+
+    try cwd.createDirPath(io, weft_runtime_dir);
+
+    try cwd.createDirPath(io, weft_nix_store_path);
+    try cwd.createDirPath(io, weft_nix_nar_path);
+    try cwd.createDirPath(io, weft_nix_narinfo_path);
+    try cwd.createDirPath(io, weft_nix_store_lock_path);
 }
 
 pub inline fn home(gpa: std.mem.Allocator, w: []const u8) ![]u8 {
@@ -94,7 +101,7 @@ pub inline fn task_cache(
 ) ![]const u8 {
     return try std.fs.path.join(
         gpa,
-        &.{ weft_cache_dir, w, k },
+        &.{ weft_keep_dir, w, k },
     );
 }
 pub inline fn temp_dir(

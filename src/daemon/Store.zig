@@ -2,9 +2,9 @@ const std = @import("std");
 const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
+const nix = @import("../nix/nix.zig");
 const sizes = @import("../util/sizes.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
-const nix = @import("nix.zig");
 
 gpa: std.mem.Allocator,
 permits: std.Io.Semaphore,

@@ -255,8 +255,7 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
         try config_file.replace(io);
         break :write_config;
     }
-    paths.ensure_dirs(io);
-
+    try paths.ensure_dirs(io);
     try pid1.setup_weft_svc(io);
     try pid1.setup_runner(io);
     try setup_bin(gpa, io);
@@ -276,7 +275,6 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    paths.ensure_dirs(io);
     var bin_dir: std.Io.Dir = try std.Io.Dir.cwd().openDir(io, paths.weft_bin_dir, .{});
     defer bin_dir.close(io);
 

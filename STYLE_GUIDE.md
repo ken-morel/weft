@@ -213,4 +213,4 @@ Sometimes simply using a `switch` or other statements is okay, avoid for example
 
 ## Avoid recursive code
 
-Prefer iterating over context, this comes with the previous point
+Prefer iterating over context, this comes with the previous point. Well though if we're sure it won't lead to infinite recursion without forcing us to do tricks, I guess it's fine.

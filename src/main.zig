@@ -21,11 +21,12 @@ const Step = @import("client/Step.zig");
 const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
-const nix = @import("daemon/nix.zig");
 const Task = @import("daemon/Task.zig");
 const proto = @import("domain/proto.zig");
 const Term = @import("domain/Term.zig");
 const Weft = @import("domain/Weft.zig");
+const nix = @import("nix/nix.zig");
+const supervisor = @import("supervisor/supervisor.zig");
 const argz = @import("util/argz.zig");
 const Monitor = @import("util/Monitor.zig");
 const sizes = @import("util/sizes.zig");
@@ -41,7 +42,8 @@ const Argz = union(enum) {
         \\Weft, a deployment tool
     ;
 
-    daemon: if (include_daemon) union(enum) {
+    daemon: union(enum) {
+        const hidden = !include_daemon;
         pub const doc = "Perform actions on the local daemon";
         install: struct {
             pub const doc = "Install the weft daemon locally, requires superuser priviledges";
@@ -63,8 +65,12 @@ const Argz = union(enum) {
             },
             reload_keys: struct {},
         },
-    } else struct {
-        const hidden = true;
+        supervise: struct {
+            const hidden = true;
+            workspace: []const u8,
+            deployment: []const u8,
+            pipeline: []const u8,
+        },
     },
 
     version: struct {
@@ -224,11 +230,15 @@ const Argz = union(enum) {
 
     nix: union(enum) {
         pub const doc = "Perform nix operations";
-        show: struct {
-            pub const doc = "Query hydra for the latest store path of a package";
-            pub const doc_pkg = "The nix package attribute (e.g. bun, lowdown, python312)";
+        search: struct {
+            pub const doc = "Search for a nix package";
 
-            pkg: []const u8,
+            query: []const u8,
+        },
+        query: struct {
+            pub const doc = "Query releases information about a specific package";
+
+            name: []const u8,
         },
     },
     argz_help: argz.Help("weft", @This()),
@@ -237,19 +247,47 @@ const Argz = union(enum) {
     },
 };
 
-pub fn main(init: std.process.Init) !void {
-    const gpa = init.gpa;
+pub fn main(minimal: std.process.Init.Minimal) !void {
+    var allocator = switch (builtin.mode) {
+        inline .debug, .safe => std.heap.SafeAllocator.init(std.heap.page_allocator, .{
+            .check_write_after_free = true,
+            .stack_trace_frames = 11,
+        }),
+        // maybe use smpallocator
+        inline .fast, .small => std.heap.SafeAllocator.init(std.heap.page_allocator, .{
+            .check_write_after_free = false,
+            .stack_trace_frames = 1,
+        }),
+    };
+    const gpa = allocator.allocator();
 
-    const alloc = init.arena.allocator();
-    const args = try init.minimal.args.toSlice(alloc);
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
 
-    var term = try Term.init(gpa, init.io);
+    const alloc = arena.allocator();
+    const args = try minimal.args.toSlice(alloc);
+
+    var environ_map = try minimal.environ.createMap(gpa);
+    defer environ_map.deinit();
+
+    // var evented: std.Io.Evented = undefined;
+    // try evented.init(gpa, .{});
+
+    // const io = evented.io();
+
+    var threaded: std.Io.Threaded = .init(gpa, .{
+        .stack_size = 10 << 20, // just 1mb stack
+        .environ = minimal.environ,
+    });
+    const io = threaded.io();
+
+    var term = try Term.init(gpa, io);
     defer {
         _ = term.flush() catch {};
-        term.deinit(gpa, init.io);
+        term.deinit(gpa, io);
     }
 
-    const parsed = argz.parse(Argz, alloc, init.io, args[1..]) catch |err| {
+    const parsed = argz.parse(Argz, alloc, io, args[1..]) catch |err| {
         log.err("failed to parse arguments: {any}; run `weft help` for help", .{err});
         return err;
     };
@@ -270,11 +308,11 @@ pub fn main(init: std.process.Init) !void {
 
         .daemon => |d| if (include_daemon) switch (d) {
             .install => |i| {
-                try DaemonInstall.install(gpa, init.io, i.user);
+                try DaemonInstall.install(gpa, io, i.user);
             },
             .run => {
-                const installation: DaemonInstall = try .init(init.io);
-                var daemon = try Daemon.init(gpa, init.io, installation);
+                const installation: DaemonInstall = try .init(io);
+                var daemon = try Daemon.init(gpa, io, installation);
                 defer daemon.deinit();
                 return daemon.run();
             },
@@ -284,8 +322,8 @@ pub fn main(init: std.process.Init) !void {
                     log.err("Invalid client public key: {any}", .{err});
                     return err;
                 };
-                try DaemonInstall.add_key(init.io, key);
-                clinternal.reload_keys(init.io);
+                try DaemonInstall.add_key(io, key);
+                clinternal.reload_keys(io);
             },
             .ipc => |i| switch (i) {
                 .completed => |msg| {
@@ -293,19 +331,27 @@ pub fn main(init: std.process.Init) !void {
                         std.fmt.parseInt(i32, c, 10) catch -3
                     else
                         -3;
-                    try clinternal.task_completed(gpa, init.io, msg.task, code);
+                    try clinternal.task_completed(gpa, io, msg.task, code);
                 },
                 .reload_keys => {
-                    clinternal.reload_keys(init.io);
+                    clinternal.reload_keys(io);
                 },
+            },
+            .supervise => |a| {
+                const task: Task = .{ .id = .{
+                    .workspace = a.workspace,
+                    .deployment = try .parse(a.deployment),
+                    .pipeline = a.pipeline,
+                } };
+                return supervisor.run(gpa, io, task);
             },
         },
         .check => {
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{ .iterate = true });
-            defer project_dir.close(init.io);
-            const project = try Project.open_leaky(alloc, init.io, project_dir);
+            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{ .iterate = true });
+            defer project_dir.close(io);
+            const project = try Project.open_leaky(alloc, io, project_dir);
 
-            try cmd_check.run(gpa, init.io, project);
+            try cmd_check.run(gpa, io, project);
         },
         .do => |cmd| {
             const targets: []Step = try gpa.alloc(Step, cmd.targets.len);
@@ -316,45 +362,45 @@ pub fn main(init: std.process.Init) !void {
                 last_mode = tgt.mode;
             }
 
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-            defer project_dir.close(init.io);
-            const project = try Project.open_leaky(alloc, init.io, project_dir);
+            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+            defer project_dir.close(io);
+            const project = try Project.open_leaky(alloc, io, project_dir);
 
-            return cmd_do.run(gpa, init.io, &term, project, &installation, .{
+            return cmd_do.run(gpa, io, &term, project, &installation, .{
                 .start = .{
                     .targets = targets,
                 },
             });
         },
         .@"resume" => |cmd| {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-            defer project_dir.close(init.io);
-            const project = try Project.open_leaky(alloc, init.io, project_dir);
+            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+            defer project_dir.close(io);
+            const project = try Project.open_leaky(alloc, io, project_dir);
 
             const resume_id = if (cmd.deployment) |dep_arg|
-                project.find_deployment_id(init.io, dep_arg) catch {
+                project.find_deployment_id(io, dep_arg) catch {
                     log.err("deployment '{s}' not found or ambiguous", .{dep_arg});
                     return error.InvalidDeploymentId;
                 }
             else
-                try project.latest_deployment_id(init.io) orelse {
+                try project.latest_deployment_id(io) orelse {
                     log.err("no deployments found in .weft", .{});
                     return error.NoDeployments;
                 };
 
-            return cmd_do.run(gpa, init.io, &term, project, &installation, .{ .retry = resume_id });
+            return cmd_do.run(gpa, io, &term, project, &installation, .{ .retry = resume_id });
         },
         .logs => |cmd| {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-            defer project_dir.close(init.io);
-            const project = try Project.open_leaky(alloc, init.io, project_dir);
+            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+            defer project_dir.close(io);
+            const project = try Project.open_leaky(alloc, io, project_dir);
 
             return cmd_logs.run(
                 gpa,
-                init.io,
+                io,
                 project,
                 &installation,
                 cmd.pipeline,
@@ -363,15 +409,15 @@ pub fn main(init: std.process.Init) !void {
             );
         },
         .artifact => |cmd| {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-            defer project_dir.close(init.io);
-            const project = try Project.open_leaky(alloc, init.io, project_dir);
+            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+            defer project_dir.close(io);
+            const project = try Project.open_leaky(alloc, io, project_dir);
 
             return switch (cmd) {
                 .pull => |c| cmd_artifact.run(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     &installation,
@@ -382,7 +428,7 @@ pub fn main(init: std.process.Init) !void {
                 ),
                 .push => |c| cmd_artifact.run(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     &installation,
@@ -393,7 +439,7 @@ pub fn main(init: std.process.Init) !void {
                 ),
                 .register => |c| cmd_artifact.register(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     c.name,
@@ -402,7 +448,7 @@ pub fn main(init: std.process.Init) !void {
                 ),
                 .path => |c| cmd_artifact.path(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     c.name,
@@ -411,13 +457,13 @@ pub fn main(init: std.process.Init) !void {
             };
         },
         .cache => |cmd| {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-            defer project_dir.close(init.io);
-            const project = try Project.open_leaky(alloc, init.io, project_dir);
+            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+            defer project_dir.close(io);
+            const project = try Project.open_leaky(alloc, io, project_dir);
             //TODO: Find a better way to non-repeat, maybe forcing it to be one type and represent all of
             // them in the same way
-            const config = try project.get_config_leaky(alloc, init.io);
+            const config = try project.get_config_leaky(alloc, io);
             const cache = switch (cmd) {
                 .pull => |c| c.cache,
                 .push => |c| c.cache,
@@ -440,7 +486,7 @@ pub fn main(init: std.process.Init) !void {
             try switch (cmd) {
                 .pull => |c| cmd_cache.run(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     config,
@@ -451,7 +497,7 @@ pub fn main(init: std.process.Init) !void {
                 ),
                 .push => |c| cmd_cache.run(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     config,
@@ -462,7 +508,7 @@ pub fn main(init: std.process.Init) !void {
                 ),
                 .path => |c| cmd_cache.path(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     c.remote,
@@ -472,10 +518,10 @@ pub fn main(init: std.process.Init) !void {
         },
         .task => |cmd| switch (cmd) {
             .spawn => |s| {
-                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-                const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-                defer project_dir.close(init.io);
-                const project = try Project.open_leaky(alloc, init.io, project_dir);
+                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+                defer project_dir.close(io);
+                const project = try Project.open_leaky(alloc, io, project_dir);
 
                 const target: Step = Step.parse_target(s.step, "default") catch |e| {
                     log.err("Invalid target: {any}: '{s}':", .{ e, s.step });
@@ -484,7 +530,7 @@ pub fn main(init: std.process.Init) !void {
 
                 return cmd_task.spawn(
                     gpa,
-                    init.io,
+                    io,
                     &term,
                     project,
                     &installation,
@@ -494,30 +540,30 @@ pub fn main(init: std.process.Init) !void {
                 );
             },
             .kill => |k| {
-                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
-                const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-                defer project_dir.close(init.io);
-                const project = try Project.open_leaky(alloc, init.io, project_dir);
+                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+                defer project_dir.close(io);
+                const project = try Project.open_leaky(alloc, io, project_dir);
 
-                return try cmd_kill.run(gpa, init.io, project, &installation, k.pipeline, k.remote, k.deployment);
+                return try cmd_kill.run(gpa, io, project, &installation, k.pipeline, k.remote, k.deployment);
             },
         },
         .remote => |r| switch (r) {
             .register => |reg| {
-                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+                const installation: ClientInstall = try .init(gpa, io, &environ_map);
                 return cmd_remote.register(
                     gpa,
-                    init.io,
+                    io,
                     &installation,
                     reg.ssh,
                     reg.pubkey,
                 );
             },
             .install => |inst_arg| {
-                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+                const installation: ClientInstall = try .init(gpa, io, &environ_map);
                 return cmd_remote.install(
                     gpa,
-                    init.io,
+                    io,
                     &installation,
                     inst_arg.ssh,
                     inst_arg.user,
@@ -526,20 +572,20 @@ pub fn main(init: std.process.Init) !void {
             },
             .monitor => |cmd| {
                 const remote_name = cmd.remote;
-                const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+                const installation: ClientInstall = try .init(gpa, io, &environ_map);
                 if (std.mem.eql(u8, remote_name, "local")) {
-                    return cmd_monitor.run(gpa, init.io, &term, &installation, Weft.remote_local);
+                    return cmd_monitor.run(gpa, io, &term, &installation, Weft.remote_local);
                 } else if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
                     _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
                         log.err("Invalid ip address: {any}", .{e});
                         return error.InvalidIpAddress;
                     };
-                    return cmd_monitor.run(gpa, init.io, &term, &installation, .{ "remote", remote_name, "" });
+                    return cmd_monitor.run(gpa, io, &term, &installation, .{ "remote", remote_name, "" });
                 } else {
-                    const project_dir = try std.Io.Dir.cwd().openDir(init.io, ".", .{});
-                    defer project_dir.close(init.io);
-                    const project = try Project.open_leaky(alloc, init.io, project_dir);
-                    const config = try project.get_config_leaky(alloc, init.io);
+                    const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+                    defer project_dir.close(io);
+                    const project = try Project.open_leaky(alloc, io, project_dir);
+                    const config = try project.get_config_leaky(alloc, io);
                     const remote: Weft.Remote = for (config.remotes) |rem| {
                         if (std.mem.eql(u8, rem.@"0", remote_name))
                             break rem;
@@ -547,12 +593,12 @@ pub fn main(init: std.process.Init) !void {
                         log.err("Remote '{s}' not found", .{remote_name});
                         return error.RemoteNotFound;
                     };
-                    return cmd_monitor.run(gpa, init.io, &term, &installation, remote);
+                    return cmd_monitor.run(gpa, io, &term, &installation, remote);
                 }
             },
         },
         .key => {
-            const installation: ClientInstall = try .init(gpa, init.io, init.environ_map);
+            const installation: ClientInstall = try .init(gpa, io, &environ_map);
 
             const hex = std.fmt.bytesToHex(installation.identity.public_key(), .upper);
             term.print("{s}", .{&hex});
@@ -560,28 +606,49 @@ pub fn main(init: std.process.Init) !void {
         },
 
         .nix => |n| switch (n) {
-            .show => |cmd| {
+            .search => |s| {
                 var client: std.http.Client = .{
-                    .io = init.io,
                     .allocator = gpa,
+                    .io = io,
+                };
+                const res = try nix.devbox.search(gpa, &client, s.query, .{});
+                defer res.deinit();
+                for (res.value.results) |r| {
+                    term.println("- name: {s}", .{r.name});
+                    if (r.summary) |summary|
+                        if (summary.len > 0)
+                            term.println("  summary: {s}", .{summary});
+                }
+            },
+            .query => |q| {
+                var client: std.http.Client = .{
+                    .allocator = gpa,
+                    .io = io,
                 };
                 defer client.deinit();
 
-                const basename = nix.query_store_basename(gpa, &client, cmd.pkg) catch |err| {
+                const res = nix.devbox.query_package(gpa, &client, q.name) catch |err| {
                     if (err == error.PackageNotFound)
-                        log.err("package '{s}' not found on Hydra", .{cmd.pkg});
+                        log.err("package '{s}' not found on devbox", .{q.name});
                     return err;
                 };
-                defer gpa.free(basename);
-                term.println("{s}", .{basename});
-                log.info("Fetching narinfo", .{});
-                const nar_info = try nix.fetch_narinfo(
-                    std.heap.page_allocator,
-                    &client,
-                    basename[0..32],
-                );
+                defer res.deinit();
+                const pkg = res.value;
 
-                term.println("{s}", .{nar_info._buffer});
+                term.println("name: {s}\nsummary: {?s}\nhomepage: {?s}\nlicense: {?s}\nreleases:", .{
+                    pkg.name, pkg.summary, pkg.homepage_url, pkg.license,
+                });
+                const system = nix.devbox.current.system;
+                for (pkg.releases) |r| {
+                    const date = r.last_updated orelse "";
+                    term.println("  {s}: # {s}", .{ r.version, date[0..@min(date.len, 10)] });
+                    for (r.platforms) |p| {
+                        const is_current = std.mem.eql(u8, system, p.system);
+                        term.println("    {s}:{s}", .{ p.system, if (is_current) " # current" else "" });
+                        for (p.outputs orelse &.{}) |o|
+                            term.println("      {s}: {s}", .{ o.name, o.basename() });
+                    }
+                }
             },
         },
         .argz_help => |cmd| cmd.handle(),

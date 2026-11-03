@@ -6,7 +6,8 @@ const DotEnv = @import("../domain/DotEnv.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const Weft = @import("../domain/Weft.zig");
-const systemd = @import("../util/systemd.zig");
+const CGroup2 = @import("../util/CGroup2.zig");
+const zoto = @import("../util/zoto.zig");
 
 const Task = @This();
 
@@ -21,7 +22,6 @@ pub fn from_unit_name(name: []const u8) ?@This() {
     const workspace = iter.next() orelse return null;
     const pipeline = iter.next() orelse return null;
     const deployment_id = iter.next() orelse return null;
-
     const deployment = Deployment.Id.parse(deployment_id) catch return null;
 
     return .{ .id = .{
@@ -31,33 +31,82 @@ pub fn from_unit_name(name: []const u8) ?@This() {
     } };
 }
 
+pub fn from_cgroup_name(name: []const u8) ?@This() {
+    if (std.mem.containsAtLeast(u8, name, 1, "--"))
+        return from_unit_name(name);
+
+    var iter = std.mem.splitSequence(u8, name, "/");
+    const workspace = iter.next() orelse return null;
+    const pipeline = iter.next() orelse return null;
+    const deployment_id = iter.next() orelse return null;
+    const deployment = Deployment.Id.parse(deployment_id) catch return null;
+
+    return .{ .id = .{
+        .workspace = workspace,
+        .deployment = deployment,
+        .pipeline = pipeline,
+    } };
+}
+pub fn write_spec(self: @This(), gpa: std.mem.Allocator, io: std.Io, spec: Spec) !void {
+    const path = try self.run_dir_path(gpa);
+    defer gpa.free(path);
+    const spec_path = try std.fs.path.join(gpa, &.{ path, "spec" });
+    defer gpa.free(spec_path);
+
+    var atomic = try std.Io.Dir.cwd().createFileAtomic(io, spec_path, .{
+        .make_path = true,
+        .permissions = paths.read_only_user_permissions,
+        .replace = true,
+    });
+    defer atomic.deinit(io);
+
+    var buf: [4 << 10]u8 = undefined;
+    var writer = atomic.file.writer(io, &buf);
+    try zoto.serialize(
+        &writer.interface,
+        Task.Spec,
+        spec,
+        .{ .header = true },
+    );
+    try atomic.replace(io);
+}
+pub fn read_spec(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Spec {
+    const path = try self.run_dir_path(gpa);
+    defer gpa.free(path);
+    const spec_path = try std.fs.path.join(gpa, &.{ path, "spec" });
+    defer gpa.free(spec_path);
+
+    var txt: []const u8 = try std.Io.Dir.cwd().readFileAlloc(io, spec_path, ara, .limited64(Task.Spec.max_size));
+    return try zoto.deserialize(ara, &txt, Task.Spec, .{ .header = true });
+}
+
 pub fn argz_parse(_: std.mem.Allocator, _: ?std.Io, val: []const u8) anyerror!@This() {
-    return from_unit_name(val) orelse error.InvalidTask;
+    return from_cgroup_name(val) orelse error.InvalidTask;
 }
 
 pub fn kill(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
-    const unit = try self.unit_name(gpa);
-    defer gpa.free(unit);
-    try systemd.stop(io, unit);
+    const cg = try self.cgroup(gpa);
+    defer cg.deinit(gpa);
+    try cg.kill(gpa, io);
 }
 
 pub fn is_active(self: @This(), gpa: std.mem.Allocator, io: std.Io) !bool {
-    const unit = try self.unit_name(gpa);
-    defer gpa.free(unit);
-    return systemd.is_active(io, unit);
+    const cg = try self.cgroup(gpa);
+    defer cg.deinit(gpa);
+    return cg.is_active(gpa, io);
 }
 
-pub fn unit_name(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
-    return try std.mem.join(
-        gpa,
-        "--",
-        &.{
-            "weft-runner",
-            self.id.workspace,
-            self.id.pipeline,
-            &self.id.deployment.to_string(),
-        },
-    );
+pub fn cgroup_name(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
+    return try std.fs.path.join(gpa, &.{
+        self.id.workspace,
+        self.id.pipeline,
+        &self.id.deployment.to_string(),
+    });
+}
+pub fn cgroup(self: @This(), gpa: std.mem.Allocator) !CGroup2 {
+    const name = try self.cgroup_name(gpa);
+    defer gpa.free(name);
+    return try .init(gpa, name);
 }
 
 pub fn run_dir_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
@@ -69,7 +118,7 @@ pub fn run_dir_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
     );
 }
 
-pub fn archive(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
+pub fn archive_dir_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
     return paths.task_archive(
         gpa,
         self.id.workspace,
@@ -162,57 +211,23 @@ pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
 }
 
 pub fn usage(self: @This(), gpa: std.mem.Allocator, io: std.Io) ?proto.task.poll.TaskUsage {
-    const unit = self.unit_name(gpa) catch return null;
-    defer gpa.free(unit);
+    const cg = self.cgroup(gpa) catch return null;
+    defer cg.deinit(gpa);
 
-    var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/system.slice", .{}) catch |err|
-        if (err == error.FileNotFound)
-            std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup", .{}) catch return null
-        else
-            return null;
-    defer cgroup_dir.close(io);
-
-    const unit_dir_name = gpa.print("{s}.service", .{unit}) catch return null;
-    defer gpa.free(unit_dir_name);
-
-    var svc_dir = cgroup_dir.openDir(io, unit_dir_name, .{}) catch |err|
-        if (err == error.FileNotFound)
-            cgroup_dir.openDir(io, unit, .{}) catch return null
-        else
-            return null;
-    defer svc_dir.close(io);
-
-    var mem_buf: [64]u8 = undefined;
-    var mem_bytes: u64 = 0;
-    if (svc_dir.openFile(io, "memory.current", .{ .mode = .read_only })) |f| {
-        defer f.close(io);
-        const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
-        const s = std.mem.trim(u8, mem_buf[0..n], " \t\r\n");
-        mem_bytes = std.fmt.parseInt(u64, s, 10) catch 0;
-    } else |_| {}
-
-    var cpu_stat_buf: [1024]u8 = undefined;
-    var cpu_usage_usec: u64 = 0;
-    if (svc_dir.openFile(io, "cpu.stat", .{ .mode = .read_only })) |f| {
-        defer f.close(io);
-        const n = f.readPositionalAll(io, &cpu_stat_buf, 0) catch 0;
-        var clines = std.mem.splitScalar(u8, cpu_stat_buf[0..n], '\n');
-        while (clines.next()) |cline| {
-            if (std.mem.startsWith(u8, cline, "usage_usec ")) {
-                const num_str = std.mem.trim(u8, cline["usage_usec ".len..], " \t\r\n");
-                cpu_usage_usec = std.fmt.parseInt(u64, num_str, 10) catch 0;
-            }
-        }
-    } else |_| {}
+    const mem_bytes = cg.memory_current_get(gpa, io) catch 0;
+    const cpu = cg.cpu_stat_get(gpa, io) catch CGroup2.CpuStat{};
 
     return .{
-        .cpu_usec = cpu_usage_usec,
+        .cpu_usec = cpu.usage_usec,
         .memory_bytes = mem_bytes,
     };
 }
 
 pub const Spec = struct {
     pub const Tune = Weft.Pipeline.Tune;
+    pub const max_size = 64 << 10; //TODO: Make sure we use this everywhere
+    pub const max_script_size = 60 << 10; //TODO: Make sure we use this everywhere
+
     task_id: proto.task.Id,
     script: ?[]const u8,
     timeout: ?u32 = null,
@@ -322,7 +337,7 @@ pub const Spec = struct {
     ) !@This() {
         const l = log(.task_resolve);
         if (script) |s|
-            if (s.len > 40 << 10) {
+            if (s.len > max_script_size) {
                 l.err("Large scripts/binaries should be imported as source artifacts", .{});
                 return error.ScriptTooLarge;
             };
