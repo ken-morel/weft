@@ -325,14 +325,6 @@ pub fn cpu_max_set(self: @This(), gpa: std.mem.Allocator, io: std.Io, quota: ?u6
     try _write(gpa, io, self.path, cpu_max, write);
 }
 
-pub fn cpu_quota_set(self: @This(), gpa: std.mem.Allocator, io: std.Io, quota_pct: ?u16) !void {
-    const quota: ?u64 = if (quota_pct) |qp|
-        @as(u64, qp) * 1000
-    else
-        null;
-    try self.cpu_max_set(gpa, io, quota, 100000);
-}
-
 pub fn cpu_max_get(self: @This(), gpa: std.mem.Allocator, io: std.Io) !CpuMax {
     var buf: [64]u8 = undefined;
     const content = try _readbuf(gpa, io, self.path, cpu_max, &buf);

@@ -65,11 +65,19 @@ const Argz = union(enum) {
             },
             reload_keys: struct {},
         },
+    },
+
+    supervisor: union(enum) {
+        const hidden = true;
         supervise: struct {
-            const hidden = true;
             workspace: []const u8,
-            deployment: []const u8,
             pipeline: []const u8,
+            deployment: []const u8,
+        },
+        spawn: struct {
+            workspace: []const u8,
+            pipeline: []const u8,
+            deployment: []const u8,
         },
     },
 
@@ -337,13 +345,23 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     clinternal.reload_keys(io);
                 },
             },
+        },
+        .supervisor => |s| switch (s) {
             .supervise => |a| {
                 const task: Task = .{ .id = .{
                     .workspace = a.workspace,
                     .deployment = try .parse(a.deployment),
                     .pipeline = a.pipeline,
                 } };
-                return supervisor.run(gpa, io, task);
+                return supervisor.supervise(gpa, io, task);
+            },
+            .spawn => |a| {
+                const task: Task = .{ .id = .{
+                    .workspace = a.workspace,
+                    .deployment = try .parse(a.deployment),
+                    .pipeline = a.pipeline,
+                } };
+                return supervisor.spawn(gpa, io, task);
             },
         },
         .check => {

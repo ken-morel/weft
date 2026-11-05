@@ -5,12 +5,12 @@ const Deployment = @import("../client/Deployment.zig");
 const DotEnv = @import("../domain/DotEnv.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
+pub const Id = proto.task.Id;
 const Weft = @import("../domain/Weft.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
 const zoto = @import("../util/zoto.zig");
 
 const Task = @This();
-
 id: proto.task.Id,
 
 pub fn from_unit_name(name: []const u8) ?@This() {
@@ -68,6 +68,7 @@ pub fn write_spec(self: @This(), gpa: std.mem.Allocator, io: std.Io, spec: Spec)
         spec,
         .{ .header = true },
     );
+    try writer.flush();
     try atomic.replace(io);
 }
 pub fn read_spec(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Spec {

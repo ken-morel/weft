@@ -170,13 +170,13 @@ pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res)
 
     const task: Task = .{ .id = spec.task_id };
     const run_dir_path = try task.run_dir_path(alloc);
-    const run_dir = try std.Io.Dir.cwd().openDir(io, run_dir_path, .{});
+    const run_dir = try std.Io.Dir.cwd().createDirPathOpen(io, run_dir_path, .{});
     defer run_dir.close(io);
 
     try task.write_spec(gpa, daemon.io, spec);
 
     l.info("Wrote spec for task: {s}/spec", .{run_dir_path});
 
-    try supervisor.spawn(io, run_dir_path);
+    try supervisor.fork(io, task.id);
     return .{};
 }

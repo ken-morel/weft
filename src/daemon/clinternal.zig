@@ -15,6 +15,7 @@ pub fn task_completed(gpa: std.mem.Allocator, io: std.Io, task: Task, status: i3
 
     {
         var atomic = try archive_dir.createFileAtomic(io, "status", .{ .replace = true });
+
         defer atomic.deinit(io);
 
         var buf: [1 << 5]u8 = undefined;

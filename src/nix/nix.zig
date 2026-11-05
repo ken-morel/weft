@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const paths = @import("../domain/paths.zig");
+const spawn = @import("../domain/spawn.zig").spawn;
 const format_bytes = @import("../util/sizes.zig").format_bytes;
 pub const devbox = @import("devbox.zig");
 const NarInfo = @import("NarInfo.zig");
@@ -10,7 +11,6 @@ const store_path = "/var/lib/weft/store";
 const nar_path = "/var/lib/weft/nar";
 const narinfo_path = "/var/lib/weft/narinfo";
 const install_lock_path = "/var/lib/weft/nar/.lock";
-
 pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Client, id: []const u8) !void {
     const l = std.log.scoped(.nix);
     const cwd: std.Io.Dir = .cwd();
@@ -28,6 +28,15 @@ pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Cli
     defer narinfo.deinit(gpa);
     try cache_narinfo(io, narinfo, false);
 
+    const Spawn = struct {
+        fn func(tgpa: std.mem.Allocator, tio: std.Io, tclient: *std.http.Client, tnarinfo: NarInfo, tforce: bool) !void {
+            try download_nar(tgpa, tio, tclient, tnarinfo, tforce);
+        }
+    };
+
+    var group: std.Io.Group = .init;
+    try spawn(io, &group, Spawn.func, .{ gpa, io, client, narinfo, false });
+
     if (narinfo.has_deps()) {
         var deps = narinfo.deps();
         while (deps.next()) |dep| {
@@ -36,7 +45,7 @@ pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Cli
         }
     }
 
-    try download_nar(gpa, io, client, narinfo, false);
+    try group.await(io);
     try install_nar(gpa, io, id, narinfo.compression);
 }
 

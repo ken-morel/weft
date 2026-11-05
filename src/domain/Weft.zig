@@ -31,16 +31,30 @@ pub const Pipeline = struct {
         nothing,
     };
     pub const Tune = struct {
-        max_ram: ?u64 = null,
-        mem_lock: bool = false,
-        disable_network: bool = false,
-        oom_score_adjust: ?i32 = null,
-
-        memory_max: ?u64 = null,
-        memory_high: ?u64 = null,
-        cpu_quota: ?u16 = null,
-        tasks_max: ?u32 = null,
-        io_weight: ?u32 = null,
+        const Cpu = struct {
+            max: ?u64 = null,
+            quota: ?u64 = null,
+        };
+        const Mem = struct {
+            max: ?u64 = null,
+            high: ?u64 = null,
+            oom_score_adjust: ?i32 = null,
+            swap: Swap = .{},
+            const Swap = struct {
+                max: ?u64 = null,
+            };
+        };
+        const Net = struct {
+            private: bool = false,
+        };
+        const Io = struct {
+            io_weight: ?u32 = null,
+            pids_max: ?u64 = null,
+        };
+        cpu: Cpu = .{},
+        mem: Mem = .{},
+        net: Net = .{},
+        io: Io = .{},
     };
 
     name: []const u8,
