@@ -115,7 +115,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         break :write_pid;
     }
 
-    if (spec.pkgs.len > 0) handle_packages: {
+    if (spec.pkgs.len > 0) {
         l.info("preparing {d} nix package(s)...", .{spec.pkgs.len});
         var client: std.http.Client = .{
             .io = io,
@@ -251,7 +251,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
                 "spawn",
                 task.id.workspace,
                 task.id.pipeline,
-                &dep_str,
+                &task.id.deployment.to_string(),
             },
             .start_suspended = true,
         });
@@ -272,8 +272,6 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         }
     }
     try task.write_status(gpa, io, .harvesting);
-
-    const dep_z = try alloc.dupeSentinel([]const u8, &task.deployment.to_string(), 0);
 
     for (spec.outputs) |output| {
         defer barena.reset(.free_all);
@@ -302,4 +300,235 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         try task.write_status(gpa, io, .done);
 
     l.info("task completed and outputs harvested", .{});
+}
+
+const no_run_script = "#!/bin/env -S weft nop";
+
+pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const spec = try task.read_spec(gpa, alloc, io);
+    const workspace = task.get_workspace();
+    const uid = try workspace.uid(alloc, io);
+    const username = try alloc.print("weft-{s}", .{workspace.name});
+
+    const rootfs_path = try alloc.printSentinel(paths.task_run_root, task.id.wpd(), 0);
+
+    const cwd: std.Io.Dir = .cwd();
+
+    var flags: usize = mount.CLONE.NEWNS | mount.CLONE.NEWUTS | mount.CLONE.NEWIPC | mount.CLONE.NEWCGROUP;
+    if (spec.tune.net.private)
+        flags |= mount.CLONE.NEWNET;
+
+    if (std.os.linux.errno(std.os.linux.unshare(flags)) != .SUCCESS)
+        return error.UnshareFailed;
+
+    try mount.isolate();
+    try mount.mount_tmpfs(rootfs_path, "size=16m,mode=0755", true);
+
+    {
+        var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
+        defer rootfs_dir.close(io);
+
+        const user_home_rel = try alloc.printSentinel("home/{s}", .{username}, 0);
+        for ([_][]const u8{
+            "nix/store", "bin", "usr", "proc", "tmp", "dev/shm", "etc", "work", "in", "out", user_home_rel,
+        }) |dir| {
+            try rootfs_dir.createDirPath(io, dir);
+        }
+
+        _ = std.os.linux.symlinkat("/var/lib/weft/bin", rootfs_dir.handle, "usr/bin");
+
+        const script = spec.script orelse no_run_script;
+        try rootfs_dir.writeFile(io, .{
+            .data = script,
+            .sub_path = "entry",
+            .flags = .{ .permissions = .executable_file },
+        });
+
+        const passwd = try alloc.print(
+            \\root:x:0:0:root:/root:/bin/sh
+            \\{s}:x:{d}:{d}:{s}:/home/{s}:/bin/sh
+            \\nobody:x:65534:65534:nobody:/nonexistent:/bin/false
+        ,
+            .{ username, uid, uid, username, username },
+        );
+        try rootfs_dir.writeFile(
+            io,
+            .{ .data = passwd, .sub_path = "etc/passwd" },
+        );
+
+        const group = try alloc.print(
+            \\root:x:0:
+            \\{s}:x:{d}:
+            \\nobody:x:65534:
+        ,
+            .{ username, uid },
+        );
+        try rootfs_dir.writeFile(
+            io,
+            .{ .data = group, .sub_path = "etc/group" },
+        );
+
+        if (std.os.linux.errno(std.os.linux.chdir(rootfs_path.ptr)) != .SUCCESS)
+            return error.ChdirFailed;
+
+        try mount.bind(
+            paths.weft_nix_store,
+            "nix/store",
+            .{ .read_only = true, .allow_exec = true },
+        );
+        try mount.bind(
+            paths.weft_bin,
+            "bin",
+            .{ .read_only = true, .allow_exec = true },
+        );
+
+        if (!spec.tune.net.private) {
+            try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/resolv.conf" });
+            try mount.bind("/etc/resolv.conf", "etc/resolv.conf", .{ .read_only = true });
+        }
+
+        const host_home = try alloc.printSentinel(paths.workspace_home, task.id.w(), 0);
+        try mount.bind(host_home, user_home_rel, .{ .read_only = false, .allow_exec = true });
+
+        const host_cwd = try alloc.printSentinel(paths.scratch_cwd, task.id.wpd(), 0);
+        try mount.bind(host_cwd, "work", .{ .read_only = false, .allow_exec = true });
+
+        try mount.mount_proc("proc");
+        try mount.mount_tmpfs("tmp", "mode=1777", true);
+        try mount.mount_tmpfs("dev/shm", "mode=1777", false);
+
+        inline for (.{ "null", "zero", "full", "random", "urandom", "tty" }) |dev| {
+            try rootfs_dir.writeFile(
+                io,
+                .{ .data = "", .sub_path = "dev/" ++ dev },
+            );
+            try mount.bind(
+                "/dev/" ++ dev,
+                "dev/" ++ dev,
+                .{ .read_only = false, .allow_dev = true },
+            );
+        }
+
+        for (spec.inputs) |inp| {
+            const target_in = try alloc.printSentinel(
+                "in/{s}",
+                .{inp},
+                0,
+            );
+            try rootfs_dir.createDirPath(io, target_in);
+            const host_in = try alloc.printSentinel(
+                paths.artifact,
+                task.id.wpd(),
+                0,
+            );
+            try mount.bind(
+                host_in,
+                target_in,
+                .{ .read_only = true, .allow_exec = true },
+            );
+        }
+
+        for (spec.outputs) |out| {
+            const target_out = try alloc.printSentinel(
+                "out/{s}",
+                .{out},
+                0,
+            );
+            try rootfs_dir.createDirPath(io, target_out);
+            const host_out = try alloc.printSentinel(
+                paths.scratch_output,
+                task.id.wpd_(out),
+                0,
+            );
+            try mount.bind(host_out, target_out, .{ .read_only = false, .allow_exec = true });
+        }
+
+        for (spec.keep) |k| {
+            const target_keep = try alloc.printSentinel(
+                "work/{s}",
+                .{k.@"1"},
+                0,
+            );
+            try rootfs_dir.createDirPath(io, target_keep);
+            const host_keep = try alloc.printSentinel(
+                paths.keep,
+                task.id.w_(k.@"0"),
+                0,
+            );
+            try mount.bind(
+                host_keep,
+                target_keep,
+                .{ .read_only = false, .allow_exec = true },
+            );
+        }
+    }
+
+    try mount.lock_read_only(".");
+    try mount.pivot_root(".");
+    _ = std.os.linux.chdir("/work");
+
+    // Drop privileges to workspace UID/GID
+    _ = std.os.linux.syscall2(.setgroups, 0, 0);
+    if (std.os.linux.errno(std.os.linux.setresgid(uid, uid, uid)) != .SUCCESS)
+        return error.SetGidFailed;
+    if (std.os.linux.errno(std.os.linux.setresuid(uid, uid, uid)) != .SUCCESS)
+        return error.SetUidFailed;
+    _ = std.os.linux.prctl(@backingInt(std.os.linux.PR.SET_NO_NEW_PRIVS), 1, 0, 0, 0);
+
+    var env_map = env_map: {
+        var env_map: std.process.Environ.Map = .init(alloc);
+        errdefer env_map.deinit();
+
+        var path_writer: std.Io.Writer.Allocating = .init(gpa);
+        defer path_writer.deinit();
+
+        for (spec.pkgs) |pkg|
+            try path_writer.writer.print("/nix/store/{s}/bin:", .{pkg});
+
+        try path_writer.writer.writeAll("/bin");
+        try path_writer.writer.flush();
+
+        const home_val = try std.fmt.allocPrint(alloc, "/home/{s}", .{username});
+
+        try env_map.put("PATH", try path_writer.toOwnedSlice());
+        try env_map.put("HOME", home_val);
+        try env_map.put("USER", username);
+        try env_map.put("LOGNAME", username);
+        try env_map.put("TMPDIR", "/tmp");
+        try env_map.put("WEFT_VERSION", @import("build").version_str);
+        try env_map.put("WEFT_MODE", spec.mode);
+        try env_map.put("WEFT_WORKSPACE", spec.task_id.workspace);
+        try env_map.put("WEFT_PIPELINE", spec.task_id.pipeline);
+        try env_map.put("WEFT_DEPLOYMENT", try spec.task_id.deployment.to_string_alloc(alloc));
+
+        for (spec.vars) |kv|
+            try env_map.put(kv.@"0", kv.@"1");
+
+        break :env_map env_map;
+    };
+    defer env_map.deinit();
+
+    const child = try std.process.spawn(io, .{
+        .argv = &.{"/entry"},
+        .environ_map = &env_map,
+    });
+    const child_pid = child.id orelse unreachable;
+
+    var status: u32 = 0;
+    while (true) {
+        const done = std.os.linux.waitpid(-1, @ptrCast(&status), 0); // takes i32 for status
+        if (std.os.linux.errno(done) == .INTR)
+            continue;
+        if (done == child_pid) {
+            const code: u8 = if (std.os.linux.W.IFEXITED(status))
+                std.os.linux.W.EXITSTATUS(status)
+            else
+                128 + @backingInt(std.os.linux.W.TERMSIG(status)); // termsig returns u32
+            std.os.linux.exit_group(code);
+        }
+    }
 }

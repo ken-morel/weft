@@ -41,7 +41,7 @@ pub fn uid(self: @This(), gpa: std.mem.Allocator, io: std.Io) !u32 {
         const local_uid_txt = try gpa.print("{d}\n", .{next_uid});
         defer gpa.free(local_uid_txt);
 
-        try domain.write_file_atomic(io, uid_path, local_uid_txt, .{});
+        try domain.write_file_atomic(io, cwd, uid_path, local_uid_txt, .{});
         return next_uid;
     } else return e;
 }

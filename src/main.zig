@@ -59,10 +59,6 @@ const Argz = union(enum) {
         },
         ipc: union(enum) {
             pub const hidden = true;
-            completed: struct {
-                task: Task,
-                code: ?[]const u8 = null,
-            },
             reload_keys: struct {},
         },
     },
@@ -334,13 +330,6 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 clinternal.reload_keys(io);
             },
             .ipc => |i| switch (i) {
-                .completed => |msg| {
-                    const code = if (msg.code) |c|
-                        std.fmt.parseInt(i32, c, 10) catch -3
-                    else
-                        -3;
-                    try clinternal.task_completed(gpa, io, msg.task, code);
-                },
                 .reload_keys => {
                     clinternal.reload_keys(io);
                 },
@@ -361,7 +350,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     .deployment = try .parse(a.deployment),
                     .pipeline = a.pipeline,
                 } };
-                return supervisor.spawn(gpa, io, task);
+                return supervisor.spawner(gpa, io, task);
             },
         },
         .check => {

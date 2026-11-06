@@ -32,7 +32,7 @@ pub const Ms = packed struct(u32) {
 
 pub const OPEN_TREE = struct {
     pub const CLONE: u32 = 1 << 0;
-    pub const CLOEXEC: u32 = linux.O.CLOEXEC;
+    pub const CLOEXEC: u32 = @backingInt(linux.O{ .CLOEXEC = true });
 };
 
 pub const AT = struct {
@@ -66,8 +66,8 @@ pub const MNT = struct {
 };
 
 pub const MountAttr = extern struct {
-    attr_set: MountAttrFlag = 0,
-    attr_clr: MountAttrFlag = 0,
+    attr_set: MountAttrFlag = .{},
+    attr_clr: MountAttrFlag = .{},
     propagation: u64 = 0,
     userns_fd: u64 = 0,
 };

@@ -93,7 +93,7 @@ pub fn write_spec(self: @This(), gpa: std.mem.Allocator, io: std.Io, spec: Spec)
     try atomic.replace(io);
 }
 pub fn read_spec(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Spec {
-    const spec_path = try gpa.print(paths.task_spec, self.wpd());
+    const spec_path = try gpa.print(paths.task_spec, self.id.wpd());
     defer gpa.free(spec_path);
     var txt: []const u8 = try std.Io.Dir.cwd().readFileAlloc(io, spec_path, ara, .limited64(Task.Spec.max_size));
     return try zoto.deserialize(ara, &txt, Task.Spec, .{ .header = true });
