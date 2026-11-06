@@ -103,6 +103,7 @@ pub const task = struct {
         pub const Res = struct {};
     };
     pub const poll = struct {
+        pub const Status = ?Task.Status;
         pub const Logs = struct {
             data: []const u8,
             end_offset: u64,
@@ -118,7 +119,7 @@ pub const task = struct {
         pub const Res = ?struct {
             task: Id,
             logs: ?Logs,
-            status: ?Task.Status,
+            status: Status,
             usage: ?TaskUsage = null,
         };
     };

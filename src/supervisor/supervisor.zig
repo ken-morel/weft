@@ -63,14 +63,14 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
     const cwd: std.Io.Dir = .cwd();
 
-    const run_dir_path = try alloc.print(paths.task_run, task.wpd());
-    const root_path = try alloc.print(paths.task_run_root, task.wpd());
-    const task_dir_path = try alloc.print(paths.task, task.wpd());
-    const scratch_path = try alloc.print(paths.scratch, .task.wpd());
-    const active_link = try alloc.printSentinel(paths.active_link, task.wpd());
+    const run_dir_path = try alloc.print(paths.task_run, task.id.wpd());
+    const root_path = try alloc.print(paths.task_run_root, task.id.wpd());
+    const task_dir_path = try alloc.print(paths.task, task.id.wpd());
+    const scratch_path = try alloc.print(paths.scratch, task.id.wpd());
+    const active_link = try alloc.printSentinel(paths.active_link, task.id.wpd(), 0);
 
     const l = l: {
-        const log_path = try balloc.print(paths.task_logs, task.wpd());
+        const log_path = try balloc.print(paths.task_log, task.id.wpd());
         const log_file = try cwd.createFile(io, log_path, .{ .truncate = false });
         defer log_file.close(io);
         _ = std.os.linux.dup2(log_file.handle, std.posix.STDOUT_FILENO);
@@ -103,11 +103,11 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     const uid = try workspace.uid(gpa, io);
 
     write_pid: {
-        defer barena.reset(.free_all);
+        defer _ = barena.reset(.free_all);
         try domain.write_file_atomic(
             io,
             cwd,
-            try balloc.print(paths.task_run_pid, task.wpd()),
+            try balloc.print(paths.task_run_pid, task.id.wpd()),
             try balloc.print("{d}", .{std.os.linux.getpid()}),
             .{},
         );
@@ -130,23 +130,23 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     }
 
     prepare_files: {
-        defer barena.reset(.free_all);
-        const home_path = try balloc.printSentinel(paths.workspace_home, task.w(), 0);
+        defer _ = barena.reset(.free_all);
+        const home_path = try balloc.printSentinel(paths.workspace_home, task.id.w(), 0);
         try cwd.createDirPath(io, home_path);
         try chown(cwd, home_path, uid, uid);
 
-        const cwd_path = try balloc.printSentinel(paths.scratch_cwd, task.wpd());
+        const cwd_path = try balloc.printSentinel(paths.scratch_cwd, task.id.wpd(), 0);
         try cwd.createDirPath(io, cwd_path);
         try chown(cwd, cwd_path, uid, uid);
 
         for (spec.outputs) |output| {
-            const out_sub = try balloc.printSentinel(paths.scratch_output, task.wpd_(output), 0);
+            const out_sub = try balloc.printSentinel(paths.scratch_output, task.id.wpd_(output), 0);
             try cwd.createDirPath(io, out_sub);
             try chown(cwd, out_sub, uid, uid);
         }
 
         for (spec.keep) |k| {
-            const keep_host = try std.fmt.allocPrintSentinel(alloc, paths.keep, task.w_(k), 0);
+            const keep_host = try alloc.printSentinel(paths.keep, task.id.w_(k.@"0"), 0);
             try cwd.createDirPath(io, keep_host);
             try chown(cwd, keep_host, uid, uid);
         }
@@ -219,7 +219,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
                 while (try siblings.next(io)) |sibling| {
                     if (try sibling.is_active(gpa, io)) {
                         l.err("sibling is still active after timeout; failing task", .{});
-                        try task.write_status(gpa, io, .failed_sibling);
+                        try task.write_status(gpa, io, .failed);
                         return error.SiblingRunning;
                     }
                 }
@@ -274,8 +274,8 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     try task.write_status(gpa, io, .harvesting);
 
     for (spec.outputs) |output| {
-        defer barena.reset(.free_all);
-        const out_sub = try balloc.printSentinel(paths.scratch_output, task.wpd_(output), 0);
+        defer _ = barena.reset(.free_all);
+        const out_sub = try balloc.printSentinel(paths.scratch_output, task.id.wpd_(output), 0);
 
         {
             var staged = try cwd.openDir(io, out_sub, .{ .iterate = true });
@@ -283,7 +283,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             try freeze_dir(io, staged);
         }
 
-        const artifact_path = try balloc.print(paths.artifact, task.w_d(output));
+        const artifact_path = try balloc.print(paths.artifact, task.id.w_d(output));
 
         cwd.deleteTree(
             io,
@@ -295,7 +295,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     }
 
     if (!skip)
-        try task.write_status(gpa, io, .{ .sibling = .skipped })
+        try task.write_status(gpa, io, .skipped)
     else
         try task.write_status(gpa, io, .done);
 
@@ -527,7 +527,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             const code: u8 = if (std.os.linux.W.IFEXITED(status))
                 std.os.linux.W.EXITSTATUS(status)
             else
-                128 + @backingInt(std.os.linux.W.TERMSIG(status)); // termsig returns u32
+                128 + @as(u8, @truncate(@backingInt(std.os.linux.W.TERMSIG(status)))); // termsig returns u32
             std.os.linux.exit_group(code);
         }
     }

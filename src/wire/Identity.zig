@@ -6,8 +6,8 @@ pub const signature_length = Ed25519.Signature.encoded_length;
 const builtin = @import("builtin");
 
 const ClientInstall = @import("../client/ClientInstall.zig");
+const domain = @import("../domain/domain.zig");
 const paths = @import("../domain/paths.zig");
-const read_only_user_permissions = paths.read_only_user_permissions;
 
 seed: [seed_length]u8,
 key_pair: Ed25519.KeyPair,
@@ -46,7 +46,7 @@ pub fn read(io: std.Io, dir: std.Io.Dir, filename: []const u8) !@This() {
 
     const stat = try file.stat(io);
     if (builtin.os.tag != .windows)
-        if ((stat.permissions.toMode() & 0o777) != read_only_user_permissions.toMode())
+        if ((stat.permissions.toMode() & 0o777) != domain.read_only_user_permissions.toMode())
             return error.InsecurePermissions
         else if (stat.size != seed_length)
             return error.InvalidKeyFile;
@@ -60,7 +60,7 @@ pub fn create(io: std.Io, dir: std.Io.Dir, filename: []const u8) !@This() {
     const identity = try generate(io);
     var file = try dir.createFile(io, filename, .{
         .exclusive = true,
-        .permissions = read_only_user_permissions,
+        .permissions = domain.read_only_user_permissions,
     });
     defer file.close(io);
 

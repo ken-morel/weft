@@ -88,20 +88,17 @@ pub fn run(
     defer req_arena.deinit();
     const req_alloc = req_arena.allocator();
 
-    var status: proto.task.poll.Status = .not_found;
+    var status: proto.task.poll.Status = null;
     const stdout: std.Io.File = .stdout();
 
     try stdout.writeStreamingAll(io, try alloc.print("{s} {s}", .{ "{", key }));
 
+    try client.conn.send_object(buffer, proto.Request, .task_poll);
+
     while (true) : (_ = req_arena.reset(.retain_capacity)) {
-        try client.conn.send_object(buffer, proto.Request, .task_poll);
-        try client.conn.send_object(buffer, proto.task.poll.Req, .{
-            .header = .{
-                .tasks = &.{.{
-                    .task = task_id,
-                    .logs_offset = offset,
-                }},
-            },
+        try client.conn.send_object(buffer, ?proto.task.poll.Req, .{
+            .task = task_id,
+            .logs_offset = offset,
         });
 
         const res = client.conn.recv_object(
@@ -112,44 +109,46 @@ pub fn run(
             return e;
         };
 
-        const poll_res = res catch |e| {
+        const data = res catch |e| {
             l.err("poll error from remote: {any}", .{e});
             return e;
         };
 
-        switch (poll_res) {
-            .item => |item| {
-                if (item.logs) |logs| {
-                    try stdout.writeStreamingAll(io, logs.data);
-                    offset = logs.end_offset;
-                }
-                status = item.status;
-            },
-            .footer => break,
-        }
+        if (data) |item| {
+            if (item.logs) |logs| {
+                try stdout.writeStreamingAll(io, logs.data);
+                offset = logs.end_offset;
+            }
+            status = item.status;
+        } else break;
 
         try std.Io.sleep(io, .fromSeconds(2), .awake);
     }
-    switch (status) {
-        .success => try stdout.writeStreamingAll(
+
+    if (status) |s| switch (s) {
+        .harvesting, .done, .skipped => try stdout.writeStreamingAll(
             io,
             try alloc.print("{s} {s}", .{ "}", key }),
         ),
-        .failed => |c| try stdout.writeStreamingAll(
+        .failed => try stdout.writeStreamingAll(
             io,
-            try alloc.print("#.faied {s} code {d}", .{ key, c }),
+            try alloc.print("#.faied {s}", .{key}),
         ),
-        .skipped, .stopped => try stdout.writeStreamingAll(
+        .killed => try stdout.writeStreamingAll(
             io,
-            try alloc.print("#{any} {s} ", .{ status, key }),
+            try alloc.print("#{any} {s} ", .{ s, key }),
         ),
-        .not_found => {
-            l.err("Task {s} not found", .{key});
-            return error.TaskNotFound;
-        },
-        .running => {
+
+        .running, .preparing => {
             l.err("Task still running", .{});
             return error.TaskStillRunning;
         },
+        .frozen => try stdout.writeStreamingAll(
+            io,
+            try alloc.print("- {s}", .{key}),
+        ),
+    } else {
+        l.err("Task {s} not found", .{key});
+        return error.TaskNotFound;
     }
 }

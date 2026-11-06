@@ -15,7 +15,7 @@ pub const weft_workspace_uid = weft_workspace ++ "uid";
 pub const weft_active = weft_lib ++ "active/";
 
 /// fmt: workspace, pipeline, deployment
-pub const active_link = weft_active ++ "{s}_{s}_{s}";
+pub const active_link = weft_active ++ "{s}_{s}_{d}";
 
 pub const weft_socket = weft_run ++ "weft.pipe";
 
@@ -55,9 +55,12 @@ pub const keep = workspace_keep ++ "{s}/";
 
 /// fmt: workspace
 pub const workspace_run = weft_run ++ "{s}/";
+/// fmt: workspace, pipeline
+pub const tasks_run_parent = workspace_run ++ "{s}/";
 /// fmt: workspace, pipeline, deployment (Scratch space for running task)
 pub const task_run = workspace_run ++ "{s}/{d}/";
 /// fmt: workspace, pipeline, deployment (FIFO for stdin)
+///
 pub const task_run_in = task_run ++ "in";
 /// fmt: workspace, pipeline, deployment (Supervisor's host PID)
 pub const task_run_pid = task_run ++ "pid";

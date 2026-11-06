@@ -101,7 +101,7 @@ pub fn serialize(writer: *std.Io.Writer, comptime T: type, value: T, comptime op
 }
 pub fn serializeAlloc(gpa: std.mem.Allocator, comptime T: type, value: T, comptime opts: Options) std.Io.Writer.Error![]const u8 {
     var allocating: std.Io.Writer.Allocating = .init(gpa);
-    serialize(&allocating.writer, T, value, opts);
+    try serialize(&allocating.writer, T, value, opts);
     return allocating.written();
 }
 

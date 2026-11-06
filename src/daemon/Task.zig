@@ -20,7 +20,6 @@ pub const Status = union(enum) {
     harvesting,
     done,
     skipped,
-    sibling: enum { skipped, failed },
     failed,
     killed,
     frozen,
@@ -101,9 +100,9 @@ pub fn read_spec(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, 
 
 pub fn write_status(self: @This(), gpa: std.mem.Allocator, io: std.Io, status: Status) !void {
     const str = try zoto.serializeAlloc(gpa, Status, status, .{ .header = true });
-    const status_path = try gpa.print(paths.task_status, self.wpd());
+    const status_path = try gpa.print(paths.task_status, self.id.wpd());
     defer gpa.free(status_path);
-    try domain.write_file_atomic(io, .cwd(), status_path, str, .{ .header = true });
+    try domain.write_file_atomic(io, .cwd(), status_path, str, .{});
 }
 pub fn read_status(self: @This(), gpa: std.mem.Allocator, io: std.Io) !Status {
     const status_path = try gpa.print(paths.task_status, self.id.wpd());
@@ -175,10 +174,9 @@ pub const TaskSiblingsIterator = struct {
 };
 
 pub fn siblings(self: *const @This(), gpa: std.mem.Allocator, io: std.Io, skip_self: bool) !TaskSiblingsIterator {
-    const run_dir = try self.run_dir_path(gpa);
-    defer gpa.free(run_dir);
-    const pipeline_dir = std.fs.path.dirname(run_dir) orelse unreachable;
-    const dir = std.Io.Dir.cwd().openDir(io, pipeline_dir, .{ .iterate = true }) catch |err|
+    const tasks_run = try gpa.print(paths.tasks_run_parent, self.id.wp());
+    defer gpa.free(tasks_run);
+    const dir = std.Io.Dir.cwd().openDir(io, tasks_run, .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
             return .{
                 .task = self,

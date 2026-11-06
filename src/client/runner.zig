@@ -105,7 +105,7 @@ pub fn run_deployment(
 
         for (remotes) |*remote| {
             const remote_name = remote.@"0";
-            var batch_tasks: std.ArrayList(proto.task.poll.ItemReq) = .empty;
+            var batch_tasks: std.ArrayList(proto.task.poll.Req) = .empty;
             defer batch_tasks.deinit(poll_arena.allocator());
 
             for (deployment.running) |step| {
@@ -131,51 +131,41 @@ pub fn run_deployment(
             ) catch continue;
             var poll_client = Client.connect(gpa, io, addr, identity) catch continue;
             defer poll_client.destroy(gpa, io);
-
             poll_client.conn.send_object(log_buffer, proto.Request, .task_poll) catch continue;
-            poll_client.conn.send_object(log_buffer, proto.task.poll.Req, .{
-                .header = .{
-                    .tasks = batch_tasks.items,
-                },
-            }) catch continue;
+            for (batch_tasks.items) |task|
+                poll_client.conn.send_object(log_buffer, proto.task.poll.Req, task) catch continue;
+            poll_client.conn.send_object(log_buffer, proto.task.poll.Req, null) catch continue;
 
-            while (true) {
-                const res = poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break;
-                const poll_res = res catch break;
-                switch (poll_res) {
-                    .item => |item| {
-                        const pipeline_name = item.task.pipeline;
-                        if (item.logs) |logs| {
-                            if (logs.data.len > 0)
-                                try view.print_logs(pipeline_name, logs.data);
-                            state.set_log_offset(io, remote_name, pipeline_name, logs.end_offset);
-                        }
-
-                        if (item.usage) |u| {
-                            state.update_usage(
-                                io,
-                                remote_name,
-                                pipeline_name,
-                                u.cpu_usec,
-                                u.memory_bytes,
-                                std.Io.Clock.now(.real, io),
-                            );
-                        }
-
-                        try poll_item(
-                            gpa,
-                            io,
-                            project,
-                            deployment,
-                            &state,
-                            &fetcher,
-                            remote_name,
-                            pipeline_name,
-                            item.status,
-                        );
-                    },
-                    .footer => break,
+            while (poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break catch break) |res| {
+                const pipeline_name = res.task.pipeline;
+                if (res.logs) |logs| {
+                    if (logs.data.len > 0)
+                        try view.print_logs(pipeline_name, logs.data);
+                    state.set_log_offset(io, remote_name, pipeline_name, logs.end_offset);
                 }
+
+                if (res.usage) |u| {
+                    state.update_usage(
+                        io,
+                        remote_name,
+                        pipeline_name,
+                        u.cpu_usec,
+                        u.memory_bytes,
+                        std.Io.Clock.now(.real, io),
+                    );
+                }
+
+                try poll_item(
+                    gpa,
+                    io,
+                    project,
+                    deployment,
+                    &state,
+                    &fetcher,
+                    remote_name,
+                    pipeline_name,
+                    res.status,
+                );
             }
         }
 
@@ -199,9 +189,10 @@ fn poll_item(
     pipeline_name: []const u8,
     status: proto.task.poll.Status,
 ) !void {
-    switch (status) {
-        .running => {},
-        .success => {
+    if (status) |s| switch (s) {
+        //TODO: display these too
+        .running, .frozen, .preparing, .harvesting => {},
+        .done => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
             const pipeline = deployment.config.get_pipeline(pipeline_name);
             if (pipeline) |p| {
@@ -225,7 +216,8 @@ fn poll_item(
 
             state.completed(io, remote_name, pipeline_name);
         },
-        .failed => |code| {
+        .failed => {
+            const code = 1; //TODO: restore this when actually fetching the code
             deployment.remove_running(gpa, remote_name, pipeline_name);
             const err_msg = try gpa.print("task failed with exit code {d}", .{code});
             state.err(io, remote_name, pipeline_name, err_msg);
@@ -242,7 +234,7 @@ fn poll_item(
             deployment.remove_running(gpa, remote_name, pipeline_name);
             state.skipped(io, remote_name, pipeline_name);
         },
-        .stopped => {
+        .killed => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
             state.stopped(io, remote_name, pipeline_name);
 
@@ -254,19 +246,18 @@ fn poll_item(
                     .status = .stopped,
                 });
         },
-        .not_found => {
-            deployment.remove_running(gpa, remote_name, pipeline_name);
-            state.err(io, remote_name, pipeline_name, "task not found on remote");
-            if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
-                try deployment.add_failed(gpa, .{
-                    .retries_left = 0,
-                    .remote = remote_name,
-                    .pipeline = pipeline.name,
-                    .status = .not_found,
-                });
-        },
+    } else {
+        deployment.remove_running(gpa, remote_name, pipeline_name);
+        state.err(io, remote_name, pipeline_name, "task not found on remote");
+        if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+            try deployment.add_failed(gpa, .{
+                .retries_left = 0,
+                .remote = remote_name,
+                .pipeline = pipeline.name,
+                .status = .not_found,
+            });
     }
-    deployment.save(io, project) catch {};
+    try deployment.save(io, project);
 }
 
 pub fn run_task(
@@ -360,45 +351,35 @@ pub fn run_task(
 
         poll_client.conn.send_object(log_buffer, proto.Request, .task_poll) catch continue;
         poll_client.conn.send_object(log_buffer, proto.task.poll.Req, .{
-            .header = .{
-                .tasks = &.{.{
-                    .task = .{
-                        .deployment = deployment.id,
-                        .pipeline = step.pipeline,
-                        .workspace = deployment.config.workspace,
-                    },
-                    .logs_offset = step_state.log_offset,
-                }},
+            .task = .{
+                .deployment = deployment.id,
+                .pipeline = step.pipeline,
+                .workspace = deployment.config.workspace,
             },
+            .logs_offset = step_state.log_offset,
         }) catch continue;
+        poll_client.conn.send_object(log_buffer, proto.task.poll.Req, null) catch continue;
 
-        while (true) {
-            const res = poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break;
-            const poll_res = res catch break;
-            switch (poll_res) {
-                .item => |item| {
-                    if (item.logs) |logs| {
-                        if (logs.data.len > 0) {
-                            const stdout: std.Io.File = .stdout();
-                            try stdout.writeStreamingAll(io, logs.data);
-                        }
-                        state.set_log_offset(io, step.remote, step.pipeline, logs.end_offset);
-                    }
-
-                    try poll_item(
-                        gpa,
-                        io,
-                        project,
-                        deployment,
-                        &state,
-                        null,
-                        step.remote,
-                        step.pipeline,
-                        item.status,
-                    );
-                },
-                .footer => break,
+        while (poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break catch break) |item| {
+            if (item.logs) |logs| {
+                if (logs.data.len > 0) {
+                    const stdout: std.Io.File = .stdout();
+                    try stdout.writeStreamingAll(io, logs.data);
+                }
+                state.set_log_offset(io, step.remote, step.pipeline, logs.end_offset);
             }
+
+            try poll_item(
+                gpa,
+                io,
+                project,
+                deployment,
+                &state,
+                null,
+                step.remote,
+                step.pipeline,
+                item.status,
+            );
         }
 
         _ = poll_arena.reset(.retain_capacity);
