@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const log = std.log.scoped;
 
 const cgroup_root = "/sys/fs/cgroup";
 const cgroup_procs = "cgroup.procs";
@@ -61,10 +62,14 @@ pub fn deinit(self: @This(), gpa: std.mem.Allocator) void {
 }
 
 pub fn create(self: @This(), io: std.Io) !void {
+    const l = log(.cgroup2);
+    l.debug("creating cgroup {s}", .{self.path}); //debug
     return try std.Io.Dir.cwd().createDirPath(io, self.path);
 }
 
 pub fn destroy(self: @This(), io: std.Io) !void {
+    const l = log(.cgroup2);
+    l.debug("destroying cgroup {s}", .{self.path}); //debug
     return try std.Io.Dir.cwd().deleteDir(io, self.path);
 }
 
@@ -114,6 +119,8 @@ pub fn procs_list(self: @This(), gpa: std.mem.Allocator, io: std.Io) ![]i64 {
 }
 
 pub fn procs_add(self: @This(), gpa: std.mem.Allocator, io: std.Io, pid: i64) !void {
+    const l = log(.cgroup2);
+    l.debug("adding pid {d} to cgroup {s}", .{ pid, self.path }); //debug
     const write = try gpa.print("{d}\n", .{pid});
     defer gpa.free(write);
     try _write(gpa, io, self.path, cgroup_procs, write);
@@ -128,6 +135,8 @@ pub fn self_pid() i64 {
 }
 
 pub fn kill(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
+    const l = log(.cgroup2);
+    l.debug("killing cgroup {s}", .{self.path}); //debug
     return try _write(gpa, io, self.path, cgroup_kill, "1");
 }
 

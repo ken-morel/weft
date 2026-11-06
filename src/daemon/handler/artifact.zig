@@ -15,12 +15,14 @@ const Server = @import("../Server.zig");
 const Task = @import("../Task.zig");
 
 pub fn has(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.has.Res) {
+    const l = log(.handle_artifact_has);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     const alloc = arena.allocator();
     const io = daemon.io;
 
     const req = try conn.recv_object(alloc, proto.artifact.has.Req);
+    l.debug("has {s}/{s}/{d}?", .{ req.id.workspace, req.id.pipeline, req.id.deployment }); //debug
 
     return if (std.Io.Dir.cwd().access(
         io,
@@ -35,11 +37,14 @@ pub fn has(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.has.Res)
 }
 
 pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.pull.Res) {
+    const l = log(.handle_artifact_pull);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
     const req = try conn.recv_object(alloc, proto.artifact.pull.Req);
+
+    l.debug("pulling artifact {s}/{s}/{d}", .{ req.id.workspace, req.id.pipeline, req.id.deployment }); //debug
 
     const artifact_path = try alloc.print(paths.artifact, req.id.wpd());
     try std.Io.Dir.cwd().access(
@@ -52,10 +57,13 @@ pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.pull.Re
 }
 
 pub fn push(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.push.Res) {
+    const l = log(.handle_artifact_push);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     const alloc = arena.allocator();
     const req = try conn.recv_object(alloc, proto.artifact.push.Req);
+
+    l.info("pushing artifact {s}/{s}/{d}", .{ req.id.workspace, req.id.pipeline, req.id.deployment });
 
     const cwd: std.Io.Dir = .cwd();
 

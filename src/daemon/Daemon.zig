@@ -81,8 +81,8 @@ pub fn reload_keys(self: *@This()) !void {
 }
 
 pub fn run_client_server(self: *@This()) !void {
-    const log_a = log(.client_server);
-    log_a.info("listening on TCP :{d}", .{self.config.port});
+    const l = log(.client_server);
+    l.info("listening on TCP :{d}", .{self.config.port});
 
     var group: std.Io.Group = .init;
     defer group.cancel(self.io);
@@ -96,7 +96,7 @@ pub fn run_client_server(self: *@This()) !void {
             break :req self.server.accept(self.io) catch |err| {
                 if (err == error.Canceled)
                     return;
-                log_a.err("accept error: {any}", .{err});
+                l.err("accept error: {any}", .{err});
                 try std.Io.sleep(self.io, .fromMilliseconds(100), .awake);
                 continue :req;
             };
@@ -165,7 +165,7 @@ pub fn _run_system_server(self: *@This()) !void {
                 proto.DaemonMsg,
                 .{ .header = true },
             );
-            l.info("daemon cmd: {any}", .{cmd});
+            l.info("received command: {any}", .{cmd});
             switch (cmd) {
                 .reload_keys => {
                     self.reload_keys() catch |err|
@@ -175,7 +175,7 @@ pub fn _run_system_server(self: *@This()) !void {
             }
         },
         .invalid_request => |msg| {
-            l.err("  invalid request: {s}", .{msg});
+            l.err("invalid request: {s}", .{msg});
             conn.close(self.io);
         },
         .done => {
@@ -188,12 +188,13 @@ pub fn _run_system_server(self: *@This()) !void {
 
 fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
     const l = log(.handle_signal);
-    l.warn("Someone wanted to push us with a {any}, but we're still exiting gracefuly...", .{sig});
+    l.info("received {s}, shutting down", .{@tagName(sig)});
 
     std.process.exit(0);
 }
 
 pub fn run(self: *@This()) !void {
+    const l = log(.daemon);
     try paths.ensure_dirs(self.io);
 
     var group: std.Io.Group = .init;
@@ -202,16 +203,21 @@ pub fn run(self: *@This()) !void {
     _ = try spawn(self.io, &group, StatsServer.run, .{&self.stats_server});
     _ = try spawn(self.io, &group, run_system_server, .{self});
 
+    l.info("starting on port {d} (pid {d})", .{ self.config.port, std.os.linux.getpid() });
+    defer l.info("stopped", .{});
+
     try group.await(self.io);
 }
 
 pub fn connect(self: *@This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !Connection {
+    const l = log(.client_server);
     var hello: Crypt.ClientHello = undefined;
     try reader.readSliceAll(std.mem.asBytes(&hello));
     if (!std.mem.eql(u8, &hello.magic, &Crypt.magick))
         return error.InvalidProtocol;
 
     if (!self.validate_key(hello.client_public)) {
+        l.warn("rejecting client: key not authorized", .{});
         var reject_msg: Crypt.ServerChallenge = .{
             .status = .unauthorized,
             .challenge = undefined,

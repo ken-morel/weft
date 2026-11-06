@@ -68,10 +68,12 @@ pub fn from_cgroup_name(name: []const u8) ?@This() {
     } };
 }
 pub fn write_spec(self: @This(), gpa: std.mem.Allocator, io: std.Io, spec: Spec) !void {
+    const l = log(.task_io);
     const cwd: std.Io.Dir = .cwd();
 
     const spec_path = try gpa.print(paths.task_spec, self.id.wpd());
     defer gpa.free(spec_path);
+    l.debug("writing spec to {s}", .{spec_path}); //debug
 
     var atomic = try cwd.createFileAtomic(io, spec_path, .{
         .make_path = true,
@@ -92,13 +94,17 @@ pub fn write_spec(self: @This(), gpa: std.mem.Allocator, io: std.Io, spec: Spec)
     try atomic.replace(io);
 }
 pub fn read_spec(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Spec {
+    const l = log(.task_io);
     const spec_path = try gpa.print(paths.task_spec, self.id.wpd());
     defer gpa.free(spec_path);
+    l.debug("reading spec from {s}", .{spec_path}); //debug
     var txt: []const u8 = try std.Io.Dir.cwd().readFileAlloc(io, spec_path, ara, .limited64(Task.Spec.max_size));
     return try zoto.deserialize(ara, &txt, Task.Spec, .{ .header = true });
 }
 
 pub fn write_status(self: @This(), gpa: std.mem.Allocator, io: std.Io, status: Status) !void {
+    const l = log(.task_io);
+    l.debug("status -> {s}", .{@tagName(status)}); //debug
     const str = try zoto.serializeAlloc(gpa, Status, status, .{ .header = true });
     const status_path = try gpa.print(paths.task_status, self.id.wpd());
     defer gpa.free(status_path);
@@ -113,6 +119,8 @@ pub fn read_status(self: @This(), gpa: std.mem.Allocator, io: std.Io) !Status {
 }
 
 pub fn kill(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
+    const l = log(.task_io);
+    l.debug("killing task {s}/{s}/{d}", .{ self.id.workspace, self.id.pipeline, self.id.deployment }); //debug
     const cg = try self.cgroup(gpa);
     defer cg.deinit(gpa);
     try cg.kill(gpa, io);
@@ -174,6 +182,7 @@ pub const TaskSiblingsIterator = struct {
 };
 
 pub fn siblings(self: *const @This(), gpa: std.mem.Allocator, io: std.Io, skip_self: bool) !TaskSiblingsIterator {
+    const l = log(.task_io);
     const tasks_run = try gpa.print(paths.tasks_run_parent, self.id.wp());
     defer gpa.free(tasks_run);
     const dir = std.Io.Dir.cwd().openDir(io, tasks_run, .{ .iterate = true }) catch |err|
@@ -187,6 +196,7 @@ pub fn siblings(self: *const @This(), gpa: std.mem.Allocator, io: std.Io, skip_s
         else
             return err;
 
+    l.debug("listing sibling deployments in {s}", .{tasks_run}); //debug
     return .{
         .task = self,
         .dir = dir,

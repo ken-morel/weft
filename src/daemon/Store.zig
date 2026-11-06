@@ -28,14 +28,14 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
     defer gpa.free(root_path);
 
     if (cwd.access(io, root_path, .{})) |_| {
-        l.debug("nix::store package {s} already in store", .{basename});
+        l.debug("package {s} already in store", .{basename});
         return;
     } else |err| if (err != error.FileNotFound) {
-        l.err("{any}", .{err});
+        l.err("store access failed: {any}", .{err});
         return err;
     }
 
-    l.info("nix::store fetching {s}...", .{basename});
+    l.info("fetching {s}...", .{basename});
 
     var client: std.http.Client = .{
         .io = io,
@@ -104,7 +104,7 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             defer cwd.deleteTree(io, temp_dir_path) catch {};
 
             var size_buf: [1 << 6]u8 = undefined;
-            l.info("nix::store downloading {s} ({s})...", .{ store_basename, sizes.format_bytes(&size_buf, nar_info.file_size) catch "..." });
+            l.info("downloading {s} ({s})...", .{ store_basename, sizes.format_bytes(&size_buf, nar_info.file_size) catch "..." });
 
             const temp_store_path = try std.fs.path.join(gpa, &.{ temp_dir_path, store_basename });
             defer gpa.free(temp_store_path);
@@ -116,12 +116,12 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             while (try children.next(io)) |entry|
                 try temp_dir.rename(entry.name, store_dir, entry.name, io);
 
-            l.info("nix::store installed {s}", .{store_basename});
+            l.info("installed {s}", .{store_basename});
         }
 
         const popped = backlog.pop() orelse unreachable;
         gpa.free(popped);
     }
 
-    l.info("nix::store finished installing {s}", .{basename});
+    l.info("finished installing {s}", .{basename});
 }

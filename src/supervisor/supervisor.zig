@@ -113,7 +113,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         break :l std.log.scoped(.supervisor_supervise);
     };
 
-    l.info("supervisor initialized", .{});
+    l.info("supervising task {s}/{s}/{d}", .{ task.id.workspace, task.id.pipeline, task.id.deployment });
 
     ensure_dirs: {
         try cwd.createDirPath(io, root_path);
@@ -132,6 +132,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         cwd.deleteTree(io, scratch_path) catch {};
         cwd.deleteFile(io, active_link) catch {};
     }
+    l.debug("task directories and active link ready", .{}); //debug
 
     const spec = try task.read_spec(gpa, alloc, io);
     const workspace = task.get_workspace();
@@ -159,8 +160,10 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         };
         defer client.deinit();
 
-        for (spec.pkgs) |pkg|
+        for (spec.pkgs) |pkg| {
+            l.debug("installing nix package {s}", .{pkg}); //debug
             try nix.install_package(gpa, io, &client, pkg);
+        }
 
         l.info("all nix packages installed", .{});
     }
@@ -188,6 +191,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         }
         break :prepare_files;
     }
+    l.debug("prepared home/cwd/outputs/keep directories", .{}); //debug
 
     const skip = handle_siblings: {
         l.info("resolving sibling policies...", .{});
@@ -206,6 +210,8 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             l.warn("waiting {d}s for active sibling {s}...", .{ do_sibling.wait - waited, cgroup_name });
             try std.Io.sleep(io, .fromSeconds(do_sibling.poll), .awake);
         }
+        if (waited == 0)
+            l.debug("no active siblings found", .{}); //debug
         if (waited > 0)
             l.info("well, waited long enough", .{});
 
@@ -239,9 +245,11 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     } else {
         if (std.os.linux.errno(std.os.linux.unshare(std.os.linux.CLONE.NEWPID)) != .SUCCESS)
             return error.UnsharePidFailed;
+        l.debug("unshared pid namespace", .{}); //debug
 
         const cgroup = try task.cgroup(gpa);
         try cgroup.create(io);
+        l.debug("cgroup created", .{}); //debug
         defer {
             cgroup.kill(gpa, io) catch {};
             cgroup.destroy(io) catch {};
@@ -263,6 +271,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             try cgroup.pids_max_set(gpa, io, tune.io.pids_max orelse default_max_pids);
             break :configure_cgroup;
         }
+        l.debug("cgroup configured", .{}); //debug
 
         var child = try std.process.spawn(io, .{
             .argv = &.{
@@ -278,6 +287,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         const child_pid: std.posix.pid_t = child.id orelse unreachable;
 
         try cgroup.procs_add(gpa, io, child_pid);
+        l.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
 
         if (std.os.linux.errno(std.os.linux.kill(child_pid, .CONT)) != .SUCCESS)
             return error.KillContFailed;
@@ -294,9 +304,11 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             return error.TaskFailed;
     }
     try task.write_status(gpa, io, .harvesting);
+    l.info("harvesting {d} output(s)", .{spec.outputs.len});
 
     for (spec.outputs) |output| {
         defer _ = barena.reset(.free_all);
+        l.debug("harvesting output {s}", .{output}); //debug
         const out_sub = try balloc.printSentinel(paths.scratch_output, task.id.wpd_(output), 0);
 
         {
@@ -327,11 +339,13 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 const no_run_script = "#!/bin/env -S weft nop";
 
 pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
+    const l = std.log.scoped(.supervisor_spawn);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
 
     const spec = try task.read_spec(gpa, alloc, io);
+    l.info("spawning task {s}/{s}/{d}", .{ task.id.workspace, task.id.pipeline, task.id.deployment });
     const workspace = task.get_workspace();
     const uid = try workspace.uid(alloc, io);
     const username = try alloc.print("weft-{s}", .{workspace.name});
@@ -346,9 +360,11 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
     if (std.os.linux.errno(std.os.linux.unshare(flags)) != .SUCCESS)
         return error.UnshareFailed;
+    l.debug("unshared mount/uts/ipc/cgroup namespaces", .{}); //debug
 
     try mount.isolate();
     try mount.mount_fs("tmpfs", rootfs_path, "tmpfs", "size=16m,mode=0755", true);
+    l.debug("rootfs tmpfs mounted", .{}); //debug
 
     {
         var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
@@ -489,12 +505,14 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         }
     }
 
+    l.debug("sandbox filesystem ready", .{}); //debug
     try mount.lock_read_only(".");
     try mount.pivot_root(".");
     if (std.os.linux.errno(std.os.linux.chdir("/work")) != .SUCCESS)
         return error.ChdirFailed;
 
     // Drop privileges to workspace UID/GID
+    l.debug("dropping privileges to uid {d}", .{uid}); //debug
     if (std.os.linux.errno(std.os.linux.syscall2(.setgroups, 0, 0)) != .SUCCESS)
         return error.SetGroupsFailed;
     if (std.os.linux.errno(std.os.linux.setresgid(uid, uid, uid)) != .SUCCESS)
@@ -536,6 +554,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         break :env_map env_map;
     };
     defer env_map.deinit();
+    l.debug("environment ready, spawning entry", .{}); //debug
 
     const child = try std.process.spawn(io, .{
         .argv = &.{"/entry"},
@@ -548,11 +567,16 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         const done = std.os.linux.waitpid(-1, @ptrCast(&status), 0); // takes i32 for status
         if (std.os.linux.errno(done) == .INTR)
             continue;
+        l.debug("reaped pid {d}", .{done}); //debug
         if (done == child_pid) {
             const code: u8 = if (std.os.linux.W.IFEXITED(status))
                 std.os.linux.W.EXITSTATUS(status)
             else
-                128 + @as(u8, @truncate(@backingInt(std.os.linux.W.TERMSIG(status)))); // termsig returns u32
+                128 + @as(u8, @truncate(@backingInt(std.os.linux.W.TERMSIG(status))));
+            if (code != 0)
+                l.err("task exited with code {d}", .{code})
+            else
+                l.info("task exited successfully", .{});
             std.os.linux.exit_group(code);
         }
     }

@@ -59,6 +59,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             else
                 err;
     };
+    l.debug("request: {any}", .{request}); //debug
 
     const response_buf = try alloc.alloc(u8, 4 << 10);
     switch (request) {
@@ -66,7 +67,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handlers.artifact.push(daemon, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                l.err("daemon::worker::artifact_push {any}", .{err});
+                l.err("artifact_push failed: {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -75,7 +76,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handlers.task.spawn(daemon, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                l.err("daemon::worker::task_spawn {any}", .{err});
+                l.err("task_spawn failed: {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -84,7 +85,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handlers.artifact.pull(daemon, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                l.err("daemon::worker::artifact_pull {any}", .{err});
+                l.err("artifact_pull failed: {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -93,7 +94,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handlers.task.poll(daemon, &conn, response_buf) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                l.err("daemon::worker::task_poll {any}", .{err});
+                l.err("task_poll failed: {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -102,7 +103,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handlers.artifact.has(daemon, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                l.err("daemon::worker::artifact_has {any}", .{err});
+                l.err("artifact_has failed: {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
@@ -116,7 +117,7 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const res = handlers.task.kill(daemon, &conn) catch |err| err: {
                 if (@errorReturnTrace()) |trace|
                     std.debug.dumpErrorReturnTrace(trace);
-                l.err("daemon::worker::task_kill {any}", .{err});
+                l.err("task_kill failed: {any}", .{err});
                 break :err err;
             };
             try conn.send_object(response_buf, @TypeOf(res), res);
