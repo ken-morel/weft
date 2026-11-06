@@ -111,7 +111,7 @@ pub fn fetch(self: *@This(), io: std.Io, basename: []const u8) !void {
             try nix.fetch(std.heap.page_allocator, &client, io, nar_info.url, temp_store_path);
 
             var children = temp_dir.iterate();
-            var store_dir = try cwd.openDir(io, paths.weft_store_dir, .{});
+            var store_dir = try cwd.openDir(io, paths.weft_store_path, .{});
             defer store_dir.close(io);
             while (try children.next(io)) |entry|
                 try temp_dir.rename(entry.name, store_dir, entry.name, io);

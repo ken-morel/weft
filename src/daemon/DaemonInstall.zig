@@ -3,8 +3,9 @@ const log = std.log.scoped;
 
 const ClientInstall = @import("../client/ClientInstall.zig");
 const Deployment = @import("../client/Deployment.zig");
+const domain = @import("../domain/domain.zig");
+const read_only_user_permissions = domain.read_only_user_permissions;
 const paths = @import("../domain/paths.zig");
-const read_only_user_permissions = paths.read_only_user_permissions;
 const proto = @import("../domain/proto.zig");
 
 pub const Config = struct {
@@ -24,7 +25,7 @@ pub fn open_temp(io: std.Io, sub: []const u8) !std.Io.Dir {
 
     var tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(
         io,
-        paths.weft_tmp_dir,
+        paths.weft_tmp,
         .{ .open_options = .{} },
     );
     defer tmp_dir.close(io);
@@ -139,7 +140,7 @@ pub const InitSystem = enum {
                 while (waited < 5) : (waited += 1) {
                     if (cwd.access(io, "/etc/sv/weft/supervise/ok", .{})) |_|
                         break
-                    else |err| if (err == error.Cancelled)
+                    else |err| if (err == error.Canceled)
                         return err
                     else
                         try io.sleep(.fromSeconds(1), .awake);
@@ -275,7 +276,7 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    var bin_dir: std.Io.Dir = try std.Io.Dir.cwd().openDir(io, paths.weft_bin_dir, .{});
+    var bin_dir: std.Io.Dir = try std.Io.Dir.cwd().openDir(io, paths.weft_bin, .{});
     defer bin_dir.close(io);
 
     var tools = std.mem.splitScalar(u8, allowed_tools, ',');

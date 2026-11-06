@@ -99,6 +99,11 @@ pub fn serialize(writer: *std.Io.Writer, comptime T: type, value: T, comptime op
         try writer.writeInt(u64, comptime hashType(T), endian);
     try serializeValue(writer, T, value);
 }
+pub fn serializeAlloc(gpa: std.mem.Allocator, comptime T: type, value: T, comptime opts: Options) std.Io.Writer.Error![]const u8 {
+    var allocating: std.Io.Writer.Allocating = .init(gpa);
+    serialize(&allocating.writer, T, value, opts);
+    return allocating.written();
+}
 
 fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Writer.Error!void {
     const info = @typeInfo(T);

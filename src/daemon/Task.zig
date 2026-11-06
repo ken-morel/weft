@@ -2,15 +2,30 @@ const std = @import("std");
 const log = std.log.scoped;
 
 const Deployment = @import("../client/Deployment.zig");
+const domain = @import("../domain/domain.zig");
 const DotEnv = @import("../domain/DotEnv.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 pub const Id = proto.task.Id;
 const Weft = @import("../domain/Weft.zig");
+const Workspace = @import("../domain/Workspace.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
 const zoto = @import("../util/zoto.zig");
 
 const Task = @This();
+
+pub const Status = union(enum) {
+    preparing,
+    running,
+    harvesting,
+    done,
+    skipped,
+    sibling: enum { skipped, failed },
+    failed,
+    killed,
+    frozen,
+};
+
 id: proto.task.Id,
 
 pub fn from_unit_name(name: []const u8) ?@This() {
@@ -31,6 +46,12 @@ pub fn from_unit_name(name: []const u8) ?@This() {
     } };
 }
 
+pub fn get_workspace(self: @This()) Workspace {
+    return .{
+        .name = self.id.workspace,
+    };
+}
+
 pub fn from_cgroup_name(name: []const u8) ?@This() {
     if (std.mem.containsAtLeast(u8, name, 1, "--"))
         return from_unit_name(name);
@@ -48,14 +69,14 @@ pub fn from_cgroup_name(name: []const u8) ?@This() {
     } };
 }
 pub fn write_spec(self: @This(), gpa: std.mem.Allocator, io: std.Io, spec: Spec) !void {
-    const path = try self.run_dir_path(gpa);
-    defer gpa.free(path);
-    const spec_path = try std.fs.path.join(gpa, &.{ path, "spec" });
+    const cwd: std.Io.Dir = .cwd();
+
+    const spec_path = try gpa.print(paths.task_spec, self.id.wpd());
     defer gpa.free(spec_path);
 
-    var atomic = try std.Io.Dir.cwd().createFileAtomic(io, spec_path, .{
+    var atomic = try cwd.createFileAtomic(io, spec_path, .{
         .make_path = true,
-        .permissions = paths.read_only_user_permissions,
+        .permissions = domain.read_only_user_permissions,
         .replace = true,
     });
     defer atomic.deinit(io);
@@ -72,17 +93,24 @@ pub fn write_spec(self: @This(), gpa: std.mem.Allocator, io: std.Io, spec: Spec)
     try atomic.replace(io);
 }
 pub fn read_spec(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Spec {
-    const path = try self.run_dir_path(gpa);
-    defer gpa.free(path);
-    const spec_path = try std.fs.path.join(gpa, &.{ path, "spec" });
+    const spec_path = try gpa.print(paths.task_spec, self.wpd());
     defer gpa.free(spec_path);
-
     var txt: []const u8 = try std.Io.Dir.cwd().readFileAlloc(io, spec_path, ara, .limited64(Task.Spec.max_size));
     return try zoto.deserialize(ara, &txt, Task.Spec, .{ .header = true });
 }
 
-pub fn argz_parse(_: std.mem.Allocator, _: ?std.Io, val: []const u8) anyerror!@This() {
-    return from_cgroup_name(val) orelse error.InvalidTask;
+pub fn write_status(self: @This(), gpa: std.mem.Allocator, io: std.Io, status: Status) !void {
+    const str = try zoto.serializeAlloc(gpa, Status, status, .{ .header = true });
+    const status_path = try gpa.print(paths.task_status, self.wpd());
+    defer gpa.free(status_path);
+    try domain.write_file_atomic(io, .cwd(), status_path, str, .{ .header = true });
+}
+pub fn read_status(self: @This(), gpa: std.mem.Allocator, io: std.Io) !Status {
+    const status_path = try gpa.print(paths.task_status, self.id.wpd());
+    defer gpa.free(status_path);
+    var content: []const u8 = try std.Io.Dir.cwd().readFileAlloc(io, status_path, gpa, .unlimited);
+    defer gpa.free(content);
+    return zoto.deserialize(null, &content, Status, .{ .header = true });
 }
 
 pub fn kill(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
@@ -108,39 +136,6 @@ pub fn cgroup(self: @This(), gpa: std.mem.Allocator) !CGroup2 {
     const name = try self.cgroup_name(gpa);
     defer gpa.free(name);
     return try .init(gpa, name);
-}
-
-pub fn run_dir_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
-    return try paths.run(
-        gpa,
-        self.id.workspace,
-        self.id.pipeline,
-        &self.id.deployment.to_string(),
-    );
-}
-
-pub fn archive_dir_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
-    return paths.task_archive(
-        gpa,
-        self.id.workspace,
-        &self.id.deployment.to_string(),
-        self.id.pipeline,
-    );
-}
-
-pub fn keep_path(self: @This(), gpa: std.mem.Allocator, name: []const u8) ![]const u8 {
-    return paths.task_cache(
-        gpa,
-        self.id.workspace,
-        name,
-    );
-}
-pub fn artifacts_path(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
-    return try paths.artifacts(
-        gpa,
-        self.id.workspace,
-        &self.id.deployment.to_string(),
-    );
 }
 
 pub const TaskSiblingsIterator = struct {
@@ -211,12 +206,21 @@ pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
     self.id.free_duped(alloc);
 }
 
-pub fn usage(self: @This(), gpa: std.mem.Allocator, io: std.Io) ?proto.task.poll.TaskUsage {
+pub fn usage(self: @This(), gpa: std.mem.Allocator, io: std.Io) !?proto.task.poll.TaskUsage {
     const cg = self.cgroup(gpa) catch return null;
     defer cg.deinit(gpa);
 
-    const mem_bytes = cg.memory_current_get(gpa, io) catch 0;
-    const cpu = cg.cpu_stat_get(gpa, io) catch CGroup2.CpuStat{};
+    const mem_bytes = cg.memory_current_get(gpa, io) catch |e|
+        if (e == error.Canceled)
+            return e
+        else
+            0;
+
+    const cpu: CGroup2.CpuStat = cg.cpu_stat_get(gpa, io) catch |e|
+        if (e == error.Canceled)
+            return e
+        else
+            .{};
 
     return .{
         .cpu_usec = cpu.usage_usec,

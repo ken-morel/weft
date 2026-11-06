@@ -14,79 +14,43 @@ const DaemonInstall = @import("../DaemonInstall.zig");
 const Server = @import("../Server.zig");
 const Task = @import("../Task.zig");
 
-pub fn poll(
-    daemon: *Daemon,
-    conn: *Connection,
-    response_buf: []u8,
-) proto.Res(proto.task.poll.Res) {
-    const l = log(.handle_task_poll);
-    const cwd = std.Io.Dir.cwd();
+pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(proto.task.poll.Res) {
+    // const l = log(.handle_task_poll);
+    const cwd: std.Io.Dir = .cwd();
     const gpa = daemon.gpa;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+
+    var barena: std.heap.ArenaAllocator = .init(gpa);
+    defer barena.deinit();
+    const balloc = barena.allocator();
+
     const io = daemon.io;
-    const req = (try conn.recv_object(alloc, proto.task.poll.Req)).header;
 
-    for (req.tasks) |item_req| {
-        const task: Task = .{ .id = item_req.task };
+    while (try conn.recv_object(balloc, proto.task.poll.Req)) |req| {
+        defer _ = barena.reset(.free_all);
 
-        const archive_dir_path = task.archive_dir_path(
-            alloc,
-        ) catch |err|
-            return err;
+        const id = req.task;
+        const task: Task = .{ .id = id };
 
-        var archive_dir = cwd.openDir(io, archive_dir_path, .{}) catch |err| {
+        const status = task.read_status(gpa, io) catch |err|
             if (err == error.FileNotFound) {
-                try conn.send_object(response_buf, proto.Res(proto.task.poll.Res), .{
-                    .item = .{
-                        .task = item_req.task,
+                try conn.send_object(
+                    response_buf,
+                    proto.Res(proto.task.poll.Res),
+                    .{
+                        .task = req.task,
                         .logs = null,
-                        .status = .not_found,
+                        .status = null,
                         .usage = null,
                     },
-                });
+                );
                 continue;
             } else return err;
-        };
-        defer archive_dir.close(io);
 
-        const status: ?i32 = status: {
-            var buf: [32]u8 = undefined;
-            const file = archive_dir.openFile(
+        const logs: ?proto.task.poll.Logs = if (req.logs_offset) |offset| read_logs: {
+            const logs_file = cwd.openFile(
                 io,
-                "status",
-                .{ .allow_directory = false },
-            ) catch |err|
-                if (err == error.FileNotFound)
-                    break :status null
-                else
-                    return err;
-
-            defer file.close(io);
-            const s = file.readPositionalAll(io, &buf, 0) catch |err| {
-                l.warn("Could not read status file: {any}", .{err});
-                return err;
-            };
-
-            if (s == 0)
-                break :status null;
-
-            const trimmed = std.mem.trim(u8, buf[0..s], " \r\n\t");
-            if (trimmed.len == 0)
-                break :status null
-            else
-                break :status std.fmt.parseInt(i32, trimmed, 10) catch |err| {
-                    l.warn("Could not parse status '{s}': {any}", .{ trimmed, err });
-                    return err;
-                };
-        };
-
-        const logs: ?proto.task.poll.Logs = if (item_req.logs_offset) |offset| read_logs: {
-            const logs_file = archive_dir.openFile(
-                io,
-                "log.txt",
-                .{ .allow_directory = false },
+                try balloc.print(paths.task_log, id.wpd()),
+                .{},
             ) catch |err| {
                 if (err == error.FileNotFound)
                     break :read_logs null
@@ -99,49 +63,30 @@ pub fn poll(
             if (size <= offset)
                 break :read_logs .{
                     .data = &.{},
-                    .compressed = false,
                     .end_offset = size,
                 };
 
-            const to_read = @min(size - offset, Connection.max_packet_size - (4 << 10));
-            const buff = try alloc.alloc(u8, to_read);
+            const to_read = @min(size - offset, 3 << 10);
+            const buff = try balloc.alloc(u8, to_read);
 
             _ = try logs_file.readPositionalAll(io, buff, offset);
             break :read_logs .{
                 .data = buff,
-                .compressed = false,
                 .end_offset = offset + to_read,
             };
         } else null;
 
-        const usage: ?proto.task.poll.TaskUsage = if (status == null) task.usage(gpa, io) else null;
+        const usage: ?proto.task.poll.TaskUsage = try task.usage(gpa, io);
 
-        if (status) |s|
-            if (s < -3 or s > std.math.maxInt(u16)) {
-                l.err("Invalid exit status: {any}", .{s});
-                return error.InvalidStatus;
-            };
         try conn.send_object(response_buf, proto.Res(proto.task.poll.Res), .{
-            .item = .{
-                .task = item_req.task,
-                .logs = logs,
-                .status = if (status) |s|
-                    if (s == 0 or s == -2)
-                        .success
-                    else if (s == -1)
-                        .skipped
-                    else if (s == -3)
-                        .stopped
-                    else
-                        .{ .failed = @intCast(s) }
-                else
-                    .running,
-                .usage = usage,
-            },
+            .task = req.task,
+            .logs = logs,
+            .status = status,
+            .usage = usage,
         });
     }
 
-    return .{ .footer = .{} };
+    return null;
 }
 
 pub fn kill(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.kill.Res) {
@@ -160,23 +105,21 @@ pub fn kill(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.kill.Res) {
 }
 
 pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res) {
-    const l = log(.handle_task_spawn);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
     const alloc = arena.allocator();
-    const io = daemon.io;
 
     const spec = (try conn.recv_object(alloc, proto.task.spawn.Req)).spec;
 
     const task: Task = .{ .id = spec.task_id };
-    const run_dir_path = try task.run_dir_path(alloc);
-    const run_dir = try std.Io.Dir.cwd().createDirPathOpen(io, run_dir_path, .{});
-    defer run_dir.close(io);
+
+    const task_dir = try gpa.print(paths.task, task.id.wpd());
+    defer gpa.free(task_dir);
+    try std.Io.Dir.cwd().createDirPath(daemon.io, task_dir);
 
     try task.write_spec(gpa, daemon.io, spec);
 
-    l.info("Wrote spec for task: {s}/spec", .{run_dir_path});
+    try supervisor.spawn_supervisor(daemon.io, task.id);
 
-    try supervisor.fork(io, task.id);
     return .{};
 }

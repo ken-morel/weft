@@ -21,27 +21,17 @@ pub fn has(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.has.Res)
     const io = daemon.io;
 
     const req = try conn.recv_object(alloc, proto.artifact.has.Req);
-    const deployment = req.id.deployment.to_string();
-    const artifact_dir_path = try paths.artifact(
-        gpa,
-        req.id.workspace,
-        &deployment,
-        req.id.pipeline,
-    );
-    defer gpa.free(artifact_dir_path);
-    const res = has: {
-        std.Io.Dir.cwd().access(
-            io,
-            artifact_dir_path,
-            .{},
-        ) catch |err|
-            if (err == error.FileNotFound)
-                break :has false
-            else
-                return err;
-        break :has true;
-    };
-    return .{ .has = res };
+
+    return if (std.Io.Dir.cwd().access(
+        io,
+        try alloc.print(paths.artifact, req.id.wpd()),
+        .{},
+    )) |_|
+        .{ .has = true }
+    else |err| if (err == error.FileNotFound)
+        .{ .has = false }
+    else
+        err;
 }
 
 pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.pull.Res) {
@@ -50,22 +40,14 @@ pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.pull.Re
     defer arena.deinit();
     const alloc = arena.allocator();
     const req = try conn.recv_object(alloc, proto.artifact.pull.Req);
-    const id = &req.id;
 
-    const artifact_dir_path = try paths.artifact(
-        alloc,
-        id.workspace,
-        &id.deployment.to_string(),
-        id.pipeline,
-    );
-
+    const artifact_path = try alloc.print(paths.artifact, req.id.wpd());
     try std.Io.Dir.cwd().access(
         daemon.io,
-        artifact_dir_path,
+        artifact_path,
         .{},
     );
-
-    try transfer.push(gpa, daemon.io, conn, artifact_dir_path, daemon.config.compress, null);
+    try transfer.push(gpa, daemon.io, conn, artifact_path, daemon.config.compress, null);
     return .{};
 }
 
@@ -75,29 +57,29 @@ pub fn push(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.push.Re
     const alloc = arena.allocator();
     const req = try conn.recv_object(alloc, proto.artifact.push.Req);
 
-    const artifact_dir_path = try paths.artifact(
-        gpa,
-        req.id.workspace,
-        &req.id.deployment.to_string(),
-        req.id.pipeline,
-    );
+    const cwd: std.Io.Dir = .cwd();
 
-    std.Io.Dir.cwd().deleteTree(daemon.io, artifact_dir_path) catch |err|
-        if (err == error.Cancelled)
+    const artifact_path = try alloc.print(paths.artifact, req.id.wpd());
+    const temp_artifact_path = try alloc.print(paths.artifact_tmp, req.id.wpd());
+
+    if (std.fs.path.dirname(artifact_path)) |parent|
+        try cwd.createDirPath(daemon.io, parent);
+
+    cwd.deleteTree(daemon.io, temp_artifact_path) catch |err|
+        if (err == error.Canceled)
             return err;
 
-    const temp_dir = try DaemonInstall.open_temp(daemon.io, "artifact");
-    defer temp_dir.close(daemon.io);
-    const temp_dir_path = try temp_dir.realPathFileAlloc(daemon.io, ".", alloc);
+    try transfer.pull(gpa, daemon.io, conn, temp_artifact_path, daemon.config.compress, null);
 
-    try transfer.pull(gpa, daemon.io, conn, temp_dir_path, daemon.config.compress, null);
+    //BUG: The artifact won't be available for a fracton of a second if it was already existing
+    cwd.deleteTree(daemon.io, artifact_path) catch |err|
+        if (err == error.Canceled)
+            return err;
 
-    if (std.fs.path.dirname(artifact_dir_path)) |parent|
-        try std.Io.Dir.cwd().createDirPath(daemon.io, parent);
-    try std.Io.Dir.cwd().rename(
-        temp_dir_path,
-        std.Io.Dir.cwd(),
-        artifact_dir_path,
+    try cwd.rename(
+        temp_artifact_path,
+        cwd,
+        artifact_path,
         daemon.io,
     );
     return .{};

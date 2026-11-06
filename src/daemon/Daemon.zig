@@ -108,7 +108,7 @@ pub fn run_client_server(self: *@This()) !void {
 pub fn run_system_server(self: *@This()) !void {
     while (true) {
         self._run_system_server() catch |err| {
-            if (err == error.Cancelled or err == error.Cancellable)
+            if (err == error.Canceled)
                 return err
             else {
                 if (@errorReturnTrace()) |trace|
@@ -124,8 +124,6 @@ pub fn _run_system_server(self: *@This()) !void {
     defer group.cancel(self.io);
 
     defer std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch {};
-
-    std.Io.Dir.cwd().createDirPath(self.io, paths.weft_runtime_dir) catch {};
 
     const addr: std.Io.net.UnixAddress = try .init(paths.weft_socket);
     std.Io.Dir.deleteFileAbsolute(self.io, paths.weft_socket) catch |err|
@@ -169,10 +167,6 @@ pub fn _run_system_server(self: *@This()) !void {
             );
             l.info("daemon cmd: {any}", .{cmd});
             switch (cmd) {
-                .task_completed => |msg| {
-                    _ = try spawn(self.io, &group, finalize_task, .{ self, Task{ .id = try msg.task.dupe(self.gpa) }, msg.status });
-                    continue :run .done;
-                },
                 .reload_keys => {
                     self.reload_keys() catch |err|
                         l.err("failed to reload keys: {any}", .{err});
@@ -209,53 +203,6 @@ pub fn run(self: *@This()) !void {
     _ = try spawn(self.io, &group, run_system_server, .{self});
 
     try group.await(self.io);
-}
-
-pub fn finalize_task(self: *@This(), task: Task, status: i32) !void {
-    const l = log(.task_finalize);
-    defer task.free_duped(self.gpa);
-    const cwd: std.Io.Dir = .cwd();
-    const run_dir_path = try task.run_dir_path(self.gpa);
-    defer self.gpa.free(run_dir_path);
-
-    const run_dir = cwd.openDir(self.io, run_dir_path, .{}) catch |err|
-        return if (err == error.FileNotFound) error.TaskNotFound else err;
-    defer run_dir.close(self.io);
-    defer cwd.deleteTree(self.io, run_dir_path) catch {};
-
-    if (status > 0) {
-        l.warn("task {s} failed with exit code {d}, skipping artifact promotion", .{ task.id.pipeline, status });
-        return;
-    }
-
-    const output_dirs_path = try std.fs.path.join(self.gpa, &.{ run_dir_path, "out" });
-    defer self.gpa.free(output_dirs_path);
-
-    const artifacts_dir_path = try task.artifacts_path(self.gpa);
-    defer self.gpa.free(artifacts_dir_path);
-    const artifacts_dir = try cwd.createDirPathOpen(self.io, artifacts_dir_path, .{});
-    defer artifacts_dir.close(self.io);
-
-    const outputs_dir = cwd.openDir(self.io, output_dirs_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) return;
-        return err;
-    };
-    defer outputs_dir.close(self.io);
-
-    var outputs: std.ArrayList([]const u8) = .empty;
-    defer {
-        for (outputs.items) |name|
-            self.gpa.free(name);
-        outputs.deinit(self.gpa);
-    }
-    var it = outputs_dir.iterate();
-    while (try it.next(self.io)) |entry|
-        try outputs.append(self.gpa, try self.gpa.dupe(u8, entry.name));
-
-    for (outputs.items) |name| {
-        artifacts_dir.deleteTree(self.io, name) catch {};
-        try outputs_dir.rename(name, artifacts_dir, name, self.io);
-    }
 }
 
 pub fn connect(self: *@This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !Connection {

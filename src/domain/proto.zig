@@ -76,6 +76,24 @@ pub const task = struct {
             alloc.free(self.workspace);
             alloc.free(self.pipeline);
         }
+        pub inline fn w(self: @This()) struct { []const u8 } {
+            return .{self.workspace};
+        }
+        pub inline fn w_(self: @This(), a: []const u8) struct { []const u8, []const u8 } {
+            return .{ self.workspace, a };
+        }
+        pub inline fn wp(self: @This()) struct { []const u8, []const u8 } {
+            return .{ self.workspace, self.pipeline };
+        }
+        pub inline fn wpd(self: @This()) struct { []const u8, []const u8, Deployment.Id } {
+            return .{ self.workspace, self.pipeline, self.deployment };
+        }
+        pub inline fn wpd_(self: @This(), a: []const u8) struct { []const u8, []const u8, Deployment.Id, []const u8 } {
+            return .{ self.workspace, self.pipeline, self.deployment, a };
+        }
+        pub inline fn w_d(self: @This(), a: []const u8) struct { []const u8, []const u8, Deployment.Id } {
+            return .{ self.workspace, a, self.deployment };
+        }
     };
 
     pub const spawn = struct {
@@ -85,40 +103,23 @@ pub const task = struct {
         pub const Res = struct {};
     };
     pub const poll = struct {
-        pub const ItemReq = struct {
-            task: Id,
-            logs_offset: ?u64,
-        };
-        pub const Req = union(enum) {
-            header: struct {
-                tasks: []const ItemReq,
-            },
-        };
         pub const Logs = struct {
             data: []const u8,
-            compressed: bool,
             end_offset: u64,
-        };
-        pub const Status = union(enum) {
-            running,
-            success,
-            failed: u16,
-            skipped,
-            stopped,
-            not_found,
         };
         pub const TaskUsage = struct {
             cpu_usec: u64 = 0,
             memory_bytes: u64 = 0,
         };
-        pub const Res = union(enum) {
-            item: struct {
-                task: Id,
-                logs: ?Logs,
-                status: Status,
-                usage: ?TaskUsage = null,
-            },
-            footer: struct {},
+        pub const Req = ?struct {
+            task: Id,
+            logs_offset: ?u64,
+        };
+        pub const Res = ?struct {
+            task: Id,
+            logs: ?Logs,
+            status: ?Task.Status,
+            usage: ?TaskUsage = null,
         };
     };
     pub const kill = struct {
@@ -152,11 +153,6 @@ pub const Request = enum(u8) {
 };
 
 pub const DaemonMsg = union(enum) {
-    const TaskCompleted = struct {
-        status: i32,
-        task: task.Id,
-    };
-    task_completed: TaskCompleted,
     reload_keys,
 };
 
