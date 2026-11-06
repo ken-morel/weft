@@ -9,18 +9,39 @@ const zoto = @import("../util/zoto.zig");
 const mount = @import("mount.zig");
 
 const default_max_pids = 256;
+const max_freeze_depth = 32;
 
+// I don't know much about this double fork
 pub fn spawn_supervisor(io: std.Io, id: Task.Id) !void {
-    _ = try std.process.spawn(io, .{
-        .argv = &.{
-            "/proc/self/exe",
-            "daemon",
-            "supervise",
-            id.workspace,
-            id.pipeline,
-            &id.deployment.to_string(),
-        },
-    });
+    const pid = std.os.linux.fork();
+    if (std.os.linux.errno(pid) != .SUCCESS)
+        return error.ForkFailed;
+
+    if (pid == 0) {
+        if (std.os.linux.errno(std.os.linux.setsid()) != .SUCCESS)
+            std.os.linux.exit_group(1);
+
+        const child_pid = std.os.linux.fork();
+        if (std.os.linux.errno(child_pid) != .SUCCESS)
+            std.os.linux.exit_group(1);
+        if (child_pid != 0)
+            std.os.linux.exit_group(0);
+
+        _ = std.process.spawn(io, .{
+            .argv = &.{
+                "/proc/self/exe",
+                "supervisor",
+                "supervise",
+                id.workspace,
+                id.pipeline,
+                &id.deployment.to_string(),
+            },
+        }) catch std.os.linux.exit_group(1);
+        std.os.linux.exit_group(0);
+    } else {
+        var status: i32 = 0;
+        _ = std.os.linux.waitpid(@intCast(pid), &status, 0);
+    }
 }
 
 fn chown(parent: std.Io.Dir, sub_path: [:0]const u8, uid: u32, gid: u32) !void {
@@ -29,9 +50,13 @@ fn chown(parent: std.Io.Dir, sub_path: [:0]const u8, uid: u32, gid: u32) !void {
         return error.ChownFailed;
 }
 
-fn freeze_dir(io: std.Io, dir: std.Io.Dir) !void {
+fn freeze_dir(io: std.Io, dir: std.Io.Dir, depth: u8) !void {
+    if (depth > max_freeze_depth)
+        return error.FreezeTooDeep;
+
     _ = std.os.linux.fchown(dir.handle, 0, 0);
-    _ = std.os.linux.fchmod(dir.handle, 0o555);
+    const dir_mode = (try dir.stat(io)).permissions.toMode();
+    _ = std.os.linux.fchmod(dir.handle, 0o444 | (dir_mode & 0o111));
 
     var iter = dir.iterate();
     while (try iter.next(io)) |entry| {
@@ -41,13 +66,23 @@ fn freeze_dir(io: std.Io, dir: std.Io.Dir) !void {
         if (entry.kind == .directory) {
             var sub = try dir.openDir(io, entry.name, .{ .iterate = true });
             defer sub.close(io);
-            try freeze_dir(io, sub);
+            try freeze_dir(io, sub, depth + 1);
         } else if (entry.kind == .file) {
             var f = try dir.openFile(io, entry.name, .{});
             defer f.close(io);
-            _ = std.os.linux.fchmod(f.handle, 0o555);
+            const file_mode = (try f.stat(io)).permissions.toMode();
+            _ = std.os.linux.fchmod(f.handle, 0o444 | (file_mode & 0o111));
         }
     }
+}
+
+fn first_active_sibling(gpa: std.mem.Allocator, io: std.Io, task: *const Task) !?Task {
+    var siblings = try task.siblings(gpa, io, false);
+    defer siblings.deinit(io);
+    return while (try siblings.next(io)) |sibling| {
+        if (try sibling.is_active(gpa, io))
+            break sibling;
+    } else null;
 }
 
 pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
@@ -59,7 +94,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
     var barena: std.heap.ArenaAllocator = .init(gpa);
     defer barena.deinit();
-    const balloc = arena.allocator();
+    const balloc = barena.allocator();
 
     const cwd: std.Io.Dir = .cwd();
 
@@ -114,6 +149,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         try task.write_status(gpa, io, .preparing);
         break :write_pid;
     }
+    errdefer task.write_status(gpa, io, .failed) catch {};
 
     if (spec.pkgs.len > 0) {
         l.info("preparing {d} nix package(s)...", .{spec.pkgs.len});
@@ -153,26 +189,6 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         break :prepare_files;
     }
 
-    const cgroup = try task.cgroup(gpa);
-    try cgroup.create(io);
-    defer cgroup.destroy(io) catch {};
-
-    configure_cgroup: {
-        const tune = &spec.tune;
-        if ((tune.cpu.quota orelse tune.cpu.max) != null)
-            try cgroup.cpu_max_set(gpa, io, tune.cpu.quota, tune.cpu.max);
-        if (tune.io.io_weight) |w|
-            try cgroup.io_weight_set(gpa, io, w);
-        if (tune.mem.max) |r|
-            try cgroup.memory_max_set(gpa, io, r);
-        if (tune.mem.high) |r|
-            try cgroup.memory_high_set(gpa, io, r);
-        if (tune.mem.swap.max) |s|
-            try cgroup.memory_swap_max_set(gpa, io, s);
-        try cgroup.pids_max_set(gpa, io, tune.io.pids_max orelse default_max_pids);
-        break :configure_cgroup;
-    }
-
     const skip = handle_siblings: {
         l.info("resolving sibling policies...", .{});
 
@@ -184,13 +200,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
         var waited: u32 = 0;
         while (waited < do_sibling.wait) : (waited += do_sibling.poll) {
-            var sibling_iter = try task.siblings(gpa, io, false);
-            defer sibling_iter.deinit(io);
-            const sibling: Task = while (try sibling_iter.next(io)) |sibl| {
-                if (try sibl.is_active(gpa, io))
-                    break sibl;
-            } else break;
-
+            const sibling = try first_active_sibling(gpa, io, &task) orelse break;
             const cgroup_name = try sibling.cgroup_name(gpa);
             defer gpa.free(cgroup_name);
             l.warn("waiting {d}s for active sibling {s}...", .{ do_sibling.wait - waited, cgroup_name });
@@ -204,35 +214,21 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             .kill => {
                 var siblings = try task.siblings(gpa, io, false);
                 defer siblings.deinit(io);
-                while (try siblings.next(io)) |sibling| {
+                while (try siblings.next(io)) |sibling|
                     if (try sibling.is_active(gpa, io)) {
                         const name = try sibling.cgroup_name(gpa);
                         defer gpa.free(name);
                         l.info("killing active sibling {s}", .{name});
                         try sibling.kill(gpa, io);
-                    }
-                }
+                    };
             },
-            .fail => {
-                var siblings = try task.siblings(gpa, io, false);
-                defer siblings.deinit(io);
-                while (try siblings.next(io)) |sibling| {
-                    if (try sibling.is_active(gpa, io)) {
-                        l.err("sibling is still active after timeout; failing task", .{});
-                        try task.write_status(gpa, io, .failed);
-                        return error.SiblingRunning;
-                    }
-                }
+            .fail => if (try first_active_sibling(gpa, io, &task)) |_| {
+                l.err("sibling is still active after timeout; failing task", .{});
+                return error.SiblingRunning;
             },
-            .skip => {
-                var siblings = try task.siblings(gpa, io, false);
-                defer siblings.deinit(io);
-                break :handle_siblings while (try siblings.next(io)) |sibling| {
-                    if (try sibling.is_active(gpa, io)) {
-                        l.info("sibling is active; skipping task", .{});
-                        break true;
-                    }
-                } else false;
+            .skip => if (try first_active_sibling(gpa, io, &task)) |_| {
+                l.info("sibling is active; skipping task", .{});
+                break :handle_siblings true;
             },
         }
         break :handle_siblings false;
@@ -241,8 +237,32 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     if (skip) {
         l.info("task skipped", .{});
     } else {
-        if (std.os.linux.errno(std.os.linux.unshare(mount.CLONE.NEWPID)) != .SUCCESS)
+        if (std.os.linux.errno(std.os.linux.unshare(std.os.linux.CLONE.NEWPID)) != .SUCCESS)
             return error.UnsharePidFailed;
+
+        const cgroup = try task.cgroup(gpa);
+        try cgroup.create(io);
+        defer {
+            cgroup.kill(gpa, io) catch {};
+            cgroup.destroy(io) catch {};
+            cgroup.deinit(gpa);
+        }
+
+        configure_cgroup: {
+            const tune = &spec.tune;
+            if ((tune.cpu.quota orelse tune.cpu.max) != null)
+                try cgroup.cpu_max_set(gpa, io, tune.cpu.quota, tune.cpu.max);
+            if (tune.io.io_weight) |w|
+                try cgroup.io_weight_set(gpa, io, w);
+            if (tune.mem.max) |r|
+                try cgroup.memory_max_set(gpa, io, r);
+            if (tune.mem.high) |r|
+                try cgroup.memory_high_set(gpa, io, r);
+            if (tune.mem.swap.max) |s|
+                try cgroup.memory_swap_max_set(gpa, io, s);
+            try cgroup.pids_max_set(gpa, io, tune.io.pids_max orelse default_max_pids);
+            break :configure_cgroup;
+        }
 
         var child = try std.process.spawn(io, .{
             .argv = &.{
@@ -264,12 +284,14 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
         try task.write_status(gpa, io, .running);
         const term = try child.wait(io);
-        if (!term.success()) {
-            l.err("task failed", .{});
-
-            try task.write_status(gpa, io, .failed);
-            return error.TaskFailed;
+        switch (term) {
+            .exited => |code| l.info("task exited with code {d}", .{code}),
+            .signal => |sig| l.err("task terminated by signal {s}", .{@tagName(sig)}),
+            .stopped => |sig| l.err("task stopped by signal {s}", .{@tagName(sig)}),
+            .unknown => |code| l.err("task terminated with unknown status {d}", .{code}),
         }
+        if (!term.success())
+            return error.TaskFailed;
     }
     try task.write_status(gpa, io, .harvesting);
 
@@ -280,7 +302,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         {
             var staged = try cwd.openDir(io, out_sub, .{ .iterate = true });
             defer staged.close(io);
-            try freeze_dir(io, staged);
+            try freeze_dir(io, staged, 0);
         }
 
         const artifact_path = try balloc.print(paths.artifact, task.id.w_d(output));
@@ -294,7 +316,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         try cwd.rename(out_sub, cwd, artifact_path, io);
     }
 
-    if (!skip)
+    if (skip)
         try task.write_status(gpa, io, .skipped)
     else
         try task.write_status(gpa, io, .done);
@@ -318,15 +340,15 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
     const cwd: std.Io.Dir = .cwd();
 
-    var flags: usize = mount.CLONE.NEWNS | mount.CLONE.NEWUTS | mount.CLONE.NEWIPC | mount.CLONE.NEWCGROUP;
+    var flags: usize = std.os.linux.CLONE.NEWNS | std.os.linux.CLONE.NEWUTS | std.os.linux.CLONE.NEWIPC | std.os.linux.CLONE.NEWCGROUP;
     if (spec.tune.net.private)
-        flags |= mount.CLONE.NEWNET;
+        flags |= std.os.linux.CLONE.NEWNET;
 
     if (std.os.linux.errno(std.os.linux.unshare(flags)) != .SUCCESS)
         return error.UnshareFailed;
 
     try mount.isolate();
-    try mount.mount_tmpfs(rootfs_path, "size=16m,mode=0755", true);
+    try mount.mount_fs("tmpfs", rootfs_path, "tmpfs", "size=16m,mode=0755", true);
 
     {
         var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
@@ -397,11 +419,11 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         const host_cwd = try alloc.printSentinel(paths.scratch_cwd, task.id.wpd(), 0);
         try mount.bind(host_cwd, "work", .{ .read_only = false, .allow_exec = true });
 
-        try mount.mount_proc("proc");
-        try mount.mount_tmpfs("tmp", "mode=1777", true);
-        try mount.mount_tmpfs("dev/shm", "mode=1777", false);
+        try mount.mount_fs("proc", "proc", "proc", null, false);
+        try mount.mount_fs("tmpfs", "tmp", "tmpfs", "mode=1777", true);
+        try mount.mount_fs("tmpfs", "dev/shm", "tmpfs", "mode=1777", false);
 
-        inline for (.{ "null", "zero", "full", "random", "urandom", "tty" }) |dev| {
+        inline for (.{ "null", "zero", "full", "random", "urandom" }) |dev| {
             try rootfs_dir.writeFile(
                 io,
                 .{ .data = "", .sub_path = "dev/" ++ dev },
@@ -422,7 +444,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             try rootfs_dir.createDirPath(io, target_in);
             const host_in = try alloc.printSentinel(
                 paths.artifact,
-                task.id.wpd(),
+                task.id.w_d(inp),
                 0,
             );
             try mount.bind(
@@ -469,21 +491,24 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
     try mount.lock_read_only(".");
     try mount.pivot_root(".");
-    _ = std.os.linux.chdir("/work");
+    if (std.os.linux.errno(std.os.linux.chdir("/work")) != .SUCCESS)
+        return error.ChdirFailed;
 
     // Drop privileges to workspace UID/GID
-    _ = std.os.linux.syscall2(.setgroups, 0, 0);
+    if (std.os.linux.errno(std.os.linux.syscall2(.setgroups, 0, 0)) != .SUCCESS)
+        return error.SetGroupsFailed;
     if (std.os.linux.errno(std.os.linux.setresgid(uid, uid, uid)) != .SUCCESS)
         return error.SetGidFailed;
     if (std.os.linux.errno(std.os.linux.setresuid(uid, uid, uid)) != .SUCCESS)
         return error.SetUidFailed;
-    _ = std.os.linux.prctl(@backingInt(std.os.linux.PR.SET_NO_NEW_PRIVS), 1, 0, 0, 0);
+    if (std.os.linux.errno(std.os.linux.prctl(@backingInt(std.os.linux.PR.SET_NO_NEW_PRIVS), 1, 0, 0, 0)) != .SUCCESS)
+        return error.NoNewPrivsFailed;
 
     var env_map = env_map: {
         var env_map: std.process.Environ.Map = .init(alloc);
         errdefer env_map.deinit();
 
-        var path_writer: std.Io.Writer.Allocating = .init(gpa);
+        var path_writer: std.Io.Writer.Allocating = .init(alloc);
         defer path_writer.deinit();
 
         for (spec.pkgs) |pkg|

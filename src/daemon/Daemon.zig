@@ -97,7 +97,7 @@ pub fn run_client_server(self: *@This()) !void {
                 if (err == error.Canceled)
                     return;
                 log_a.err("accept error: {any}", .{err});
-                std.Io.sleep(self.io, .fromMilliseconds(100), .awake) catch {};
+                try std.Io.sleep(self.io, .fromMilliseconds(100), .awake);
                 continue :req;
             };
 

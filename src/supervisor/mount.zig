@@ -1,14 +1,6 @@
 const std = @import("std");
 const linux = std.os.linux;
 
-pub const CLONE = struct {
-    pub const NEWNS: u32 = 0x00020000;
-    pub const NEWCGROUP: u32 = 0x02000000;
-    pub const NEWUTS: u32 = 0x04000000;
-    pub const NEWIPC: u32 = 0x08000000;
-    pub const NEWPID: u32 = 0x20000000;
-    pub const NEWNET: u32 = 0x40000000;
-};
 pub const Ms = packed struct(u32) {
     read_only: bool = false,
     no_suid: bool = false,
@@ -21,26 +13,13 @@ pub const Ms = packed struct(u32) {
     _c: u13 = 0,
 };
 
-// pub const MS = struct {
-//     pub const RDONLY: u32 = 1 << 0;
-//     pub const NOSUID: u32 = 1 << 1;
-//     pub const NODEV: u32 = 1 << 2;
-//     pub const NOEXEC: u32 = 1 << 3;
-//     pub const REC: u32 = 1 << 14;
-//     pub const PRIVATE: u32 = 1 << 18;
-// };
-
 pub const OPEN_TREE = struct {
     pub const CLONE: u32 = 1 << 0;
     pub const CLOEXEC: u32 = @backingInt(linux.O{ .CLOEXEC = true });
 };
 
-pub const AT = struct {
-    // isize -> usize for syscall
-    pub const FDCWD: usize = @bitCast(@as(isize, linux.AT.FDCWD));
-    pub const EMPTY_PATH: u32 = 0x1000;
-    pub const SYMLINK_NOFOLLOW: u32 = 0x100;
-    pub const RECURSIVE: u32 = 0x8000;
+pub const MOVE_MOUNT = struct {
+    pub const F_EMPTY_PATH: u32 = 0x04;
 };
 
 pub const MountAttrFlag = packed struct(u64) {
@@ -49,20 +28,6 @@ pub const MountAttrFlag = packed struct(u64) {
     no_dev: bool = false,
     no_exec: bool = false,
     _a: u60 = 0,
-};
-// pub const MOUNT_ATTR = struct {
-//     pub const RDONLY: u64 = 0x01;
-//     pub const NOSUID: u64 = 0x02;
-//     pub const NODEV: u64 = 0x04;
-//     pub const NOEXEC: u64 = 0x08;
-// };
-
-pub const MOVE_MOUNT = struct {
-    pub const F_EMPTY_PATH: u32 = 0x04;
-};
-
-pub const MNT = struct {
-    pub const DETACH: u32 = 0x02;
 };
 
 pub const MountAttr = extern struct {
@@ -93,33 +58,17 @@ pub fn isolate() !void {
         return error.MountFailed;
 }
 
-pub fn mount_tmpfs(target: [:0]const u8, options: [:0]const u8, allow_exec: bool) !void {
+pub fn mount_fs(src: [:0]const u8, target: [:0]const u8, fstype: [:0]const u8, options: ?[:0]const u8, allow_exec: bool) !void {
     const rc = linux.mount(
-        "tmpfs",
+        src.ptr,
         target.ptr,
-        "tmpfs",
+        fstype.ptr,
         @backingInt(Ms{
             .no_suid = true,
             .no_dev = true,
             .no_exec = !allow_exec,
         }),
-        @intFromPtr(options.ptr),
-    );
-    if (linux.errno(rc) != .SUCCESS)
-        return error.MountFailed;
-}
-
-pub fn mount_proc(target: [:0]const u8) !void {
-    const rc = linux.mount(
-        "proc",
-        target.ptr,
-        "proc",
-        @backingInt(Ms{
-            .no_suid = true,
-            .no_dev = true,
-            .no_exec = true,
-        }),
-        0,
+        if (options) |o| @intFromPtr(o.ptr) else 0,
     );
     if (linux.errno(rc) != .SUCCESS)
         return error.MountFailed;
@@ -128,9 +77,9 @@ pub fn mount_proc(target: [:0]const u8) !void {
 pub fn bind(source: [:0]const u8, target: [:0]const u8, opts: BindOpts) !void {
     const tree_rc = linux.syscall3(
         .open_tree,
-        AT.FDCWD,
+        @bitCast(@as(isize, linux.AT.FDCWD)),
         @intFromPtr(source.ptr),
-        OPEN_TREE.CLONE | OPEN_TREE.CLOEXEC | AT.RECURSIVE,
+        OPEN_TREE.CLONE | OPEN_TREE.CLOEXEC | linux.AT.RECURSIVE,
     );
     if (linux.errno(tree_rc) != .SUCCESS)
         return error.OpenTreeFailed;
@@ -138,7 +87,6 @@ pub fn bind(source: [:0]const u8, target: [:0]const u8, opts: BindOpts) !void {
     const tree_fd: linux.fd_t = @intCast(tree_rc);
     defer _ = linux.close(tree_fd);
 
-    // 2. Set VFS security flags on the detached mount FD
     var attr: MountAttr = .{
         .attr_set = .{
             .no_suid = true,
@@ -155,7 +103,7 @@ pub fn bind(source: [:0]const u8, target: [:0]const u8, opts: BindOpts) !void {
         .mount_setattr,
         @intCast(tree_fd),
         @intFromPtr(""),
-        AT.EMPTY_PATH | AT.RECURSIVE,
+        linux.AT.EMPTY_PATH | linux.AT.RECURSIVE,
         @intFromPtr(&attr),
         @sizeOf(MountAttr),
     );
@@ -166,7 +114,7 @@ pub fn bind(source: [:0]const u8, target: [:0]const u8, opts: BindOpts) !void {
         .move_mount,
         @intCast(tree_fd),
         @intFromPtr(""),
-        AT.FDCWD,
+        @bitCast(@as(isize, linux.AT.FDCWD)),
         @intFromPtr(target.ptr),
         MOVE_MOUNT.F_EMPTY_PATH,
     );
@@ -185,9 +133,9 @@ pub fn lock_read_only(target_mount_path: [:0]const u8) !void {
     // Note: AT.RECURSIVE is intentionally omitted so child mounts (/work, /out/{name}) stay RW.
     const rc = linux.syscall5(
         .mount_setattr,
-        AT.FDCWD,
+        @bitCast(@as(isize, linux.AT.FDCWD)),
         @intFromPtr(target_mount_path.ptr),
-        AT.SYMLINK_NOFOLLOW,
+        linux.AT.SYMLINK_NOFOLLOW,
         @intFromPtr(&attr),
         @sizeOf(MountAttr),
     );
@@ -203,7 +151,7 @@ pub fn pivot_root(new_root: [:0]const u8) !void {
     if (linux.errno(pivot_rc) != .SUCCESS)
         return error.PivotRootFailed;
 
-    const umount_rc = linux.umount2(".", MNT.DETACH);
+    const umount_rc = linux.umount2(".", linux.MNT.DETACH);
     if (linux.errno(umount_rc) != .SUCCESS)
         return error.UmountOldRootFailed;
     if (linux.errno(linux.chdir("/")) != .SUCCESS)

@@ -145,11 +145,12 @@ pub const InitSystem = enum {
                     else
                         try io.sleep(.fromSeconds(1), .awake);
                 }
-                if (already_supervised) {
-                    _ = try _do(io, &.{ "sv", "restart", "weft" });
-                } else {
-                    _ = try _do(io, &.{ "sv", "up", "weft" });
-                }
+                const word = if (already_supervised)
+                    "restart"
+                else
+                    "up";
+
+                _ = try _do(io, &.{ "sv", word, "weft" });
             },
         }
     }
