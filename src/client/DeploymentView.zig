@@ -42,6 +42,35 @@ pub fn print_logs(self: *@This(), prefix: []const u8, content: []const u8) !void
     try self.term.print_logs(prefix, content);
 }
 
+fn render_step(self: *@This(), step: DeploymentState.Step, key: []const u8, duration_ms: u64, prev: ?DeploymentState.Step.Status) void {
+    const color = Term.task_color(key);
+    switch (step.status) {
+        .running => if (prev == null or prev.? == .preparing or prev.? == .initializing)
+            self.term.write_event(color, "{", " {s}", .{key}),
+        .completed => if (prev == null)
+            self.term.write_event(color, "{}", " {s}", .{key})
+        else
+            self.term.write_event(.green, "}", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 }),
+        .err => if (prev == null)
+            self.term.write_event(.red, "{#.err", " {s} {s}", .{ key, step.err orelse "<unknown error>" })
+        else
+            self.term.write_event(.red, "#.err", " {s} ({d}ms, CPU: {d}ms): {s}", .{ key, duration_ms, step.cpu_ms orelse 0, step.err orelse "<unknown error>" }),
+        .skipped => self.term.write_event(
+            .green,
+            if (prev == null) "{#.skipped" else "#.skipped",
+            " {s} ({d}ms, CPU: {d}ms)",
+            .{ key, duration_ms, step.cpu_ms orelse 0 },
+        ),
+        .stopped => self.term.write_event(
+            .red,
+            if (prev == null) "{#.stopped" else "#.stopped",
+            " {s} ({d}ms, CPU: {d}ms)",
+            .{ key, duration_ms, step.cpu_ms orelse 0 },
+        ),
+        .preparing, .initializing => {},
+    }
+}
+
 pub fn update(self: *@This(), io: std.Io) !void {
     self.state.mutex.lockUncancelable(io);
     defer self.state.mutex.unlock(io);
@@ -49,63 +78,37 @@ pub fn update(self: *@This(), io: std.Io) !void {
     for (self.state.steps.items) |step| {
         const key = try self.gpa.print("{s}.{s}", .{ step.remote.@"0", step.pipeline.name });
         defer self.gpa.free(key);
-        const color = Term.task_color(key);
         const duration_ms: u64 = @intCast(@max(step.started.durationTo(.now(io, .real)).toMilliseconds(), 0));
 
-        if (self.step_history.get(key)) |prev_status| {
-            if (prev_status != step.status) {
-                if (step.status == .running and (prev_status == .preparing or prev_status == .initializing))
-                    self.term.write_event(color, "{", " {s}", .{key})
-                else if (step.status == .completed)
-                    self.term.write_event(.green, "}", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
-                else if (step.status == .err)
-                    self.term.write_event(.red, "#.err", " {s} ({d}ms, CPU: {d}ms): {s}", .{ key, duration_ms, step.cpu_ms orelse 0, step.err orelse "<unknown error>" })
-                else if (step.status == .skipped)
-                    self.term.write_event(.green, "#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
-                else if (step.status == .stopped)
-                    self.term.write_event(.red, "#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
+        const prev = self.step_history.get(key);
+        if (prev != null and prev.? == step.status)
+            continue;
 
-                if (self.step_history.getPtr(key)) |ptr|
-                    ptr.* = step.status;
-            }
-        } else {
-            if (step.status == .running)
-                self.term.write_event(color, "{", " {s}", .{key})
-            else if (step.status == .completed)
-                self.term.write_event(color, "{}", " {s}", .{key})
-            else if (step.status == .err)
-                self.term.write_event(.red, "{#.err", " {s} {s}", .{ key, step.err orelse "<unknown error>" })
-            else if (step.status == .skipped)
-                self.term.write_event(.green, "{#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 })
-            else if (step.status == .stopped)
-                self.term.write_event(.red, "{#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
+        self.render_step(step, key, duration_ms, prev);
 
-            try self.step_history.put(self.gpa, try self.gpa.dupe(u8, key), step.status);
-        }
+        if (prev == null)
+            try self.step_history.put(self.gpa, try self.gpa.dupe(u8, key), step.status)
+        else if (self.step_history.getPtr(key)) |ptr|
+            ptr.* = step.status;
     }
 
     for (self.state.artifacts.items) |art| {
         const key = try self.gpa.print("{s}@{s}", .{ art.name, art.remote.@"0" });
         defer self.gpa.free(key);
 
-        if (self.artifact_history.get(key)) |prev_status| {
-            if (prev_status != art.status) {
-                if (art.status == .pulling and prev_status != .pulling) {
-                    self.term.write_event(.cyan, "<", " {s}", .{key});
-                } else if (art.status == .pushing and prev_status != .pushing) {
-                    self.term.write_event(.yellow, ">", " {s}", .{key});
-                }
-                if (self.artifact_history.getPtr(key)) |ptr|
-                    ptr.* = art.status;
-            }
-        } else {
-            if (art.status == .pulling) {
-                self.term.write_event(.cyan, "<", " {s}", .{key});
-            } else if (art.status == .pushing) {
-                self.term.write_event(.yellow, ">", " {s}", .{key});
-            }
-            try self.artifact_history.put(self.gpa, try self.gpa.dupe(u8, key), art.status);
-        }
+        const prev = self.artifact_history.get(key);
+        if (prev != null and prev.? == art.status)
+            continue;
+
+        if (art.status == .pulling)
+            self.term.write_event(.cyan, "<", " {s}", .{key})
+        else if (art.status == .pushing)
+            self.term.write_event(.yellow, ">", " {s}", .{key});
+
+        if (prev == null)
+            try self.artifact_history.put(self.gpa, try self.gpa.dupe(u8, key), art.status)
+        else if (self.artifact_history.getPtr(key)) |ptr|
+            ptr.* = art.status;
     }
 
     if (!self.term.is_tty) {
