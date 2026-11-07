@@ -130,7 +130,7 @@ pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res)
     try task.write_spec(gpa, daemon.io, spec);
     l.debug("spec written", .{}); //debug
 
-    try supervisor.spawn_supervisor(daemon.io, task.id);
+    try supervisor.spawn_supervisor(gpa, daemon.io, task.id);
     l.debug("supervisor spawned", .{}); //debug
 
     var timeout: i16 = 30;

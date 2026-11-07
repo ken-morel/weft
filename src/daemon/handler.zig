@@ -3,6 +3,7 @@ const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
+const format_duration = @import("../util/sizes.zig").format_duration;
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const Packer = @import("../wire/Packer.zig");
@@ -58,6 +59,13 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
                 error.InvalidRequest
             else
                 err;
+    };
+    const t_start = std.Io.Clock.now(.real, daemon.io);
+    defer if (request != .system_stats) {
+        const t_end = std.Io.Clock.now(.real, daemon.io);
+        const dur = t_start.durationTo(t_end);
+        var dur_buf: [32]u8 = undefined;
+        l.info("{s} handled in {s}", .{ @tagName(request), format_duration(&dur_buf, dur.nanoseconds) });
     };
     l.debug("request: {any}", .{request}); //debug
 

@@ -382,11 +382,7 @@ fn fetch_load(io: std.Io) struct { load: [3]f32, threads: [2]u32 } {
 }
 
 fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
-    var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/system.slice", .{ .iterate = true }) catch |err|
-        if (err == error.FileNotFound)
-            std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup", .{ .iterate = true }) catch return &.{}
-        else
-            return &.{};
+    var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/weft", .{ .iterate = true }) catch return &.{};
     defer cgroup_dir.close(io);
 
     var list = std.ArrayList(Stats.Service).empty;
@@ -394,14 +390,10 @@ fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
 
     var iter = cgroup_dir.iterate();
     while (try iter.next(io)) |entry| {
-        if (entry.kind != .directory or !std.mem.startsWith(u8, entry.name, "weft-runner--"))
+        if (entry.kind != .directory)
             continue;
 
-        var unit_name = entry.name;
-        if (std.mem.endsWith(u8, unit_name, ".service"))
-            unit_name = unit_name[0 .. unit_name.len - ".service".len];
-
-        const t = Task.from_unit_name(unit_name) orelse continue;
+        const t = Task.from_cgroup_name(entry.name) orelse continue;
 
         var svc_dir = cgroup_dir.openDir(io, entry.name, .{}) catch continue;
         defer svc_dir.close(io);

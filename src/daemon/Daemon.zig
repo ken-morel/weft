@@ -13,6 +13,7 @@ const Server = @import("Server.zig");
 const StatsServer = @import("StatsServer.zig");
 const Store = @import("Store.zig");
 const Task = @import("Task.zig");
+const CGroup2 = @import("../util/CGroup2.zig");
 
 io: std.Io,
 gpa: std.mem.Allocator,
@@ -196,6 +197,19 @@ fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
 pub fn run(self: *@This()) !void {
     const l = log(.daemon);
     try paths.ensure_dirs(self.io);
+
+    init_cgroup: {
+        var root_cg = CGroup2.init_absolute_take("/sys/fs/cgroup");
+        for ([_][]const u8{ "+cpu", "+memory", "+io", "+pids" }) |ctrl|
+            root_cg.subtree_control_set(self.gpa, self.io, ctrl) catch {};
+
+        var weft_cg = CGroup2.init(self.gpa, "weft") catch break :init_cgroup;
+        defer weft_cg.deinit(self.gpa);
+        weft_cg.create(self.io) catch |err|
+            l.warn("could not create /sys/fs/cgroup/weft: {any}", .{err});
+        for ([_][]const u8{ "+cpu", "+memory", "+io", "+pids" }) |ctrl|
+            weft_cg.subtree_control_set(self.gpa, self.io, ctrl) catch {};
+    }
 
     var group: std.Io.Group = .init;
 

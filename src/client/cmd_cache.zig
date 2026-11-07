@@ -8,9 +8,8 @@ const Remote = Weft.Remote;
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
-const DeploymentState = @import("DeploymentState.zig");
-const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
+const View = @import("View.zig");
 const transfer = @import("transfer.zig");
 
 fn is_valid_artifact_name(name: []const u8) bool {
@@ -53,12 +52,9 @@ pub fn run(
         const cache_path = try project.cache_dir_path(gpa, io, remote_name, name);
         defer gpa.free(cache_path);
 
-        var state: DeploymentState = .init(gpa, &project);
-        defer state.deinit();
-        var view: DeploymentView = .init(gpa, term, &state, undefined);
+        var view: View = .init(gpa, term, null);
+        view.auto_update = true;
         defer view.deinit();
-
-        try view.update(io);
 
         var client = try Client.connect(
             gpa,
@@ -76,17 +72,16 @@ pub fn run(
             //         l.err("artifact '{s}' cannot be read: {any}", .{ name, err });
             //     return err;
             // };
-            // try transfer.push_dir(gpa, io, &client.conn, task_id, artifact_path, &state, remote, name);
+            // try transfer.push_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name);
         } else {
-            // transfer.pull_dir(gpa, io, &client.conn, task_id, artifact_path, &state, remote, name) catch |err| {
+            // transfer.pull_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name) catch |err| {
             //     if (err == error.ArtifactNotFound)
             //         l.err("artifact '{s}' not found on remote '{s}'", .{ name, remote_name });
             //     return err;
             // };
         }
 
-        try state.artifact_progress(io, name, remote, .ready, 1.0);
-        try view.update(io);
+        try view.set_transfer(io, name, remote_name, .ready, 1.0);
         term.success("Transferred {s}@{s}", .{ name, remote_name });
     }
 }

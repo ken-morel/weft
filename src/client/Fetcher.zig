@@ -11,9 +11,8 @@ const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
-const DeploymentState = @import("DeploymentState.zig");
-const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
+const View = @import("View.zig");
 const transfer = @import("transfer.zig");
 
 dep: *Deployment,
@@ -23,7 +22,7 @@ pushing: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 pulling: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 map_mutex: std.Io.Mutex = .init,
 gpa: std.mem.Allocator,
-state: *DeploymentState,
+view: *View,
 term: *Term,
 project: *const Project,
 depl: *std.Io.Mutex,
@@ -114,7 +113,7 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
 
 pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
     if (try self.has_artifact(io, remote, artifact)) {
-        self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
+        self.view.set_transfer(io, artifact, remote.@"0", .ready, 1.0) catch {};
         return;
     }
 
@@ -133,8 +132,8 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
 }
 
 pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
-    try self.state.artifact_progress(io, artifact, remote, .pushing, 0.0);
-    defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
+    try self.view.set_transfer(io, artifact, remote.@"0", .pushing, 0.0);
+    defer self.view.set_transfer(io, artifact, remote.@"0", .ready, 1.0) catch {};
 
     const artifact_dir_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_dir_path);
@@ -154,8 +153,8 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
         &client.conn,
         task_id,
         artifact_dir_path,
-        self.state,
-        remote,
+        self.view,
+        remote.@"0",
         artifact,
     );
 }
@@ -172,8 +171,8 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         } else return error.ArtifactNotFound;
     };
 
-    try self.state.artifact_progress(io, artifact, remote, .pulling, 0.0);
-    defer self.state.artifact_progress(io, artifact, remote, .ready, 1.0) catch {};
+    try self.view.set_transfer(io, artifact, remote.@"0", .pulling, 0.0);
+    defer self.view.set_transfer(io, artifact, remote.@"0", .ready, 1.0) catch {};
 
     var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(io, remote.*), self.identity);
     defer client.destroy(self.gpa, io);
@@ -193,8 +192,8 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         &client.conn,
         task_id,
         artifact_path,
-        self.state,
-        remote,
+        self.view,
+        remote.@"0",
         artifact,
     );
 }
@@ -227,11 +226,5 @@ fn fetch_wrapper(self: *@This(), io: std.Io, key: []const u8) !void {
 }
 
 pub fn is_idle(self: *@This(), io: std.Io) bool {
-    self.state.mutex.lockUncancelable(io);
-    defer self.state.mutex.unlock(io);
-
-    return for (self.state.artifacts.items) |art| {
-        if (art.status == .pulling or art.status == .pushing)
-            break false;
-    } else true;
+    return self.view.is_transfers_idle(io);
 }

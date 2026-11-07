@@ -14,7 +14,7 @@ const zoto = @import("../util/zoto.zig");
 
 const Task = @This();
 
-pub const Status = union(enum) {
+pub const Status = enum {
     preparing,
     running,
     harvesting,
@@ -27,24 +27,6 @@ pub const Status = union(enum) {
 
 id: proto.task.Id,
 
-pub fn from_unit_name(name: []const u8) ?@This() {
-    var iter = std.mem.splitSequence(u8, name, "--");
-    const runner = iter.next() orelse return null;
-    if (!std.mem.eql(u8, runner, "weft-runner"))
-        return null;
-
-    const workspace = iter.next() orelse return null;
-    const pipeline = iter.next() orelse return null;
-    const deployment_id = iter.next() orelse return null;
-    const deployment = Deployment.Id.parse(deployment_id) catch return null;
-
-    return .{ .id = .{
-        .workspace = workspace,
-        .deployment = deployment,
-        .pipeline = pipeline,
-    } };
-}
-
 pub fn get_workspace(self: @This()) Workspace {
     return .{
         .name = self.id.workspace,
@@ -52,10 +34,15 @@ pub fn get_workspace(self: @This()) Workspace {
 }
 
 pub fn from_cgroup_name(name: []const u8) ?@This() {
-    if (std.mem.containsAtLeast(u8, name, 1, "--"))
-        return from_unit_name(name);
+    var s = name;
+    if (std.mem.startsWith(u8, s, "weft/"))
+        s = s["weft/".len..];
+    if (std.mem.endsWith(u8, s, ".service"))
+        s = s[0 .. s.len - ".service".len];
+    if (std.mem.startsWith(u8, s, "weft-runner--"))
+        s = s["weft-runner--".len..];
 
-    var iter = std.mem.splitSequence(u8, name, "/");
+    var iter = std.mem.splitSequence(u8, s, "--");
     const workspace = iter.next() orelse return null;
     const pipeline = iter.next() orelse return null;
     const deployment_id = iter.next() orelse return null;
@@ -133,7 +120,7 @@ pub fn is_active(self: @This(), gpa: std.mem.Allocator, io: std.Io) !bool {
 }
 
 pub fn cgroup_name(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
-    return try std.fs.path.join(gpa, &.{
+    return try gpa.print("weft/{s}--{s}--{s}", .{
         self.id.workspace,
         self.id.pipeline,
         &self.id.deployment.to_string(),

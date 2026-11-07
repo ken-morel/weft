@@ -2,11 +2,9 @@ const std = @import("std");
 
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
-const Weft = @import("../domain/Weft.zig");
-const Remote = Weft.Remote;
 const Connection = @import("../wire/Connection.zig");
 const transfer = @import("../wire/transfer.zig");
-const DeploymentState = @import("DeploymentState.zig");
+const View = @import("View.zig");
 
 pub fn pull_dir(
     gpa: std.mem.Allocator,
@@ -14,8 +12,8 @@ pub fn pull_dir(
     conn: *Connection,
     task_id: proto.task.Id,
     dir_path: []const u8,
-    state: *DeploymentState,
-    remote: *const Remote,
+    view: *View,
+    remote_name: []const u8,
     artifact: []const u8,
 ) !void {
     const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
@@ -37,13 +35,14 @@ pub fn pull_dir(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try state.artifact_progress(io, artifact, remote, .pulling, progress(&status));
+            try view.set_transfer(io, artifact, remote_name, .pulling, progress(&status));
     }
     try group.await(io);
     if (status.err) |err|
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.pull.Res));
+    try view.set_transfer(io, artifact, remote_name, .ready, 1.0);
 }
 
 pub fn push_dir(
@@ -52,8 +51,8 @@ pub fn push_dir(
     conn: *Connection,
     task_id: proto.task.Id,
     dir_path: []const u8,
-    state: *DeploymentState,
-    remote: *const Remote,
+    view: *View,
+    remote_name: []const u8,
     artifact: []const u8,
 ) !void {
     const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
@@ -70,13 +69,14 @@ pub fn push_dir(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try state.artifact_progress(io, artifact, remote, .pushing, progress(&status));
+            try view.set_transfer(io, artifact, remote_name, .pushing, progress(&status));
     }
     try group.await(io);
     if (status.err) |err|
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.push.Res));
+    try view.set_transfer(io, artifact, remote_name, .ready, 1.0);
 }
 
 fn progress(status: *const transfer.Status) f32 {

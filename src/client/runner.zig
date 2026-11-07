@@ -12,10 +12,9 @@ const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
-const DeploymentState = @import("DeploymentState.zig");
-const DeploymentView = @import("DeploymentView.zig");
 const Fetcher = @import("Fetcher.zig");
 const Project = @import("Project.zig");
+const View = @import("View.zig");
 const src = @import("src.zig");
 
 pub fn run_deployment(
@@ -35,8 +34,9 @@ pub fn run_deployment(
     const remotes = try deployment.config.remotes_with_local_leaky(alloc);
     const identity = inst.identity;
 
-    var state: DeploymentState = .init(gpa, &project);
-    defer state.deinit();
+    var view: View = .init(gpa, term, &deployment.id.to_string());
+    defer view.deinit();
+
     var depl: std.Io.Mutex = .init;
 
     var fetcher: Fetcher = .{
@@ -47,13 +47,11 @@ pub fn run_deployment(
         .project = &project,
         .remotes = remotes,
         .term = term,
-        .state = &state,
+        .view = &view,
     };
     defer fetcher.deinit(io);
 
     var group: std.Io.Group = .init;
-    var view: DeploymentView = .init(gpa, term, &state, deployment.id);
-    defer view.deinit();
     errdefer {
         view.update(io) catch {};
         l.err("Deployment {d} failed", .{deployment.id});
@@ -66,13 +64,23 @@ pub fn run_deployment(
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
 
-    while (true) : (try std.Io.sleep(io, .fromSeconds(1), .awake)) {
+    var poll_clients: std.StringHashMapUnmanaged(?*Client) = .empty;
+    defer {
+        var iter = poll_clients.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.*) |c|
+                c.destroy(gpa, io);
+        }
+        poll_clients.deinit(gpa);
+    }
+
+    while (true) : (try std.Io.sleep(io, .fromMilliseconds(250), .awake)) {
         try depl.lock(io);
         defer depl.unlock(io);
         if (deployment.completed() and fetcher.is_idle(io))
             break;
 
-        if (state.has_error(io) and deployment.running.len == 0) {
+        if (view.has_error(io) and deployment.running.len == 0) {
             try deployment.save(io, project);
             l.err("Error during deployment", .{});
             try std.Io.sleep(io, .fromSeconds(1), .awake);
@@ -94,13 +102,13 @@ pub fn run_deployment(
                 return error.InvalidRemote;
             }
 
-            _ = try state.add(io, remote, pipeline);
+            try view.set_task(io, remote.@"0", pipeline.name, .{ .status = .preparing });
             try deployment.add_running(gpa, step);
             _ = try spawn(
                 io,
                 &group,
                 spawn_step,
-                .{ gpa, io, &state, project, &depl, deployment, remote, pipeline, &fetcher, step },
+                .{ gpa, io, &view, project, &depl, deployment, remote, pipeline, &fetcher, step },
             );
         }
 
@@ -112,12 +120,12 @@ pub fn run_deployment(
             for (deployment.running) |step| {
                 if (!std.mem.eql(u8, step.remote, remote_name))
                     continue;
-                const step_state = state.get(
+                const step_task = view.get_task(
                     io,
                     step.remote,
                     step.pipeline,
                 ) orelse continue;
-                if (step_state.status != .running and step_state.status != .initializing)
+                if (!step_task.is_active())
                     continue;
 
                 try batch_tasks.append(poll_arena.allocator(), .{
@@ -126,27 +134,30 @@ pub fn run_deployment(
                         .pipeline = step.pipeline,
                         .workspace = deployment.config.workspace,
                     },
-                    .logs_offset = step_state.log_offset,
+                    .logs_offset = step_task.log_offset,
                 });
             }
 
             if (batch_tasks.items.len == 0)
                 continue;
 
-            try poll_remote(
+            const client_entry = try poll_clients.getOrPut(gpa, remote_name);
+            if (!client_entry.found_existing)
+                client_entry.value_ptr.* = null;
+
+            poll_remote(
                 gpa,
                 io,
                 identity,
                 project,
                 deployment,
-                &state,
-                &fetcher,
                 &view,
                 remote,
                 remote_name,
                 &poll_arena,
                 log_buffer,
                 batch_tasks.items,
+                client_entry.value_ptr,
             );
         }
 
@@ -165,60 +176,87 @@ fn poll_remote(
     identity: Identity,
     project: Project,
     deployment: *Deployment,
-    state: *DeploymentState,
-    fetcher: ?*Fetcher,
-    view: ?*DeploymentView,
+    view: *View,
     remote: *const Remote,
     remote_name: []const u8,
     poll_arena: *std.heap.ArenaAllocator,
     log_buffer: []u8,
     batch: []const proto.task.poll.Req,
-) !void {
+    client_slot: *?*Client,
+) void {
     const alloc = poll_arena.allocator();
-    const addr = Weft.parse_remote_address(io, remote.*) catch return;
-    var client = Client.connect(gpa, io, addr, identity) catch return;
-    defer client.destroy(gpa, io);
+    if (client_slot.* == null) {
+        const addr = Weft.parse_remote_address(io, remote.*) catch return;
+        client_slot.* = Client.connect(gpa, io, addr, identity) catch return;
+        client_slot.*.?.conn.send_object(log_buffer, proto.Request, .task_poll) catch {
+            client_slot.*.?.destroy(gpa, io);
+            client_slot.* = null;
+            return;
+        };
+    }
+    const client = client_slot.*.?;
 
-    client.conn.send_object(log_buffer, proto.Request, .task_poll) catch return;
+    poll_batch(
+        gpa,
+        io,
+        project,
+        deployment,
+        view,
+        remote_name,
+        alloc,
+        log_buffer,
+        batch,
+        client,
+    ) catch {
+        client.destroy(gpa, io);
+        client_slot.* = null;
+    };
+}
+
+fn poll_batch(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    project: Project,
+    deployment: *Deployment,
+    view: *View,
+    remote_name: []const u8,
+    alloc: std.mem.Allocator,
+    log_buffer: []u8,
+    batch: []const proto.task.poll.Req,
+    client: *Client,
+) !void {
     for (batch) |task|
-        client.conn.send_object(log_buffer, proto.task.poll.Req, task) catch return;
-    client.conn.send_object(log_buffer, proto.task.poll.Req, null) catch return;
+        try client.conn.send_object(log_buffer, proto.task.poll.Req, task);
 
-    while (true) {
-        const res = client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res)) catch break;
-        const item = res catch break;
+    var count: usize = 0;
+    while (count < batch.len) : (count += 1) {
+        const res = try client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
+        const item = try res;
         const poll_res = item orelse break;
 
         const pipeline_name = poll_res.task.pipeline;
         if (poll_res.logs) |logs| {
-            if (logs.data.len > 0) {
-                if (view) |v|
-                    try v.print_logs(pipeline_name, logs.data)
-                else {
-                    const stdout: std.Io.File = .stdout();
-                    try stdout.writeStreamingAll(io, logs.data);
-                }
-            }
-            state.set_log_offset(io, remote_name, pipeline_name, logs.end_offset);
+            if (logs.data.len > 0)
+                try view.print_logs(pipeline_name, logs.data);
+            try view.set_task(io, remote_name, pipeline_name, .{ .log_offset = logs.end_offset });
         }
 
         if (poll_res.usage) |u|
-            state.update_usage(
-                io,
-                remote_name,
-                pipeline_name,
-                u.cpu_usec,
-                u.memory_bytes,
-                std.Io.Clock.now(.real, io),
-            );
+            try view.set_task(io, remote_name, pipeline_name, .{
+                .usage = .{
+                    .cpu_usec = u.cpu_usec,
+                    .memory_bytes = u.memory_bytes,
+                    .now = std.Io.Clock.now(.real, io),
+                },
+            });
 
         try poll_item(
             gpa,
             io,
             project,
             deployment,
-            state,
-            fetcher,
+            view,
+            null,
             remote_name,
             pipeline_name,
             poll_res.status,
@@ -231,7 +269,7 @@ fn fail_step(
     io: std.Io,
     depl: *std.Io.Mutex,
     dep: *Deployment,
-    state: *DeploymentState,
+    view: *View,
     project: Project,
     step: Deployment.Step,
     msg: []const u8,
@@ -239,7 +277,7 @@ fn fail_step(
     depl.lock(io) catch return;
     defer depl.unlock(io);
     dep.remove_running(gpa, step.remote, step.pipeline);
-    state.err(io, step.remote, step.pipeline, msg);
+    view.set_task(io, step.remote, step.pipeline, .{ .status = .failed, .err = msg }) catch {};
     dep.save(io, project) catch {};
 }
 
@@ -248,15 +286,17 @@ fn poll_item(
     io: std.Io,
     project: Project,
     deployment: *Deployment,
-    state: *DeploymentState,
+    view: *View,
     fetcher: ?*Fetcher,
     remote_name: []const u8,
     pipeline_name: []const u8,
     status: proto.task.poll.Status,
 ) !void {
     if (status) |s| switch (s) {
-        //TODO: display these too
-        .running, .frozen, .preparing, .harvesting => return,
+        .preparing, .running, .harvesting, .frozen => {
+            try view.set_task(io, remote_name, pipeline_name, .{ .status = s });
+            return;
+        },
         .done => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
             const pipeline = deployment.config.get_pipeline(pipeline_name);
@@ -279,13 +319,14 @@ fn poll_item(
                 }
             }
 
-            state.completed(io, remote_name, pipeline_name);
+            try view.set_task(io, remote_name, pipeline_name, .{ .status = .done });
         },
         .failed => {
             const code = 1; //TODO: restore this when actually fetching the code
             deployment.remove_running(gpa, remote_name, pipeline_name);
             const err_msg = try gpa.print("task failed with exit code {d}", .{code});
-            state.err(io, remote_name, pipeline_name, err_msg);
+            defer gpa.free(err_msg);
+            try view.set_task(io, remote_name, pipeline_name, .{ .status = .failed, .err = err_msg });
 
             if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
                 try deployment.add_failed(gpa, .{
@@ -297,11 +338,11 @@ fn poll_item(
         },
         .skipped => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
-            state.skipped(io, remote_name, pipeline_name);
+            try view.set_task(io, remote_name, pipeline_name, .{ .status = .skipped });
         },
         .killed => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
-            state.stopped(io, remote_name, pipeline_name);
+            try view.set_task(io, remote_name, pipeline_name, .{ .status = .killed });
 
             if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
                 try deployment.add_failed(gpa, .{
@@ -312,12 +353,12 @@ fn poll_item(
                 });
         },
     } else {
-        if (state.get(io, remote_name, pipeline_name)) |s|
-            if (s.status == .initializing)
+        if (view.get_task(io, remote_name, pipeline_name)) |t|
+            if (t.status == .preparing)
                 return; // spawn still in flight; keep polling
 
         deployment.remove_running(gpa, remote_name, pipeline_name);
-        state.err(io, remote_name, pipeline_name, "task not found on remote");
+        try view.set_task(io, remote_name, pipeline_name, .{ .status = .failed, .err = "task not found on remote" });
         if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
             try deployment.add_failed(gpa, .{
                 .retries_left = 0,
@@ -358,8 +399,9 @@ pub fn run_task(
         return error.InvalidRemote;
     }
 
-    var state: DeploymentState = .init(gpa, &project);
-    defer state.deinit();
+    var view: View = .init(gpa, term, &deployment.id.to_string());
+    defer view.deinit();
+
     var depl: std.Io.Mutex = .init;
 
     var fetcher: Fetcher = .{
@@ -370,7 +412,7 @@ pub fn run_task(
         .project = &project,
         .remotes = remotes,
         .term = term,
-        .state = &state,
+        .view = &view,
     };
     defer fetcher.deinit(io);
 
@@ -380,13 +422,13 @@ pub fn run_task(
 
     try src.create_sources(alloc, io, term, inst, project, deployment);
 
-    _ = try state.add(io, remote, pipeline);
+    try view.set_task(io, remote.@"0", pipeline.name, .{ .status = .preparing });
     try deployment.add_running(gpa, step);
     _ = try spawn(
         io,
         &group,
         spawn_step,
-        .{ gpa, io, &state, project, &depl, deployment, remote, pipeline, &fetcher, step },
+        .{ gpa, io, &view, project, &depl, deployment, remote, pipeline, &fetcher, step },
     );
 
     const log_buffer = try gpa.alloc(u8, Connection.max_packet_size);
@@ -395,7 +437,10 @@ pub fn run_task(
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
 
-    while (true) : (try std.Io.sleep(io, .fromSeconds(1), .awake)) {
+    var poll_client: ?*Client = null;
+    defer if (poll_client) |c| c.destroy(gpa, io);
+
+    while (true) : (try std.Io.sleep(io, .fromMilliseconds(250), .awake)) {
         try depl.lock(io);
         defer depl.unlock(io);
 
@@ -407,8 +452,8 @@ pub fn run_task(
         if (!still_running)
             break;
 
-        const step_state = state.get(io, step.remote, step.pipeline) orelse break;
-        if (step_state.status != .running and step_state.status != .initializing)
+        const step_task = view.get_task(io, step.remote, step.pipeline) orelse break;
+        if (!step_task.is_active())
             continue;
 
         const batch = [_]proto.task.poll.Req{.{
@@ -417,38 +462,39 @@ pub fn run_task(
                 .pipeline = step.pipeline,
                 .workspace = deployment.config.workspace,
             },
-            .logs_offset = step_state.log_offset,
+            .logs_offset = step_task.log_offset,
         }};
 
-        try poll_remote(
+        poll_remote(
             gpa,
             io,
             identity,
             project,
             deployment,
-            &state,
-            null,
-            null,
+            &view,
             remote,
             step.remote,
             &poll_arena,
             log_buffer,
             &batch,
+            &poll_client,
         );
 
         _ = poll_arena.reset(.retain_capacity);
+        try view.update(io);
     }
     try group.await(io);
+    try view.update(io);
 
-    const final_state = state.get(io, step.remote, step.pipeline) orelse {
+    const final_task = view.get_task(io, step.remote, step.pipeline) orelse {
         l.err("task {s} was never registered", .{step.pipeline});
         return error.DeploymentFailed;
     };
 
-    switch (final_state.status) {
-        .completed => term.success("Task {s} completed", .{step.pipeline}),
+    switch (final_task.status) {
+        .done => term.success("Task {s} completed", .{step.pipeline}),
         .skipped => term.success("Task {s} skipped", .{step.pipeline}),
-        .stopped => {
+        .killed => {
             l.err("Task {s} stopped", .{step.pipeline});
             return error.DeploymentFailed;
         },
@@ -462,7 +508,7 @@ pub fn run_task(
 pub fn spawn_step(
     gpa: std.mem.Allocator,
     io: std.Io,
-    state: *DeploymentState,
+    view: *View,
     project: Project,
     depl: *std.Io.Mutex,
     dep: *Deployment,
@@ -475,7 +521,7 @@ pub fn spawn_step(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    errdefer fail_step(gpa, io, depl, dep, state, project, step, "failed to spawn task");
+    errdefer fail_step(gpa, io, depl, dep, view, project, step, "failed to spawn task");
 
     if (!dep.config.has_mode(step.mode))
         return error.InvalidMode;
@@ -541,7 +587,7 @@ pub fn spawn_step(
     const buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(buffer);
 
-    state.initializing(io, step.remote, step.pipeline);
+    try view.set_task(io, step.remote, step.pipeline, .{ .status = .preparing });
 
     spawn_task: {
         const client = try Client.connect(gpa, io, try Weft.parse_remote_address(io, remote.*), fetcher.identity);
@@ -556,14 +602,14 @@ pub fn spawn_step(
             buffer,
             proto.Res(proto.task.spawn.Res),
         ) catch |err| {
-            fail_step(gpa, io, depl, dep, state, project, step, @errorName(err));
+            fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;
         };
 
         if (res) |_| {
-            state.running(io, step.remote, step.pipeline);
+            try view.set_task(io, step.remote, step.pipeline, .{ .status = .running });
         } else |err| {
-            fail_step(gpa, io, depl, dep, state, project, step, @errorName(err));
+            fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;
         }
         break :spawn_task;

@@ -8,9 +8,8 @@ const Remote = Weft.Remote;
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
-const DeploymentState = @import("DeploymentState.zig");
-const DeploymentView = @import("DeploymentView.zig");
 const Project = @import("Project.zig");
+const View = @import("View.zig");
 const transfer = @import("transfer.zig");
 
 pub fn run(
@@ -50,15 +49,13 @@ pub fn run(
         .workspace = config.workspace,
     };
 
-    var state: DeploymentState = .init(gpa, &project);
-    defer state.deinit();
-    var view: DeploymentView = .init(gpa, term, &state, dep_id);
+    var view: View = .init(gpa, term, &dep_id.to_string());
+    view.auto_update = true;
     defer view.deinit();
 
-    const status: DeploymentState.Artifact.Status = if (direction == .pull) .pulling else .pushing;
+    const status: View.TransferItem.Status = if (direction == .pull) .pulling else .pushing;
 
-    try state.artifact_progress(io, name, remote, status, 0.0);
-    try view.update(io);
+    try view.set_transfer(io, name, remote_name, status, 0.0);
 
     var client = Client.connect(
         gpa,
@@ -79,17 +76,16 @@ pub fn run(
                 l.err("artifact '{s}' cannot be read: {any}", .{ name, err });
             return err;
         };
-        try transfer.push_dir(gpa, io, &client.conn, task_id, artifact_path, &state, remote, name);
+        try transfer.push_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name);
     } else {
-        transfer.pull_dir(gpa, io, &client.conn, task_id, artifact_path, &state, remote, name) catch |err| {
+        transfer.pull_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name) catch |err| {
             if (err == error.ArtifactNotFound)
                 l.err("artifact '{s}' not found on remote '{s}'", .{ name, remote_name });
             return err;
         };
     }
 
-    try state.artifact_progress(io, name, remote, .ready, 1.0);
-    try view.update(io);
+    try view.set_transfer(io, name, remote_name, .ready, 1.0);
     term.success("Transferred {s}@{s}", .{ name, remote_name });
 }
 

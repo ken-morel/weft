@@ -12,7 +12,7 @@ const default_max_pids = 256;
 const max_freeze_depth = 32;
 
 // I don't know much about this double fork
-pub fn spawn_supervisor(io: std.Io, id: Task.Id) !void {
+pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id) !void {
     const pid = std.os.linux.fork();
     if (std.os.linux.errno(pid) != .SUCCESS)
         return error.ForkFailed;
@@ -27,9 +27,11 @@ pub fn spawn_supervisor(io: std.Io, id: Task.Id) !void {
         if (child_pid != 0)
             std.os.linux.exit_group(0);
 
+        const exe_path = try std.process.executablePathAlloc(io, gpa);
+        defer gpa.free(exe_path);
         _ = std.process.spawn(io, .{
             .argv = &.{
-                "/proc/self/exe",
+                exe_path,
                 "supervisor",
                 "supervise",
                 id.workspace,
@@ -249,6 +251,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
         const cgroup = try task.cgroup(gpa);
         try cgroup.create(io);
+        l.debug("Configuring cgroup: {s}", .{cgroup.path});
         l.debug("cgroup created", .{}); //debug
         defer {
             cgroup.kill(gpa, io) catch {};
