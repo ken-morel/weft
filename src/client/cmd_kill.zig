@@ -29,7 +29,7 @@ pub fn run(
     else
         project.find_deployment_id(io, deployment_spec) catch |err| {
             l.err("deployment '{s}' not found: {any}", .{ deployment_spec, err });
-            return;
+            return err;
         };
 
     const remotes = try config.remotes_with_local_leaky(alloc);
@@ -61,6 +61,6 @@ pub fn run(
 
     _ = try client.conn.recv_object(alloc, proto.Res(proto.task.kill.Res)) catch |err| {
         l.err("remote failed to kill task: {any}", .{err});
-        return;
+        return err;
     };
 }

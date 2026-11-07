@@ -132,11 +132,11 @@ pub fn run(
         ),
         .failed => try stdout.writeStreamingAll(
             io,
-            try alloc.print("#.faied {s}", .{key}),
+            try alloc.print("#.failed {s}", .{key}),
         ),
         .killed => try stdout.writeStreamingAll(
             io,
-            try alloc.print("#{any} {s} ", .{ s, key }),
+            try alloc.print("#.killed {s}", .{key}),
         ),
 
         .running, .preparing => {

@@ -255,8 +255,12 @@ fn poll_item(
                 });
         },
     } else {
+        if (state.get(io, remote_name, pipeline_name)) |s|
+            if (s.status == .initializing)
+                return; // spawn still in flight; keep polling
+
         deployment.remove_running(gpa, remote_name, pipeline_name);
-        state.initializing(io, remote_name, pipeline_name);
+        state.err(io, remote_name, pipeline_name, "task not found on remote");
         if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
             try deployment.add_failed(gpa, .{
                 .retries_left = 0,

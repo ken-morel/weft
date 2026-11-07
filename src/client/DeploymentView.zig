@@ -47,13 +47,12 @@ pub fn update(self: *@This(), io: std.Io) !void {
     defer self.state.mutex.unlock(io);
 
     for (self.state.steps.items) |step| {
-        const color = Term.task_color(step.pipeline.name);
-        const duration_ms: u64 = @intCast(@max(step.started.durationTo(.now(io, .real)).toMilliseconds(), 0));
-
         const key = try self.gpa.print("{s}.{s}", .{ step.remote.@"0", step.pipeline.name });
         defer self.gpa.free(key);
+        const color = Term.task_color(key);
+        const duration_ms: u64 = @intCast(@max(step.started.durationTo(.now(io, .real)).toMilliseconds(), 0));
 
-        if (self.step_history.get(step.pipeline.name)) |prev_status| {
+        if (self.step_history.get(key)) |prev_status| {
             if (prev_status != step.status) {
                 if (step.status == .running and (prev_status == .preparing or prev_status == .initializing))
                     self.term.write_event(color, "{", " {s}", .{key})
@@ -66,7 +65,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
                 else if (step.status == .stopped)
                     self.term.write_event(.red, "#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
 
-                if (self.step_history.getPtr(step.pipeline.name)) |ptr|
+                if (self.step_history.getPtr(key)) |ptr|
                     ptr.* = step.status;
             }
         } else {
@@ -81,7 +80,7 @@ pub fn update(self: *@This(), io: std.Io) !void {
             else if (step.status == .stopped)
                 self.term.write_event(.red, "{#.stopped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, step.cpu_ms orelse 0 });
 
-            try self.step_history.put(self.gpa, try self.gpa.dupe(u8, step.pipeline.name), step.status);
+            try self.step_history.put(self.gpa, try self.gpa.dupe(u8, key), step.status);
         }
     }
 
