@@ -271,26 +271,37 @@ const allowed_tools =
     "sha256sum,sha384sum,sha512sum,b2sum,base64,base32,cksum,echo,printf,test,[,true,false," ++
     "sleep,env,printenv,date,uname,which,id,whoami,groups,timeout,kill,yes,nohup,expr,seq,grep," ++
     "egrep,fgrep,sed,awk,gawk,find,xargs,tar,gzip,gunzip,zcat,bzip2,bunzip2,bzcat,xz,unxz," ++
-    "xzcat,zstd,unzstd,zip,unzip,diff,diff3,patch,cmp,file";
+    "xzcat,zstd,unzstd,zip,unzip,diff,diff3,patch,cmp,file,weft";
 
 pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
+    const cwd = std.Io.Dir.cwd();
 
-    var bin_dir: std.Io.Dir = try std.Io.Dir.cwd().openDir(io, paths.weft_bin, .{});
+    var bin_dir: std.Io.Dir = try cwd.openDir(io, paths.weft_bin, .{});
     defer bin_dir.close(io);
 
     var tools = std.mem.splitScalar(u8, allowed_tools, ',');
     while (tools.next()) |tool| {
-        const target = try alloc.print("/bin/{s}", .{tool});
-        bin_dir.deleteFile(io, tool) catch {};
-        bin_dir.symLink(
-            io,
-            target,
-            tool,
-            .{},
-        ) catch {};
+        if (bin_dir.statFile(io, tool, .{ .follow_symlinks = false })) |st| {
+            if (st.kind == .sym_link)
+                bin_dir.deleteFile(io, tool) catch {}
+            else
+                continue;
+        } else |_| {}
+
+        const target = if (cwd.access(io, try alloc.print("/bin/{s}", .{tool}), .{})) |_|
+            try alloc.print("/bin/{s}", .{tool})
+        else |_| if (cwd.access(io, try alloc.print("/usr/local/bin/{s}", .{tool}), .{})) |_|
+            try alloc.print("/usr/local/bin/{s}", .{tool})
+        else |_|
+            continue;
+
+        cwd.hardLink(target, bin_dir, tool, io, .{ .follow_symlinks = true }) catch {
+            cwd.copyFile(target, bin_dir, tool, io, .{}) catch continue;
+            bin_dir.setFilePermissions(io, tool, .executable_file, .{}) catch {};
+        };
     }
 }
 

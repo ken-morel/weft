@@ -84,7 +84,8 @@ pub fn ensure_dirs(io: std.Io) !void {
         weft_config,
         weft_run,
         weft_workspace,
-        weft_active, // New
+        weft_active,
+        weft_bin,
         weft_nix_nar,
         weft_nix_store,
         weft_nix_narinfo,

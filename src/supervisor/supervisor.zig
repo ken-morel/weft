@@ -328,6 +328,9 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         ) catch |e| if (e != error.FileNotFound)
             return e;
 
+        const artifact_parent = try balloc.print(paths.workspace ++ "artifact/{s}/", .{ task.id.workspace, output });
+        try cwd.createDirPath(io, artifact_parent);
+
         try cwd.rename(out_sub, cwd, artifact_path, io);
     }
 
@@ -375,12 +378,15 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
 
         const user_home_rel = try alloc.printSentinel("home/{s}", .{username}, 0);
         for ([_][]const u8{
-            "nix/store", "bin", "usr", "proc", "tmp", "dev/shm", "etc", "work", "in", "out", user_home_rel,
+            "nix/store", "bin", "usr", "usr/lib", "proc", "tmp", "dev/shm", "etc", "work", "in", "out", user_home_rel,
         }) |dir| {
             try rootfs_dir.createDirPath(io, dir);
         }
 
-        _ = std.os.linux.symlinkat("/var/lib/weft/bin", rootfs_dir.handle, "usr/bin");
+        _ = std.os.linux.symlinkat("/bin", rootfs_dir.handle, "usr/bin");
+        _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib");
+        _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib64");
+        _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "usr/lib64");
 
         const script = spec.script orelse no_run_script;
         try rootfs_dir.writeFile(io, .{
@@ -424,6 +430,11 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         try mount.bind(
             paths.weft_bin,
             "bin",
+            .{ .read_only = true, .allow_exec = true },
+        );
+        try mount.bind(
+            "/usr/lib",
+            "usr/lib",
             .{ .read_only = true, .allow_exec = true },
         );
 
