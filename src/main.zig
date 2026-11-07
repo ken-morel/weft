@@ -247,7 +247,9 @@ const Argz = union(enum) {
         },
     },
     decode: struct {
-        pub const doc = "Decode and pretty print a zoto-encoded binary stream from stdin";
+        pub const doc = "Decode and pretty print a zoto-encoded binary file or stdin";
+        pub const doc_file = "The file to decode. Default to '-' for stdin";
+        file: []const u8 = "-",
     },
     argz_help: argz.Help("weft", @This()),
     nop: struct {
@@ -662,15 +664,19 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 }
             },
         },
-        .decode => {
-            var allocating: std.Io.Writer.Allocating = .init(gpa);
-            defer allocating.deinit();
+        .decode => |d| {
+            const content = if (std.mem.eql(u8, d.file, "-")) in: {
+                var buf: [4096]u8 = undefined;
+                var allocating: std.Io.Writer.Allocating = .init(gpa);
+                defer allocating.deinit();
 
-            var buf: [4096]u8 = undefined;
-            var stdin_reader = std.Io.File.stdin().readerStreaming(io, &buf);
-            _ = try allocating.writer.sendFileReadingAll(&stdin_reader, .unlimited);
+                var stdin_reader = std.Io.File.stdin().readerStreaming(io, &buf);
+                _ = try allocating.writer.sendFileReadingAll(&stdin_reader, .unlimited);
+                break :in try allocating.toOwnedSlice();
+            } else try std.Io.Dir.cwd().readFileAlloc(io, d.file, gpa, .unlimited);
+            defer gpa.free(content);
 
-            try decode.decode_and_print(alloc, allocating.written(), &term);
+            try decode.decode_and_print(alloc, content, &term);
         },
         .argz_help => |cmd| cmd.handle(),
         .nop => {},
