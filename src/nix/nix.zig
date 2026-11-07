@@ -7,10 +7,10 @@ pub const devbox = @import("devbox.zig");
 const NarInfo = @import("NarInfo.zig");
 const NarUnpacker = @import("NarUnpacker.zig");
 
-const store_path = "/var/lib/weft/store";
-const nar_path = "/var/lib/weft/nar";
-const narinfo_path = "/var/lib/weft/narinfo";
-const install_lock_path = "/var/lib/weft/nar/.lock";
+const store_path = paths.weft_nix_store;
+const nar_path = paths.weft_nix_nar;
+const narinfo_path = paths.weft_nix_narinfo;
+const install_lock_path = paths.weft_nix ++ "nar/.lock";
 pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Client, id: []const u8) !void {
     const l = std.log.scoped(.nix);
     const cwd: std.Io.Dir = .cwd();

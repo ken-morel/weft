@@ -108,7 +108,7 @@ pub fn write_status(self: @This(), gpa: std.mem.Allocator, io: std.Io, status: S
     const str = try zoto.serializeAlloc(gpa, Status, status, .{ .header = true });
     const status_path = try gpa.print(paths.task_status, self.id.wpd());
     defer gpa.free(status_path);
-    try domain.write_file_atomic(io, .cwd(), status_path, str, .{});
+    try domain.write_file_atomic(io, .cwd(), status_path, str, .{ .replace = true });
 }
 pub fn read_status(self: @This(), gpa: std.mem.Allocator, io: std.Io) !Status {
     const status_path = try gpa.print(paths.task_status, self.id.wpd());

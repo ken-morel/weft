@@ -172,10 +172,10 @@ fn print_value(comptime T: type, val: T, term: *Term, depth: usize, is_root: boo
             const prefix = if (is_root) "" else ".";
             if (s.is_tuple) {
                 if (s.field_names.len == 0) {
-                    term.print("{s}.{{}}", .{prefix});
+                    term.print("{s}{{}}", .{prefix});
                     return;
                 }
-                term.println("{s}.{{", .{prefix});
+                term.println("{s}{{", .{prefix});
                 inline for (s.field_names, s.field_types) |f_name, f_type| {
                     indent(term, depth + 1);
                     try print_value(f_type, @field(val, f_name), term, depth + 1, false);
@@ -185,10 +185,10 @@ fn print_value(comptime T: type, val: T, term: *Term, depth: usize, is_root: boo
                 term.print("}}", .{});
             } else {
                 if (s.field_names.len == 0) {
-                    term.print("{s}.{{}}", .{prefix});
+                    term.print("{s}{{}}", .{prefix});
                     return;
                 }
-                term.println("{s}.{{", .{prefix});
+                term.println("{s}{{", .{prefix});
                 inline for (s.field_names, s.field_types) |f_name, f_type| {
                     indent(term, depth + 1);
                     term.styled(.blue, ".{s}", .{f_name});
