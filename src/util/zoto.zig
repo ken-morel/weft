@@ -361,3 +361,137 @@ fn readInt(src: *[]const u8, comptime IntT: type) !IntT {
     src.* = src.*[size..];
     return val;
 }
+
+fn indent(w: *std.Io.Writer, depth: usize) !void {
+    var i: usize = 0;
+    while (i < depth) : (i += 1)
+        try w.writeAll("  ");
+}
+
+fn print_string(val: []const u8, out: *std.Io.Writer, depth: usize) !void {
+    if (std.mem.indexOfScalar(u8, val, '\n')) |_| {
+        var lines = std.mem.splitScalar(u8, val, '\n');
+        try out.writeByte('\n');
+        while (lines.next()) |line| {
+            try indent(out, depth + 1);
+            try out.print("\\\\{s}\n", .{line});
+        }
+        try indent(out, depth);
+    } else try out.print("\"{f}\"", .{std.zig.fmtString(val)});
+}
+
+pub fn print_value(comptime T: type, val: T, out: *std.Io.Writer, depth: usize, is_root: bool) !void {
+    const info = @typeInfo(T);
+    switch (info) {
+        .void => try out.writeAll("void"),
+        .bool => try out.print("{}", .{val}),
+        .int => try out.print("{d}", .{val}),
+        .float => try out.print("{d}", .{val}),
+        .@"enum" => try out.print(".{s}", .{@tagName(val)}),
+        .error_set => try out.print("error.{s}", .{@errorName(val)}),
+        .error_union => if (val) |payload|
+            try print_value(@TypeOf(payload), payload, out, depth, is_root)
+        else |err|
+            try out.print("error.{s}", .{@errorName(err)}),
+        .optional => if (val) |payload|
+            try print_value(@TypeOf(payload), payload, out, depth, false)
+        else
+            try out.writeAll("null"),
+        .pointer => |p| switch (p.size) {
+            .slice => {
+                if (p.child == u8)
+                    try print_string(val, out, depth)
+                else if (val.len == 0)
+                    try out.writeAll("&.{}")
+                else if (val.len == 1) {
+                    try out.writeAll("&.{");
+                    try print_value(p.child, val[0], out, depth + 1, false);
+                    try out.writeAll("}");
+                } else {
+                    try out.writeAll("&.{\n");
+                    for (val) |item| {
+                        try indent(out, depth + 1);
+                        try print_value(p.child, item, out, depth + 1, false);
+                        try out.writeAll(",\n");
+                    }
+                    try indent(out, depth);
+                    try out.writeAll("}");
+                }
+            },
+            .one => {
+                try out.writeByte('&');
+                try print_value(p.child, val.*, out, depth, false);
+            },
+            else => try out.writeAll("unsupported pointer"),
+        },
+        .array => |a| {
+            if (a.child == u8)
+                try print_string(&val, out, depth)
+            else if (val.len == 0)
+                try out.writeAll(".{}")
+            else if (val.len == 1) {
+                try out.writeAll(".{");
+                try print_value(a.child, val[0], out, depth + 1, false);
+                try out.writeAll("}");
+            } else {
+                try out.writeAll(".{\n");
+                for (val) |item| {
+                    try indent(out, depth + 1);
+                    try print_value(a.child, item, out, depth + 1, false);
+                    try out.writeAll(",\n");
+                }
+                try indent(out, depth);
+                try out.writeAll("}");
+            }
+        },
+        .@"struct" => |s| {
+            const prefix = if (is_root) "" else ".";
+            if (s.is_tuple) {
+                if (s.field_names.len == 0) {
+                    try out.print("{s}{{}}", .{prefix});
+                    return;
+                }
+                try out.print("{s}{{\n", .{prefix});
+                inline for (s.field_names, s.field_types) |f_name, f_type| {
+                    try indent(out, depth + 1);
+                    try print_value(f_type, @field(val, f_name), out, depth + 1, false);
+                    try out.writeAll(",\n");
+                }
+                try indent(out, depth);
+                try out.writeAll("}");
+            } else {
+                if (s.field_names.len == 0) {
+                    try out.print("{s}{{}}", .{prefix});
+                    return;
+                }
+                try out.print("{s}{{\n", .{prefix});
+                inline for (s.field_names, s.field_types) |f_name, f_type| {
+                    try indent(out, depth + 1);
+                    try out.print(".{s} = ", .{f_name});
+                    try print_value(f_type, @field(val, f_name), out, depth + 1, false);
+                    try out.writeAll(",\n");
+                }
+                try indent(out, depth);
+                try out.writeAll("}");
+            }
+        },
+        .@"union" => |u| {
+            if (u.tag_type == null) {
+                try out.writeAll("untagged-union");
+                return;
+            }
+            switch (val) {
+                inline else => |payload, tag| {
+                    if (@TypeOf(payload) == void) {
+                        try out.print(".{{ .{s} }}", .{@tagName(tag)});
+                    } else {
+                        try out.print(".{{ .{s} = ", .{@tagName(tag)});
+                        try print_value(@TypeOf(payload), payload, out, depth, false);
+                        try out.writeAll(" }");
+                    }
+                },
+            }
+        },
+        else => try out.writeAll("unreachable"),
+    }
+}

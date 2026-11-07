@@ -676,7 +676,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             } else try std.Io.Dir.cwd().readFileAlloc(io, d.file, gpa, .unlimited);
             defer gpa.free(content);
 
-            try decode.decode_and_print(alloc, content, &term);
+            try decode.decode_and_print(alloc, content, term.writer());
         },
         .argz_help => |cmd| cmd.handle(),
         .nop => {},

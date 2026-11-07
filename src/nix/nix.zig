@@ -1,15 +1,15 @@
 const std = @import("std");
 
 const paths = @import("../domain/paths.zig");
+const store_path = paths.weft_nix_store;
+const nar_path = paths.weft_nix_nar;
+const narinfo_path = paths.weft_nix_narinfo;
 const spawn = @import("../domain/spawn.zig").spawn;
 const format_bytes = @import("../util/sizes.zig").format_bytes;
 pub const devbox = @import("devbox.zig");
 const NarInfo = @import("NarInfo.zig");
 const NarUnpacker = @import("NarUnpacker.zig");
 
-const store_path = paths.weft_nix_store;
-const nar_path = paths.weft_nix_nar;
-const narinfo_path = paths.weft_nix_narinfo;
 const install_lock_path = paths.weft_nix ++ "nar/.lock";
 pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Client, id: []const u8) !void {
     const l = std.log.scoped(.nix);
@@ -40,7 +40,9 @@ pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Cli
     if (narinfo.has_deps()) {
         var deps = narinfo.deps();
         while (deps.next()) |dep| {
-            if (dep.len == 0) continue;
+            if (dep.len == 0 or std.mem.eql(u8, dep, id))
+                continue;
+            l.info("installing dependency {s} of {s}", .{ dep, id });
             try install_package(gpa, io, client, dep);
         }
     }
