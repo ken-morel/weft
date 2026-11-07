@@ -37,9 +37,7 @@ pub fn run(
         },
         .retry => |id| blk: {
             var deployment = try project.load_deployment_leaky(gpa, alloc, io, id);
-            if (project.get_config_leaky(alloc, io)) |config| {
-                deployment.config = config;
-            } else |_| {}
+            deployment.config = try project.get_config_leaky(alloc, io);
             break :blk deployment;
         },
     };
