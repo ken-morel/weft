@@ -256,7 +256,7 @@ fn poll_item(
 ) !void {
     if (status) |s| switch (s) {
         //TODO: display these too
-        .running, .frozen, .preparing, .harvesting => {},
+        .running, .frozen, .preparing, .harvesting => return,
         .done => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
             const pipeline = deployment.config.get_pipeline(pipeline_name);
