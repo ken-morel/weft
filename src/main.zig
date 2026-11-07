@@ -48,8 +48,8 @@ const Argz = union(enum) {
         pub const doc = "Perform actions on the local daemon";
         install: struct {
             pub const doc = "Install the weft daemon locally, requires superuser priviledges";
-            pub const doc_user = "Use an existing user to run tasks, instead of 'weft-runner'.";
-            user: ?[]const u8 = null,
+            pub const doc_template = "Containerizaotin template";
+            template: ?[]const u8 = null,
         },
         run: struct {
             pub const doc = "Run the weft daemon, requires superuser priviledges";
@@ -70,6 +70,7 @@ const Argz = union(enum) {
             workspace: []const u8,
             pipeline: []const u8,
             deployment: []const u8,
+            isolate: u8,
         },
         spawn: struct {
             workspace: []const u8,
@@ -218,11 +219,9 @@ const Argz = union(enum) {
             pub const doc = "Install weft daemon on a remote via ssh and register the client";
             pub const doc_ssh = "The ssh address of the remote (e.g. user@host:22)";
             pub const doc_weft_addr = "The external weft address (host:port)";
-            pub const doc_user = "Use an existing user to run tasks on the remote, instead of 'weft-runner'";
             pub const doc_extra = "Extra arguments to pass to the install command";
 
             ssh: []const u8,
-            user: ?[]const u8 = null,
             extra: [][]const u8 = &.{},
         },
         monitor: struct {
@@ -318,7 +317,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
 
         .daemon => |d| if (include_daemon) switch (d) {
             .install => |i| {
-                try DaemonInstall.install(gpa, io, i.user);
+                try DaemonInstall.install(gpa, io, i.template);
             },
             .run => {
                 const installation: DaemonInstall = try .init(io);
@@ -348,7 +347,8 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     .deployment = try .parse(a.deployment),
                     .pipeline = a.pipeline,
                 } };
-                return supervisor.supervise(gpa, io, task);
+                const isolate: DaemonInstall.Isolate = @fromBackingInt(a.isolate);
+                return supervisor.supervise(gpa, io, task, isolate);
             },
             .spawn => |a| {
                 const task: Task = .{ .id = .{
@@ -579,7 +579,6 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     io,
                     &installation,
                     inst_arg.ssh,
-                    inst_arg.user,
                     inst_arg.extra,
                 );
             },

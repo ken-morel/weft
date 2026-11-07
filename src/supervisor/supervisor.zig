@@ -1,7 +1,9 @@
 const std = @import("std");
 
+const DaemonInstall = @import("../daemon/DaemonInstall.zig");
 const Task = @import("../daemon/Task.zig");
 const domain = @import("../domain/domain.zig");
+const spawn_detach = @import("../domain/domain.zig").spawn_detach;
 const paths = @import("../domain/paths.zig");
 const nix = @import("../nix/nix.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
@@ -12,38 +14,24 @@ const default_max_pids = 256;
 const max_freeze_depth = 32;
 
 // I don't know much about this double fork
-pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id) !void {
-    const pid = std.os.linux.fork();
-    if (std.os.linux.errno(pid) != .SUCCESS)
-        return error.ForkFailed;
+pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate: DaemonInstall.Isolate) !void {
+    const exe_path = try std.process.executablePathAlloc(io, gpa);
+    defer gpa.free(exe_path);
 
-    if (pid == 0) {
-        if (std.os.linux.errno(std.os.linux.setsid()) != .SUCCESS)
-            std.os.linux.exit_group(1);
+    const isolate_arg = try gpa.print("{d}", .{@backingInt(isolate)});
+    defer gpa.free(isolate_arg);
 
-        const child_pid = std.os.linux.fork();
-        if (std.os.linux.errno(child_pid) != .SUCCESS)
-            std.os.linux.exit_group(1);
-        if (child_pid != 0)
-            std.os.linux.exit_group(0);
-
-        const exe_path = try std.process.executablePathAlloc(io, gpa);
-        defer gpa.free(exe_path);
-        _ = std.process.spawn(io, .{
-            .argv = &.{
-                exe_path,
-                "supervisor",
-                "supervise",
-                id.workspace,
-                id.pipeline,
-                &id.deployment.to_string(),
-            },
-        }) catch std.os.linux.exit_group(1);
-        std.os.linux.exit_group(0);
-    } else {
-        var status: i32 = 0;
-        _ = std.os.linux.waitpid(@intCast(pid), &status, 0);
-    }
+    try spawn_detach(io, .{
+        .argv = &.{
+            exe_path,
+            "supervisor",
+            "supervise",
+            id.workspace,
+            id.pipeline,
+            &id.deployment.to_string(),
+            isolate_arg,
+        },
+    });
 }
 
 fn chown(parent: std.Io.Dir, sub_path: [:0]const u8, uid: u32, gid: u32) !void {
@@ -87,7 +75,7 @@ fn first_active_sibling(gpa: std.mem.Allocator, io: std.Io, task: *const Task) !
     } else null;
 }
 
-pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
+pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
     _ = std.os.linux.syscall3(.setpriority, 0, 0, 10);
 
     var arena: std.heap.ArenaAllocator = .init(gpa);

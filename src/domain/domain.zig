@@ -26,3 +26,26 @@ pub fn write_file_atomic(
     else
         try atomic.link(io);
 }
+
+pub fn spawn_detach(io: std.Io, spawn_options: std.process.SpawnOptions) !void {
+    const pid = std.os.linux.fork();
+    if (std.os.linux.errno(pid) != .SUCCESS)
+        return error.ForkFailed;
+
+    if (pid == 0) {
+        if (std.os.linux.errno(std.os.linux.setsid()) != .SUCCESS)
+            std.os.linux.exit_group(1);
+
+        const child_pid = std.os.linux.fork();
+        if (std.os.linux.errno(child_pid) != .SUCCESS)
+            std.os.linux.exit_group(1);
+        if (child_pid != 0)
+            std.os.linux.exit_group(0);
+
+        _ = std.process.spawn(io, spawn_options) catch std.os.linux.exit_group(1);
+        std.os.linux.exit_group(0);
+    } else {
+        var status: i32 = 0;
+        _ = std.os.linux.waitpid(@intCast(pid), &status, 0);
+    }
+}

@@ -86,7 +86,6 @@ pub fn install(
     io: std.Io,
     installation: *const ClientInstall,
     ssh_target: []const u8,
-    maybe_user: ?[]const u8,
     extra_args: []const []const u8,
 ) !void {
     const l = log(.remote_install);
@@ -147,8 +146,6 @@ pub fn install(
         "install",
     });
 
-    if (maybe_user) |user|
-        try daemon_argv.appendSlice(alloc, &.{ "--user", user });
     try daemon_argv.appendSlice(alloc, extra_args);
 
     const daemon_res = try std.process.run(alloc, io, .{

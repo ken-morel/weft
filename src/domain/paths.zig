@@ -3,11 +3,17 @@ const std = @import("std");
 pub const weft_lib = "/var/lib/weft/";
 pub const weft_config = "/etc/weft";
 pub const weft_run = "/run/weft/";
+pub const weft_binary = "/usr/local/bin/weft";
 
 pub const weft_workspace = weft_lib ++ "workspace/";
 pub const weft_tmp = weft_lib ++ "tmp/";
 pub const weft_bin = weft_lib ++ "bin/";
 pub const weft_nix = weft_lib ++ "nix/";
+
+pub const weft_pid = weft_run ++ "pid";
+
+pub const weft_config_keys = weft_config ++ "keys";
+pub const weft_config_file = weft_config ++ "weft.zon";
 
 /// UID monilithic counter, and lock.
 pub const weft_workspace_uid = weft_workspace ++ "uid";

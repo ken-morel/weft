@@ -8,38 +8,43 @@ const read_only_user_permissions = domain.read_only_user_permissions;
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 
+pub const Isolate = packed struct(u8) {
+    cgroups: bool,
+    mount: bool,
+    pid: bool,
+    net: bool,
+    _pad: u4 = 0,
+
+    pub const templates = [_]struct { []const u8, @This() }{
+        .{ "kvm", .{ .cgroups = true, .mount = true, .pid = true, .net = true } },
+        .{ "lxc", .{ .cgroups = false, .mount = true, .pid = true, .net = true } },
+        .{ "vz", .{ .cgroups = false, .mount = false, .pid = false, .net = false } },
+    };
+    pub fn template(name: []const u8) ?@This() {
+        return inline for (templates) |t| {
+            if (std.mem.eql(u8, t.@"0", name))
+                break t.@"1";
+        } else null;
+    }
+    pub const default = template("kvm") orelse unreachable;
+};
+
 pub const Config = struct {
-    runner_user: ?[]const u8 = null,
     port: u16 = 9338,
-    max_workers: u32 = 8,
-    max_nix_workers: u32 = 5,
+    max_workers: u32 = 4,
     compress: bool = false,
+    isolate: Isolate = .default,
 };
 
 pub fn init(_: std.Io) !@This() {
     return .{};
 }
 
-pub fn open_temp(io: std.Io, sub: []const u8) !std.Io.Dir {
-    const uuid = (try Deployment.Id.now(io)).to_string();
-
-    var tmp_dir = try std.Io.Dir.cwd().createDirPathOpen(
-        io,
-        paths.weft_tmp,
-        .{ .open_options = .{} },
-    );
-    defer tmp_dir.close(io);
-
-    try tmp_dir.createDirPath(io, sub);
-    var sub_dir = try tmp_dir.createDirPathOpen(io, sub, .{});
-    defer sub_dir.close(io);
-
-    return try sub_dir.createDirPathOpen(io, &uuid, .{ .open_options = .{ .iterate = true } });
-}
-
 pub const InitSystem = enum {
     systemd,
     runit,
+    openrc,
+    none,
 
     pub fn detect(io: std.Io) !?@This() {
         const cwd = std.Io.Dir.cwd();
@@ -47,17 +52,41 @@ pub const InitSystem = enum {
             return .systemd
         else |e| if (e != error.FileNotFound)
             return .systemd;
+
         if (cwd.access(io, "/run/runit/runsvdir", .{})) |_|
             return .runit
         else |e| if (e != error.FileNotFound)
             return .runit;
-        return null;
+
+        if (cwd.access(io, "/run/openrc", .{})) |_|
+            return .openrc
+        else |e| if (e != error.FileNotFound)
+            return .openrc;
+
+        return .none;
     }
 
     pub fn stop(self: @This(), io: std.Io, svc: []const u8) !void {
         const cmd: []const []const u8 = switch (self) {
             .systemd => &.{ "systemctl", "stop", svc },
             .runit => &.{ "sv", "stop", svc },
+            .openrc => &.{ "rc-service", svc, "stop" },
+            .none => {
+                var buf: [1 << 32]u8 = undefined;
+                const pid_content = try std.Io.Dir.cwd().readFile(
+                    io,
+                    paths.weft_pid,
+                    &buf,
+                ) catch |e|
+                    return if (e != error.FileNotFound)
+                        e
+                    else {};
+                const pid = try std.fmt.parseInt(i32, &pid_content, 10);
+                switch (std.os.linux.errno(std.os.linux.kill(pid, .TERM))) {
+                    else => {},
+                }
+                return;
+            },
         };
         _ = try _do(io, cmd);
     }
@@ -65,6 +94,13 @@ pub const InitSystem = enum {
         const cmd: []const []const u8 = switch (self) {
             .systemd => &.{ "systemctl", "start", svc },
             .runit => &.{ "sv", "start", svc },
+            .openrc => &.{ "rc-service", svc, "start" },
+            .none => {
+                try domain.spawn_detach(io, .{
+                    .argv = &.{paths.weft_binary},
+                });
+                return;
+            },
         };
         _ = try _do(io, cmd);
     }
@@ -72,6 +108,12 @@ pub const InitSystem = enum {
         const cmd: []const []const u8 = switch (self) {
             .systemd => &.{ "systemctl", "restart", svc },
             .runit => &.{ "sv", "restart", svc },
+            .openrc => &.{ "rc-service", svc, "restart" },
+            .none => {
+                try self.stop(io, svc);
+                try self.start(io, svc);
+                return;
+            },
         };
         _ = try _do(io, cmd);
     }
@@ -152,44 +194,32 @@ pub const InitSystem = enum {
 
                 _ = try _do(io, &.{ "sv", word, "weft" });
             },
-        }
-    }
-    pub fn setup_runner(self: @This(), io: std.Io) !void {
-        const l = log(.init_system_manager);
-        const cwd: std.Io.Dir = .cwd();
-        switch (self) {
-            .systemd => {
-                try cwd.writeFile(io, .{
-                    .data = "u weft - \"Weft pipeline runner\" /var/lib/weft /usr/bin/nologin",
-                    .sub_path = "/usr/lib/sysusers.d/weft.conf",
-                });
-                _ = try _do(io, &.{ "systemd-sysusers", "/usr/lib/sysusers.d/weft.conf" });
-            },
-            .runit => {
-                var child = try std.process.spawn(io, .{
-                    .argv = &.{
-                        "useradd",
-                        "--system",
-                        "--shell",
-                        "/usr/bin/nologin",
-                        "--home-dir",
-                        "/var/lib/weft",
-                        "--comment",
-                        "Weft pipeline runner",
-                        "weft",
+            .openrc => {
+                try std.Io.Dir.cwd().writeFile(
+                    io,
+                    .{
+                        .data = std.fmt.comptimePrint(
+                            \\#!/sbin/openrc-run
+                            \\name="weft"
+                            \\command="{s}"
+                            \\command_args="daemon run"
+                            \\command_background="yes"
+                            // \\pidfile="/run/weft/weft.pid"; I think weft should write it itself
+                        , .{paths.weft_binary}),
+
+                        .sub_path = "/etc/init.d/weft",
+                        .flags = .{
+                            .permissions = .executable_file,
+                        },
                     },
-                });
-                const term = try child.wait(io);
-                if (!term.success() or (term.exited != 0 and term.exited != 9)) {
-                    l.err("Error adding 'weft' user task: {any}", .{term});
-                    return error.CallFailed;
-                }
+                );
             },
+            .none => {},
         }
     }
 };
 
-pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !void {
+pub fn install(gpa: std.mem.Allocator, io: std.Io, template: []const u8) !void {
     const l = log(.daemon_install);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -208,42 +238,32 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);
 
-        if (!std.mem.eql(u8, exe_path, "/usr/local/bin/weft")) {
-            const bin_dir = try cwd.openDir(io, "/usr/local/bin", .{});
-            defer bin_dir.close(io);
+        if (!std.mem.eql(u8, exe_path, paths.weft_binary))
+            try cwd.copyFile(exe_path, cwd, paths.weft_binary, io, .{});
 
-            try cwd.copyFile(exe_path, bin_dir, "weft", io, .{});
-        }
         break :install_exe;
     }
 
-    l.debug("installed binary to /usr/local/bin/weft", .{});
+    l.debug("installed binary to {s}", .{paths.weft_binary});
 
     write_config: {
-        const current_config: ?Config = read_config_leaky(alloc, io) catch null;
-
-        const runner_user = if (maybe_user) |u|
-            u
-        else if (current_config) |c|
-            c.runner_user
-        else
-            null;
-
-        const config = Config{
-            .port = if (current_config) |c|
-                c.port
-            else
-                9338,
-            .max_workers = if (current_config) |c|
-                c.max_workers
-            else
-                8,
-            .runner_user = runner_user,
+        var config: Config = .{
+            .isolate = .template(template) orelse {
+                l.err("Template {s} not found", .{template});
+                return error.TemplateNotFound;
+            },
         };
 
-        try cwd.createDirPath(io, "/etc/weft");
+        if (read_config_leaky(alloc, io)) |c| {
+            config.port = c.port;
+            config.max_workers = c.max_workers;
+            config.compress = c.compress;
+        } else |e| if (e != error.FileNotFound)
+            return e;
 
-        var config_file = try cwd.createFileAtomic(io, "/etc/weft/config.zon", .{
+        try cwd.createDirPath(io, paths.weft_config);
+
+        var config_file = try cwd.createFileAtomic(io, paths.weft_config_file, .{
             .permissions = read_only_user_permissions,
             .replace = true,
         });
@@ -260,7 +280,6 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
     }
     try paths.ensure_dirs(io);
     try pid1.setup_weft_svc(io);
-    try pid1.setup_runner(io);
     try setup_bin(gpa, io);
 }
 
@@ -284,11 +303,8 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
 
     var tools = std.mem.splitScalar(u8, allowed_tools, ',');
     while (tools.next()) |tool| {
-        if (bin_dir.statFile(io, tool, .{ .follow_symlinks = false })) |st| {
-            if (st.kind == .sym_link)
-                bin_dir.deleteFile(io, tool) catch {}
-            else
-                continue;
+        if (bin_dir.access(io, tool, .{ .follow_symlinks = false })) |_| {
+            continue;
         } else |_| {}
 
         const target = if (cwd.access(io, try alloc.print("/bin/{s}", .{tool}), .{})) |_|
@@ -305,12 +321,12 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     }
 }
 
-pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
+pub fn read_config_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Config {
     const cwd = std.Io.Dir.cwd();
 
-    var file = cwd.openFile(io, "/etc/weft/config.zon", .{}) catch |err| {
+    var file = cwd.openFile(io, paths.weft_config_file, .{}) catch |err| {
         if (err == error.AccessDenied)
-            log(.config).err("cannot read /etc/weft/config.zon: permission denied (must be run as root)", .{});
+            log(.config).err("cannot read {s}: permission denied (must be run as root)", .{paths.weft_config_file});
         return err;
     };
     defer file.close(io);
@@ -318,7 +334,7 @@ pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
     const stat = try file.stat(io);
 
     if ((stat.permissions.toMode() & 0o777) != read_only_user_permissions.toMode()) {
-        log(.config).err("/etc/weft/config.zon has insecure permissions, must be 0600", .{});
+        log(.config).err("{s} has insecure permissions, must be 0600", .{paths.weft_config_file});
         return error.InsecurePermissions;
     }
     var buff: [4 << 10]u8 = undefined;
@@ -333,17 +349,15 @@ pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
     return try std.zon.parse.fromSlice(Config, .{
         .arena = ara,
-        .gpa = ara,
+        .gpa = gpa,
         .source = content,
         .diagnostics = &diag,
     });
 }
 
-pub const keys_file_path = "/etc/weft/keys";
-
 pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
     const l = log(.load_keys);
-    const file = std.Io.Dir.cwd().openFile(io, keys_file_path, .{
+    const file = std.Io.Dir.cwd().openFile(io, paths.weft_config_keys, .{
         .allow_directory = false,
         .follow_symlinks = false,
         .lock = .shared,
@@ -369,12 +383,12 @@ pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
         if (entry.len == 0)
             continue
         else if (entry.len != 64) {
-            l.err("Invalid client key with length {d} at /etc/weft/keys:{d}", .{ entry.len, ln });
+            l.err("Invalid client key with length {d} at {s}:{d}", .{ paths.weft_config_keys, entry.len, ln });
             continue;
         } else {
             var key: [32]u8 = undefined;
             _ = std.fmt.hexToBytes(&key, entry) catch |err| {
-                l.err("Error decoding key at /etc/weft/keys:{d} {any}", .{ ln, err });
+                l.err("Error decoding key at {s}:{d} {any}", .{ paths.weft_config_keys, ln, err });
                 continue;
             };
             try list.append(gpa, key);
@@ -386,9 +400,8 @@ pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
 
 pub fn add_key(io: std.Io, key: [32]u8) !void {
     const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(io, "/etc/weft") catch {};
 
-    var file = try cwd.createFile(io, keys_file_path, .{
+    var file = try cwd.createFile(io, paths.weft_config_keys, .{
         .truncate = false,
         .permissions = read_only_user_permissions,
         .lock = .exclusive,
@@ -403,7 +416,5 @@ pub fn add_key(io: std.Io, key: [32]u8) !void {
         entry[0] = '\n';
         @memcpy(entry[1..], &hex);
         try file.writePositionalAll(io, &entry, offset);
-    } else {
-        try file.writePositionalAll(io, &hex, 0);
-    }
+    } else try file.writePositionalAll(io, &hex, 0);
 }
