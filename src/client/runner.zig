@@ -8,6 +8,7 @@ const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Remote = Weft.Remote;
 const Connection = @import("../wire/Connection.zig");
+const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
@@ -132,49 +133,21 @@ pub fn run_deployment(
             if (batch_tasks.items.len == 0)
                 continue;
 
-            const addr = Weft.parse_remote_address(
+            try poll_remote(
+                gpa,
                 io,
-                remote.*,
-            ) catch continue;
-            var poll_client = Client.connect(gpa, io, addr, identity) catch continue;
-            defer poll_client.destroy(gpa, io);
-            poll_client.conn.send_object(log_buffer, proto.Request, .task_poll) catch continue;
-            for (batch_tasks.items) |task|
-                poll_client.conn.send_object(log_buffer, proto.task.poll.Req, task) catch continue;
-
-            poll_client.conn.send_object(log_buffer, proto.task.poll.Req, null) catch continue;
-
-            while (poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break catch break) |res| {
-                const pipeline_name = res.task.pipeline;
-                if (res.logs) |logs| {
-                    if (logs.data.len > 0)
-                        try view.print_logs(pipeline_name, logs.data);
-                    state.set_log_offset(io, remote_name, pipeline_name, logs.end_offset);
-                }
-
-                if (res.usage) |u| {
-                    state.update_usage(
-                        io,
-                        remote_name,
-                        pipeline_name,
-                        u.cpu_usec,
-                        u.memory_bytes,
-                        std.Io.Clock.now(.real, io),
-                    );
-                }
-
-                try poll_item(
-                    gpa,
-                    io,
-                    project,
-                    deployment,
-                    &state,
-                    &fetcher,
-                    remote_name,
-                    pipeline_name,
-                    res.status,
-                );
-            }
+                identity,
+                project,
+                deployment,
+                &state,
+                &fetcher,
+                &view,
+                remote,
+                remote_name,
+                &poll_arena,
+                log_buffer,
+                batch_tasks.items,
+            );
         }
 
         _ = poll_arena.reset(.retain_capacity);
@@ -184,6 +157,90 @@ pub fn run_deployment(
     try group.await(io);
     try view.update(io);
     term.success("Deployment completed", .{});
+}
+
+fn poll_remote(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    identity: Identity,
+    project: Project,
+    deployment: *Deployment,
+    state: *DeploymentState,
+    fetcher: ?*Fetcher,
+    view: ?*DeploymentView,
+    remote: *const Remote,
+    remote_name: []const u8,
+    poll_arena: *std.heap.ArenaAllocator,
+    log_buffer: []u8,
+    batch: []const proto.task.poll.Req,
+) !void {
+    const alloc = poll_arena.allocator();
+    const addr = Weft.parse_remote_address(io, remote.*) catch return;
+    var client = Client.connect(gpa, io, addr, identity) catch return;
+    defer client.destroy(gpa, io);
+
+    client.conn.send_object(log_buffer, proto.Request, .task_poll) catch return;
+    for (batch) |task|
+        client.conn.send_object(log_buffer, proto.task.poll.Req, task) catch return;
+    client.conn.send_object(log_buffer, proto.task.poll.Req, null) catch return;
+
+    while (true) {
+        const res = client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res)) catch break;
+        const item = res catch break;
+        const poll_res = item orelse break;
+
+        const pipeline_name = poll_res.task.pipeline;
+        if (poll_res.logs) |logs| {
+            if (logs.data.len > 0) {
+                if (view) |v|
+                    try v.print_logs(pipeline_name, logs.data)
+                else {
+                    const stdout: std.Io.File = .stdout();
+                    try stdout.writeStreamingAll(io, logs.data);
+                }
+            }
+            state.set_log_offset(io, remote_name, pipeline_name, logs.end_offset);
+        }
+
+        if (poll_res.usage) |u|
+            state.update_usage(
+                io,
+                remote_name,
+                pipeline_name,
+                u.cpu_usec,
+                u.memory_bytes,
+                std.Io.Clock.now(.real, io),
+            );
+
+        try poll_item(
+            gpa,
+            io,
+            project,
+            deployment,
+            state,
+            fetcher,
+            remote_name,
+            pipeline_name,
+            poll_res.status,
+        );
+    }
+}
+
+fn fail_step(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    depl: *std.Io.Mutex,
+    dep: *Deployment,
+    state: *DeploymentState,
+    project: Project,
+    step: Deployment.Step,
+    msg: []const u8,
+) void {
+    depl.lock(io) catch return;
+    defer depl.unlock(io);
+    dep.remove_running(gpa, step.remote, step.pipeline);
+    state.err(io, step.remote, step.pipeline, msg);
+    dep.save(io, project) catch {};
 }
 
 fn poll_item(
@@ -354,45 +411,30 @@ pub fn run_task(
         if (step_state.status != .running and step_state.status != .initializing)
             continue;
 
-        const addr = Weft.parse_remote_address(
-            io,
-            remote.*,
-        ) catch continue;
-        var poll_client = Client.connect(gpa, io, addr, identity) catch continue;
-        defer poll_client.destroy(gpa, io);
-
-        poll_client.conn.send_object(log_buffer, proto.Request, .task_poll) catch continue;
-        poll_client.conn.send_object(log_buffer, proto.task.poll.Req, .{
+        const batch = [_]proto.task.poll.Req{.{
             .task = .{
                 .deployment = deployment.id,
                 .pipeline = step.pipeline,
                 .workspace = deployment.config.workspace,
             },
             .logs_offset = step_state.log_offset,
-        }) catch continue;
-        poll_client.conn.send_object(log_buffer, proto.task.poll.Req, null) catch continue;
+        }};
 
-        while (poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break catch break) |item| {
-            if (item.logs) |logs| {
-                if (logs.data.len > 0) {
-                    const stdout: std.Io.File = .stdout();
-                    try stdout.writeStreamingAll(io, logs.data);
-                }
-                state.set_log_offset(io, step.remote, step.pipeline, logs.end_offset);
-            }
-
-            try poll_item(
-                gpa,
-                io,
-                project,
-                deployment,
-                &state,
-                null,
-                step.remote,
-                step.pipeline,
-                item.status,
-            );
-        }
+        try poll_remote(
+            gpa,
+            io,
+            identity,
+            project,
+            deployment,
+            &state,
+            null,
+            null,
+            remote,
+            step.remote,
+            &poll_arena,
+            log_buffer,
+            &batch,
+        );
 
         _ = poll_arena.reset(.retain_capacity);
     }
@@ -433,12 +475,7 @@ pub fn spawn_step(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    errdefer if (depl.lock(io)) |_| {
-        dep.remove_running(gpa, step.remote, step.pipeline);
-        state.err(io, step.remote, step.pipeline, "failed to spawn task");
-        dep.save(io, project) catch {};
-        depl.unlock(io);
-    } else |_| {};
+    errdefer fail_step(gpa, io, depl, dep, state, project, step, "failed to spawn task");
 
     if (!dep.config.has_mode(step.mode))
         return error.InvalidMode;
@@ -519,22 +556,14 @@ pub fn spawn_step(
             buffer,
             proto.Res(proto.task.spawn.Res),
         ) catch |err| {
-            try depl.lock(io);
-            defer depl.unlock(io);
-            dep.remove_running(gpa, step.remote, step.pipeline);
-            state.err(io, step.remote, step.pipeline, @errorName(err));
-            try dep.save(io, project);
+            fail_step(gpa, io, depl, dep, state, project, step, @errorName(err));
             return;
         };
 
         if (res) |_| {
             state.running(io, step.remote, step.pipeline);
         } else |err| {
-            try depl.lock(io);
-            defer depl.unlock(io);
-            dep.remove_running(gpa, step.remote, step.pipeline);
-            state.err(io, step.remote, step.pipeline, @errorName(err));
-            try dep.save(io, project);
+            fail_step(gpa, io, depl, dep, state, project, step, @errorName(err));
             return;
         }
         break :spawn_task;
