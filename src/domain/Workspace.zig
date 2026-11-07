@@ -8,10 +8,19 @@ name: []const u8,
 pub fn uid(self: @This(), gpa: std.mem.Allocator, io: std.Io) !u32 {
     const cwd: std.Io.Dir = .cwd();
 
-    const lock = try cwd.openFile(io, paths.weft_workspace_uid, .{
-        .lock = .exclusive,
-        .mode = .read_write,
-    });
+    const lock = lock: {
+        break :lock cwd.openFile(io, paths.weft_workspace_uid, .{
+            .lock = .exclusive,
+            .mode = .read_write,
+        }) catch |err|
+            if (err == error.FileNotFound)
+                break :lock try cwd.createFile(io, paths.weft_workspace_uid, .{
+                    .lock = .exclusive,
+                    .read = true,
+                })
+            else
+                return err;
+    };
     defer lock.close(io);
 
     const uid_path = try gpa.print(paths.workspace_uid, .{self.name});

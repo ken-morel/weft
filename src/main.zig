@@ -335,7 +335,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 },
             },
         },
-        .supervisor => |s| switch (s) {
+        .supervisor => |s| if (include_daemon) switch (s) {
             .supervise => |a| {
                 const task: Task = .{ .id = .{
                     .workspace = a.workspace,

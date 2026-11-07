@@ -109,9 +109,15 @@ pub fn run_deployment(
             defer batch_tasks.deinit(poll_arena.allocator());
 
             for (deployment.running) |step| {
-                if (!std.mem.eql(u8, step.remote, remote_name)) continue;
-                const step_state = state.get(io, step.remote, step.pipeline) orelse continue;
-                if (step_state.status != .running and step_state.status != .initializing) continue;
+                if (!std.mem.eql(u8, step.remote, remote_name))
+                    continue;
+                const step_state = state.get(
+                    io,
+                    step.remote,
+                    step.pipeline,
+                ) orelse continue;
+                if (step_state.status != .running and step_state.status != .initializing)
+                    continue;
 
                 try batch_tasks.append(poll_arena.allocator(), .{
                     .task = .{
@@ -123,7 +129,8 @@ pub fn run_deployment(
                 });
             }
 
-            if (batch_tasks.items.len == 0) continue;
+            if (batch_tasks.items.len == 0)
+                continue;
 
             const addr = Weft.parse_remote_address(
                 io,
@@ -134,6 +141,7 @@ pub fn run_deployment(
             poll_client.conn.send_object(log_buffer, proto.Request, .task_poll) catch continue;
             for (batch_tasks.items) |task|
                 poll_client.conn.send_object(log_buffer, proto.task.poll.Req, task) catch continue;
+
             poll_client.conn.send_object(log_buffer, proto.task.poll.Req, null) catch continue;
 
             while (poll_client.conn.recv_object(poll_arena.allocator(), proto.Res(proto.task.poll.Res)) catch break catch break) |res| {
@@ -248,7 +256,7 @@ fn poll_item(
         },
     } else {
         deployment.remove_running(gpa, remote_name, pipeline_name);
-        state.err(io, remote_name, pipeline_name, "task not found on remote");
+        state.initializing(io, remote_name, pipeline_name);
         if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
             try deployment.add_failed(gpa, .{
                 .retries_left = 0,
@@ -511,7 +519,7 @@ pub fn spawn_step(
             defer depl.unlock(io);
             dep.remove_running(gpa, step.remote, step.pipeline);
             state.err(io, step.remote, step.pipeline, @errorName(err));
-            dep.save(io, project) catch {};
+            try dep.save(io, project);
             return;
         };
 
@@ -521,12 +529,8 @@ pub fn spawn_step(
             try depl.lock(io);
             defer depl.unlock(io);
             dep.remove_running(gpa, step.remote, step.pipeline);
-            const msg = if (err == error.AlreadyRunning)
-                "task already running on remote"
-            else
-                @errorName(err);
-            state.err(io, step.remote, step.pipeline, msg);
-            dep.save(io, project) catch {};
+            state.err(io, step.remote, step.pipeline, @errorName(err));
+            try dep.save(io, project);
             return;
         }
         break :spawn_task;

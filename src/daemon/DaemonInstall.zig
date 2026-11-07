@@ -255,6 +255,7 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, maybe_user: ?[]const u8) !voi
         try config_writer.interface.flush();
 
         try config_file.replace(io);
+
         break :write_config;
     }
     try paths.ensure_dirs(io);

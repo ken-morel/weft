@@ -96,7 +96,7 @@ pub fn run(
     try client.conn.send_object(buffer, proto.Request, .task_poll);
 
     while (true) : (_ = req_arena.reset(.retain_capacity)) {
-        try client.conn.send_object(buffer, ?proto.task.poll.Req, .{
+        try client.conn.send_object(buffer, proto.task.poll.Req, .{
             .task = task_id,
             .logs_offset = offset,
         });
