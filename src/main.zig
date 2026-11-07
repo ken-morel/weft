@@ -22,6 +22,7 @@ const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
 const Task = @import("daemon/Task.zig");
+const decode = @import("domain/decode.zig");
 const proto = @import("domain/proto.zig");
 const Term = @import("domain/Term.zig");
 const Weft = @import("domain/Weft.zig");
@@ -244,6 +245,9 @@ const Argz = union(enum) {
 
             name: []const u8,
         },
+    },
+    decode: struct {
+        pub const doc = "Decode and pretty print a zoto-encoded binary stream from stdin";
     },
     argz_help: argz.Help("weft", @This()),
     nop: struct {
@@ -657,6 +661,16 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     }
                 }
             },
+        },
+        .decode => {
+            var allocating: std.Io.Writer.Allocating = .init(gpa);
+            defer allocating.deinit();
+
+            var buf: [4096]u8 = undefined;
+            var stdin_reader = std.Io.File.stdin().readerStreaming(io, &buf);
+            _ = try allocating.writer.sendFileReadingAll(&stdin_reader, .unlimited);
+
+            try decode.decode_and_print(alloc, allocating.written(), &term);
         },
         .argz_help => |cmd| cmd.handle(),
         .nop => {},
