@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const weft_lib = "/var/lib/weft/";
-pub const weft_config = "/etc/weft";
+pub const weft_config = "/etc/weft/";
 pub const weft_run = "/run/weft/";
 pub const weft_binary = "/usr/local/bin/weft";
 

@@ -19,6 +19,7 @@ pub const Isolate = packed struct(u8) {
         .{ "kvm", .{ .cgroups = true, .mount = true, .pid = true, .net = true } },
         .{ "lxc", .{ .cgroups = false, .mount = true, .pid = true, .net = true } },
         .{ "vz", .{ .cgroups = false, .mount = false, .pid = false, .net = false } },
+        .{ "colab", .{ .cgroups = false, .mount = false, .pid = false, .net = false } },
     };
     pub fn template(name: []const u8) ?@This() {
         return inline for (templates) |t| {
@@ -29,11 +30,44 @@ pub const Isolate = packed struct(u8) {
     pub const default = template("kvm") orelse unreachable;
 };
 
-pub const Config = struct {
-    port: u16 = 9338,
+pub const Scale = struct {
     max_workers: u32 = 4,
     compress: bool = false,
+
+    pub const templates = [_]struct { []const u8, @This() }{
+        .{ "tiny", .{ .max_workers = 1, .compress = false } },
+        .{ "small", .{ .max_workers = 4, .compress = false } },
+        .{ "large", .{ .max_workers = 16, .compress = true } },
+    };
+    pub fn template(name: []const u8) ?@This() {
+        return inline for (templates) |t| {
+            if (std.mem.eql(u8, t.@"0", name))
+                break t.@"1";
+        } else null;
+    }
+    pub const default = template("small") orelse unreachable;
+};
+
+pub const Config = struct {
+    port: u16 = 9338,
     isolate: Isolate = .default,
+    scale: Scale = .default,
+
+    pub fn from_template(spec: ?[]const u8) !@This() {
+        var cfg: @This() = .{};
+        const s = spec orelse return cfg;
+        var it = std.mem.splitScalar(u8, s, '-');
+        while (it.next()) |part| {
+            if (part.len == 0) continue;
+            if (Isolate.template(part)) |iso|
+                cfg.isolate = iso
+            else if (Scale.template(part)) |sc|
+                cfg.scale = sc
+            else
+                return error.TemplateNotFound;
+        }
+        return cfg;
+    }
 };
 
 pub fn init(_: std.Io) !@This() {
@@ -72,8 +106,8 @@ pub const InitSystem = enum {
             .runit => &.{ "sv", "stop", svc },
             .openrc => &.{ "rc-service", svc, "stop" },
             .none => {
-                var buf: [1 << 32]u8 = undefined;
-                const pid_content = try std.Io.Dir.cwd().readFile(
+                var buf: [32]u8 = undefined;
+                const pid_content = std.Io.Dir.cwd().readFile(
                     io,
                     paths.weft_pid,
                     &buf,
@@ -81,10 +115,9 @@ pub const InitSystem = enum {
                     return if (e != error.FileNotFound)
                         e
                     else {};
-                const pid = try std.fmt.parseInt(i32, &pid_content, 10);
-                switch (std.os.linux.errno(std.os.linux.kill(pid, .TERM))) {
-                    else => {},
-                }
+                const pid = std.fmt.parseInt(i32, std.mem.trim(u8, pid_content, " \n\r\t"), 10) catch return;
+                _ = std.os.linux.kill(pid, .TERM);
+                std.Io.Dir.cwd().deleteFile(io, paths.weft_pid) catch {};
                 return;
             },
         };
@@ -97,7 +130,7 @@ pub const InitSystem = enum {
             .openrc => &.{ "rc-service", svc, "start" },
             .none => {
                 try domain.spawn_detach(io, .{
-                    .argv = &.{paths.weft_binary},
+                    .argv = &.{ paths.weft_binary, "daemon", "run" },
                 });
                 return;
             },
@@ -204,8 +237,8 @@ pub const InitSystem = enum {
                             \\command="{s}"
                             \\command_args="daemon run"
                             \\command_background="yes"
-                            // \\pidfile="/run/weft/weft.pid"; I think weft should write it itself
-                        , .{paths.weft_binary}),
+                            \\pidfile="{s}"
+                        , .{ paths.weft_binary, paths.weft_pid }),
 
                         .sub_path = "/etc/init.d/weft",
                         .flags = .{
@@ -213,13 +246,17 @@ pub const InitSystem = enum {
                         },
                     },
                 );
+                _ = try _do(io, &.{ "rc-update", "add", "weft", "default" });
+                try self.restart(io, "weft");
             },
-            .none => {},
+            .none => {
+                try self.start(io, "weft");
+            },
         }
     }
 };
 
-pub fn install(gpa: std.mem.Allocator, io: std.Io, template: []const u8) !void {
+pub fn install(gpa: std.mem.Allocator, io: std.Io, template: ?[]const u8) !void {
     const l = log(.daemon_install);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -247,17 +284,10 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, template: []const u8) !void {
     l.debug("installed binary to {s}", .{paths.weft_binary});
 
     write_config: {
-        var config: Config = .{
-            .isolate = .template(template) orelse {
-                l.err("Template {s} not found", .{template});
-                return error.TemplateNotFound;
-            },
-        };
+        var config = try Config.from_template(template);
 
         if (read_config_leaky(alloc, io)) |c| {
             config.port = c.port;
-            config.max_workers = c.max_workers;
-            config.compress = c.compress;
         } else |e| if (e != error.FileNotFound)
             return e;
 
@@ -321,7 +351,7 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     }
 }
 
-pub fn read_config_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Config {
+pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
     const cwd = std.Io.Dir.cwd();
 
     var file = cwd.openFile(io, paths.weft_config_file, .{}) catch |err| {
@@ -349,7 +379,7 @@ pub fn read_config_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
     return try std.zon.parse.fromSlice(Config, .{
         .arena = ara,
-        .gpa = gpa,
+        .gpa = ara,
         .source = content,
         .diagnostics = &diag,
     });
@@ -383,7 +413,7 @@ pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {
         if (entry.len == 0)
             continue
         else if (entry.len != 64) {
-            l.err("Invalid client key with length {d} at {s}:{d}", .{ paths.weft_config_keys, entry.len, ln });
+            l.err("Invalid client key with length {d} at {s}:{d}", .{ entry.len, paths.weft_config_keys, ln });
             continue;
         } else {
             var key: [32]u8 = undefined;

@@ -52,7 +52,7 @@ pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.pull.Re
         artifact_path,
         .{},
     );
-    try transfer.push(gpa, daemon.io, conn, artifact_path, daemon.config.compress, null);
+    try transfer.push(gpa, daemon.io, conn, artifact_path, daemon.config.scale.compress, null);
     return .{};
 }
 
@@ -77,7 +77,7 @@ pub fn push(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.push.Re
         if (err == error.Canceled)
             return err;
 
-    try transfer.pull(gpa, daemon.io, conn, temp_artifact_path, daemon.config.compress, null);
+    try transfer.pull(gpa, daemon.io, conn, temp_artifact_path, daemon.config.scale.compress, null);
 
     //BUG: The artifact won't be available for a fracton of a second if it was already existing
     cwd.deleteTree(daemon.io, artifact_path) catch |err|

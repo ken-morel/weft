@@ -233,21 +233,18 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     if (skip) {
         l.info("task skipped", .{});
     } else {
-        if (std.os.linux.errno(std.os.linux.unshare(std.os.linux.CLONE.NEWPID)) != .SUCCESS)
-            return error.UnsharePidFailed;
-        l.debug("unshared pid namespace", .{}); //debug
-
-        const cgroup = try task.cgroup(gpa);
-        try cgroup.create(io);
-        l.debug("Configuring cgroup: {s}", .{cgroup.path});
-        l.debug("cgroup created", .{}); //debug
-        defer {
-            cgroup.kill(gpa, io) catch {};
-            cgroup.destroy(io) catch {};
-            cgroup.deinit(gpa);
+        if (isolate.pid) {
+            if (std.os.linux.errno(std.os.linux.unshare(std.os.linux.CLONE.NEWPID)) != .SUCCESS)
+                return error.UnsharePidFailed;
+            l.debug("unshared pid namespace", .{}); //debug
         }
 
-        configure_cgroup: {
+        const maybe_cgroup = if (isolate.cgroups) cg: {
+            var cgroup = try task.cgroup(gpa);
+            try cgroup.create(io);
+            l.debug("Configuring cgroup: {s}", .{cgroup.path});
+            l.debug("cgroup created", .{}); //debug
+
             const tune = &spec.tune;
             if ((tune.cpu.quota orelse tune.cpu.max) != null)
                 try cgroup.cpu_max_set(gpa, io, tune.cpu.quota, tune.cpu.max);
@@ -260,10 +257,17 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
             if (tune.mem.swap.max) |s|
                 try cgroup.memory_swap_max_set(gpa, io, s);
             try cgroup.pids_max_set(gpa, io, tune.io.pids_max orelse default_max_pids);
-            break :configure_cgroup;
-        }
-        l.debug("cgroup configured", .{}); //debug
+            l.debug("cgroup configured", .{}); //debug
+            break :cg cgroup;
+        } else null;
+        var cgroup_mut = maybe_cgroup;
+        defer if (cgroup_mut) |*cgroup| {
+            cgroup.kill(gpa, io) catch {};
+            cgroup.destroy(io) catch {};
+            cgroup.deinit(gpa);
+        };
 
+        const isolate_arg = try alloc.print("{d}", .{@backingInt(isolate)});
         var child = try std.process.spawn(io, .{
             .argv = &.{
                 "/proc/self/exe",
@@ -272,12 +276,18 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 task.id.workspace,
                 task.id.pipeline,
                 &task.id.deployment.to_string(),
+                isolate_arg,
             },
             .start_suspended = true,
         });
         const child_pid: std.posix.pid_t = child.id orelse unreachable;
+        defer if (!isolate.cgroups) {
+            _ = std.os.linux.kill(-child_pid, .KILL);
+        };
 
-        try cgroup.procs_add(gpa, io, child_pid);
+        if (cgroup_mut) |*cgroup| {
+            try cgroup.procs_add(gpa, io, child_pid);
+        }
         l.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
 
         if (std.os.linux.errno(std.os.linux.kill(child_pid, .CONT)) != .SUCCESS)
@@ -332,7 +342,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
 
 const no_run_script = "#!/bin/env -S weft nop";
 
-pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
+pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
     const l = std.log.scoped(.supervisor_spawn);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -345,36 +355,188 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     const username = try alloc.print("weft-{s}", .{workspace.name});
 
     const rootfs_path = try alloc.printSentinel(paths.task_run_root, task.id.wpd(), 0);
-
+    const host_home = try alloc.printSentinel(paths.workspace_home, task.id.w(), 0);
+    const host_cwd = try alloc.printSentinel(paths.scratch_cwd, task.id.wpd(), 0);
     const cwd: std.Io.Dir = .cwd();
 
-    var flags: usize = std.os.linux.CLONE.NEWNS | std.os.linux.CLONE.NEWUTS | std.os.linux.CLONE.NEWIPC | std.os.linux.CLONE.NEWCGROUP;
-    if (spec.tune.net.private)
-        flags |= std.os.linux.CLONE.NEWNET;
+    if (isolate.mount) {
+        var flags: usize = std.os.linux.CLONE.NEWNS | std.os.linux.CLONE.NEWUTS | std.os.linux.CLONE.NEWIPC;
+        if (isolate.cgroups)
+            flags |= std.os.linux.CLONE.NEWCGROUP;
+        if (isolate.net and spec.tune.net.private)
+            flags |= std.os.linux.CLONE.NEWNET;
 
-    if (std.os.linux.errno(std.os.linux.unshare(flags)) != .SUCCESS)
-        return error.UnshareFailed;
-    l.debug("unshared mount/uts/ipc/cgroup namespaces", .{}); //debug
+        if (std.os.linux.errno(std.os.linux.unshare(flags)) != .SUCCESS)
+            return error.UnshareFailed;
+        l.debug("unshared namespaces", .{}); //debug
 
-    try mount.isolate();
-    try mount.mount_fs("tmpfs", rootfs_path, "tmpfs", "size=16m,mode=0755", true);
-    l.debug("rootfs tmpfs mounted", .{}); //debug
+        try mount.isolate();
+        try mount.mount_fs("tmpfs", rootfs_path, "tmpfs", "size=16m,mode=0755", true);
+        l.debug("rootfs tmpfs mounted", .{}); //debug
 
-    {
-        var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
-        defer rootfs_dir.close(io);
+        {
+            var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
+            defer rootfs_dir.close(io);
 
-        const user_home_rel = try alloc.printSentinel("home/{s}", .{username}, 0);
-        for ([_][]const u8{
-            "nix/store", "bin", "usr", "usr/lib", "proc", "tmp", "dev/shm", "etc", "work", "in", "out", user_home_rel,
-        }) |dir| {
-            try rootfs_dir.createDirPath(io, dir);
+            const user_home_rel = try alloc.printSentinel("home/{s}", .{username}, 0);
+            for ([_][]const u8{
+                "nix/store", "bin", "usr", "usr/lib", "proc", "tmp", "dev/shm", "etc", "work", "in", "out", user_home_rel,
+            }) |dir| {
+                try rootfs_dir.createDirPath(io, dir);
+            }
+
+            _ = std.os.linux.symlinkat("/bin", rootfs_dir.handle, "usr/bin");
+            _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib");
+            _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib64");
+            _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "usr/lib64");
+
+            const script = spec.script orelse no_run_script;
+            try rootfs_dir.writeFile(io, .{
+                .data = script,
+                .sub_path = "entry",
+                .flags = .{ .permissions = .executable_file },
+            });
+
+            const passwd = try alloc.print(
+                \\root:x:0:0:root:/root:/bin/sh
+                \\{s}:x:{d}:{d}:{s}:/home/{s}:/bin/sh
+                \\nobody:x:65534:65534:nobody:/nonexistent:/bin/false
+            ,
+                .{ username, uid, uid, username, username },
+            );
+            try rootfs_dir.writeFile(
+                io,
+                .{ .data = passwd, .sub_path = "etc/passwd" },
+            );
+
+            const group = try alloc.print(
+                \\root:x:0:
+                \\{s}:x:{d}:
+                \\nobody:x:65534:
+            ,
+                .{ username, uid },
+            );
+            try rootfs_dir.writeFile(
+                io,
+                .{ .data = group, .sub_path = "etc/group" },
+            );
+
+            if (std.os.linux.errno(std.os.linux.chdir(rootfs_path.ptr)) != .SUCCESS)
+                return error.ChdirFailed;
+
+            try mount.bind(
+                paths.weft_nix_store,
+                "nix/store",
+                .{ .read_only = true, .allow_exec = true },
+            );
+            try mount.bind(
+                paths.weft_bin,
+                "bin",
+                .{ .read_only = true, .allow_exec = true },
+            );
+            try mount.bind(
+                "/usr/lib",
+                "usr/lib",
+                .{ .read_only = true, .allow_exec = true },
+            );
+
+            if (!spec.tune.net.private) {
+                try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/resolv.conf" });
+                try mount.bind("/etc/resolv.conf", "etc/resolv.conf", .{ .read_only = true });
+            }
+
+            try mount.bind(host_home, user_home_rel, .{ .read_only = false, .allow_exec = true });
+            try mount.bind(host_cwd, "work", .{ .read_only = false, .allow_exec = true });
+
+            try mount.mount_fs("proc", "proc", "proc", null, false);
+            try mount.mount_fs("tmpfs", "tmp", "tmpfs", "mode=1777", true);
+            try mount.mount_fs("tmpfs", "dev/shm", "tmpfs", "mode=1777", false);
+
+            inline for (.{ "null", "zero", "full", "random", "urandom" }) |dev| {
+                try rootfs_dir.writeFile(
+                    io,
+                    .{ .data = "", .sub_path = "dev/" ++ dev },
+                );
+                try mount.bind(
+                    "/dev/" ++ dev,
+                    "dev/" ++ dev,
+                    .{ .read_only = false, .allow_dev = true },
+                );
+            }
+
+            for (spec.inputs) |inp| {
+                const target_in = try alloc.printSentinel(
+                    "in/{s}",
+                    .{inp},
+                    0,
+                );
+                try rootfs_dir.createDirPath(io, target_in);
+                const host_in = try alloc.printSentinel(
+                    paths.artifact,
+                    task.id.w_d(inp),
+                    0,
+                );
+                try mount.bind(
+                    host_in,
+                    target_in,
+                    .{ .read_only = true, .allow_exec = true },
+                );
+            }
+
+            for (spec.outputs) |out| {
+                const target_out = try alloc.printSentinel(
+                    "out/{s}",
+                    .{out},
+                    0,
+                );
+                try rootfs_dir.createDirPath(io, target_out);
+                const host_out = try alloc.printSentinel(
+                    paths.scratch_output,
+                    task.id.wpd_(out),
+                    0,
+                );
+                try mount.bind(host_out, target_out, .{ .read_only = false, .allow_exec = true });
+            }
+
+            for (spec.keep) |k| {
+                const target_keep = try alloc.printSentinel(
+                    "work/{s}",
+                    .{k.@"1"},
+                    0,
+                );
+                try rootfs_dir.createDirPath(io, target_keep);
+                const host_keep = try alloc.printSentinel(
+                    paths.keep,
+                    task.id.w_(k.@"0"),
+                    0,
+                );
+                try mount.bind(
+                    host_keep,
+                    target_keep,
+                    .{ .read_only = false, .allow_exec = true },
+                );
+            }
         }
 
-        _ = std.os.linux.symlinkat("/bin", rootfs_dir.handle, "usr/bin");
-        _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib");
-        _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib64");
-        _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "usr/lib64");
+        l.debug("sandbox filesystem ready", .{}); //debug
+        try mount.lock_read_only(".");
+        try mount.pivot_root(".");
+        if (std.os.linux.errno(std.os.linux.chdir("/work")) != .SUCCESS)
+            return error.ChdirFailed;
+    } else {
+        if (!isolate.pid)
+            _ = std.os.linux.setsid();
+        if (isolate.net and spec.tune.net.private) {
+            if (std.os.linux.errno(std.os.linux.unshare(std.os.linux.CLONE.NEWNET)) != .SUCCESS)
+                return error.UnshareFailed;
+        }
+
+        cwd.createDirPath(io, "/nix") catch {};
+        cwd.symLink(io, paths.weft_nix_store, "/nix/store", .{ .is_directory = true }) catch |e|
+            if (e != error.PathAlreadyExists) {};
+
+        var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
+        defer rootfs_dir.close(io);
 
         const script = spec.script orelse no_run_script;
         try rootfs_dir.writeFile(io, .{
@@ -383,135 +545,31 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
             .flags = .{ .permissions = .executable_file },
         });
 
-        const passwd = try alloc.print(
-            \\root:x:0:0:root:/root:/bin/sh
-            \\{s}:x:{d}:{d}:{s}:/home/{s}:/bin/sh
-            \\nobody:x:65534:65534:nobody:/nonexistent:/bin/false
-        ,
-            .{ username, uid, uid, username, username },
-        );
-        try rootfs_dir.writeFile(
-            io,
-            .{ .data = passwd, .sub_path = "etc/passwd" },
-        );
-
-        const group = try alloc.print(
-            \\root:x:0:
-            \\{s}:x:{d}:
-            \\nobody:x:65534:
-        ,
-            .{ username, uid },
-        );
-        try rootfs_dir.writeFile(
-            io,
-            .{ .data = group, .sub_path = "etc/group" },
-        );
-
-        if (std.os.linux.errno(std.os.linux.chdir(rootfs_path.ptr)) != .SUCCESS)
-            return error.ChdirFailed;
-
-        try mount.bind(
-            paths.weft_nix_store,
-            "nix/store",
-            .{ .read_only = true, .allow_exec = true },
-        );
-        try mount.bind(
-            paths.weft_bin,
-            "bin",
-            .{ .read_only = true, .allow_exec = true },
-        );
-        try mount.bind(
-            "/usr/lib",
-            "usr/lib",
-            .{ .read_only = true, .allow_exec = true },
-        );
-
-        if (!spec.tune.net.private) {
-            try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/resolv.conf" });
-            try mount.bind("/etc/resolv.conf", "etc/resolv.conf", .{ .read_only = true });
-        }
-
-        const host_home = try alloc.printSentinel(paths.workspace_home, task.id.w(), 0);
-        try mount.bind(host_home, user_home_rel, .{ .read_only = false, .allow_exec = true });
-
-        const host_cwd = try alloc.printSentinel(paths.scratch_cwd, task.id.wpd(), 0);
-        try mount.bind(host_cwd, "work", .{ .read_only = false, .allow_exec = true });
-
-        try mount.mount_fs("proc", "proc", "proc", null, false);
-        try mount.mount_fs("tmpfs", "tmp", "tmpfs", "mode=1777", true);
-        try mount.mount_fs("tmpfs", "dev/shm", "tmpfs", "mode=1777", false);
-
-        inline for (.{ "null", "zero", "full", "random", "urandom" }) |dev| {
-            try rootfs_dir.writeFile(
-                io,
-                .{ .data = "", .sub_path = "dev/" ++ dev },
-            );
-            try mount.bind(
-                "/dev/" ++ dev,
-                "dev/" ++ dev,
-                .{ .read_only = false, .allow_dev = true },
-            );
-        }
-
+        try rootfs_dir.createDirPath(io, "in");
         for (spec.inputs) |inp| {
-            const target_in = try alloc.printSentinel(
-                "in/{s}",
-                .{inp},
-                0,
-            );
-            try rootfs_dir.createDirPath(io, target_in);
-            const host_in = try alloc.printSentinel(
-                paths.artifact,
-                task.id.w_d(inp),
-                0,
-            );
-            try mount.bind(
-                host_in,
-                target_in,
-                .{ .read_only = true, .allow_exec = true },
-            );
+            const host_in = try alloc.printSentinel(paths.artifact, task.id.w_d(inp), 0);
+            const target_in = try alloc.printSentinel("in/{s}", .{inp}, 0);
+            _ = std.os.linux.symlinkat(host_in.ptr, rootfs_dir.handle, target_in.ptr);
         }
 
+        try rootfs_dir.createDirPath(io, "out");
         for (spec.outputs) |out| {
-            const target_out = try alloc.printSentinel(
-                "out/{s}",
-                .{out},
-                0,
-            );
-            try rootfs_dir.createDirPath(io, target_out);
-            const host_out = try alloc.printSentinel(
-                paths.scratch_output,
-                task.id.wpd_(out),
-                0,
-            );
-            try mount.bind(host_out, target_out, .{ .read_only = false, .allow_exec = true });
+            const host_out = try alloc.printSentinel(paths.scratch_output, task.id.wpd_(out), 0);
+            const target_out = try alloc.printSentinel("out/{s}", .{out}, 0);
+            _ = std.os.linux.symlinkat(host_out.ptr, rootfs_dir.handle, target_out.ptr);
         }
 
+        var cwd_dir = try cwd.openDir(io, host_cwd, .{});
+        defer cwd_dir.close(io);
         for (spec.keep) |k| {
-            const target_keep = try alloc.printSentinel(
-                "work/{s}",
-                .{k.@"1"},
-                0,
-            );
-            try rootfs_dir.createDirPath(io, target_keep);
-            const host_keep = try alloc.printSentinel(
-                paths.keep,
-                task.id.w_(k.@"0"),
-                0,
-            );
-            try mount.bind(
-                host_keep,
-                target_keep,
-                .{ .read_only = false, .allow_exec = true },
-            );
+            const host_keep = try alloc.printSentinel(paths.keep, task.id.w_(k.@"0"), 0);
+            const target_keep = try alloc.printSentinel("{s}", .{k.@"1"}, 0);
+            _ = std.os.linux.symlinkat(host_keep.ptr, cwd_dir.handle, target_keep.ptr);
         }
-    }
 
-    l.debug("sandbox filesystem ready", .{}); //debug
-    try mount.lock_read_only(".");
-    try mount.pivot_root(".");
-    if (std.os.linux.errno(std.os.linux.chdir("/work")) != .SUCCESS)
-        return error.ChdirFailed;
+        if (std.os.linux.errno(std.os.linux.chdir(host_cwd.ptr)) != .SUCCESS)
+            return error.ChdirFailed;
+    }
 
     // Drop privileges to workspace UID/GID
     l.debug("dropping privileges to uid {d}", .{uid}); //debug
@@ -534,16 +592,24 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
         for (spec.pkgs) |pkg|
             try path_writer.writer.print("/nix/store/{s}/bin:", .{pkg});
 
-        try path_writer.writer.writeAll("/bin");
+        if (isolate.mount)
+            try path_writer.writer.writeAll("/bin")
+        else
+            try path_writer.writer.writeAll(paths.weft_bin ++ ":/usr/bin:/bin");
         try path_writer.writer.flush();
 
-        const home_val = try std.fmt.allocPrint(alloc, "/home/{s}", .{username});
+        const home_val = if (isolate.mount)
+            try std.fmt.allocPrint(alloc, "/home/{s}", .{username})
+        else
+            host_home;
 
         try env_map.put("PATH", try path_writer.toOwnedSlice());
         try env_map.put("HOME", home_val);
         try env_map.put("USER", username);
         try env_map.put("LOGNAME", username);
         try env_map.put("TMPDIR", "/tmp");
+        try env_map.put("IN", if (isolate.mount) "/in" else try alloc.print("{s}in", .{rootfs_path}));
+        try env_map.put("OUT", if (isolate.mount) "/out" else try alloc.print("{s}out", .{rootfs_path}));
         try env_map.put("WEFT_VERSION", @import("build").version_str);
         try env_map.put("WEFT_MODE", spec.mode);
         try env_map.put("WEFT_WORKSPACE", spec.task_id.workspace);
@@ -558,8 +624,9 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task) !void {
     defer env_map.deinit();
     l.debug("environment ready, spawning entry", .{}); //debug
 
+    const entry_path = if (isolate.mount) "/entry" else try alloc.print("{s}entry", .{rootfs_path});
     const child = try std.process.spawn(io, .{
-        .argv = &.{"/entry"},
+        .argv = &.{entry_path},
         .environ_map = &env_map,
     });
     const child_pid = child.id orelse unreachable;

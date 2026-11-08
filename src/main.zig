@@ -76,6 +76,7 @@ const Argz = union(enum) {
             workspace: []const u8,
             pipeline: []const u8,
             deployment: []const u8,
+            isolate: u8,
         },
     },
 
@@ -356,7 +357,8 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     .deployment = try .parse(a.deployment),
                     .pipeline = a.pipeline,
                 } };
-                return supervisor.spawner(gpa, io, task);
+                const isolate: DaemonInstall.Isolate = @fromBackingInt(a.isolate);
+                return supervisor.spawner(gpa, io, task, isolate);
             },
         },
         .check => {
