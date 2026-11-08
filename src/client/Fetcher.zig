@@ -12,11 +12,10 @@ const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const View = @import("View.zig");
 const transfer = @import("transfer.zig");
+const View = @import("View.zig");
 
 dep: *Deployment,
-identity: Identity,
 remotes: []const Remote,
 pushing: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
 pulling: std.StringHashMapUnmanaged(*std.Io.Mutex) = .empty,
@@ -27,6 +26,7 @@ term: *Term,
 project: *const Project,
 depl: *std.Io.Mutex,
 group: std.Io.Group = .init,
+clients: *Client.Manager,
 
 pub fn deinit(self: *@This(), io: std.Io) void {
     self.group.cancel(io);
@@ -48,8 +48,9 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
-    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(io, remote.*), self.identity);
-    defer client.destroy(self.gpa, io);
+    const managed_client = try self.clients.connect_str(io, remote.@"1");
+    defer managed_client.release(io);
+    const client = managed_client.inner;
 
     const task_id: proto.task.Id = .{
         .deployment = self.dep.id,
@@ -138,8 +139,9 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     const artifact_dir_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_dir_path);
 
-    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(io, remote.*), self.identity);
-    defer client.destroy(self.gpa, io);
+    const managed = try self.clients.connect_str(io, remote.@"1");
+    defer managed.release(io);
+    const client = managed.inner;
 
     const task_id: proto.task.Id = .{
         .deployment = self.dep.id,
@@ -174,11 +176,12 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     try self.view.set_transfer(io, artifact, remote.@"0", .pulling, 0.0);
     defer self.view.set_transfer(io, artifact, remote.@"0", .ready, 1.0) catch {};
 
-    var client = try Client.connect(self.gpa, io, try Weft.parse_remote_address(io, remote.*), self.identity);
-    defer client.destroy(self.gpa, io);
-
     const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_path);
+
+    const managed = try self.clients.connect_str(io, remote.@"1");
+    defer managed.release(io);
+    const client = managed.inner;
 
     const task_id: proto.task.Id = .{
         .deployment = self.dep.id,

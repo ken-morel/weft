@@ -102,21 +102,20 @@ fn render_header(term: *Term, date_str: []const u8) void {
 fn connect(
     gpa: std.mem.Allocator,
     io: std.Io,
+    clients: *Client.Manager,
     remote: Remote,
-    identity: Identity,
     from: std.Io.Timestamp,
-) !*Client {
+) !*Client.Managed {
     const l = log(.monitor_connect);
-    var client = Client.connect(
-        gpa,
+    var managed = clients.connect_str(
         io,
-        try Weft.parse_remote_address(io, remote),
-        identity,
+        remote.@"1",
     ) catch |err| {
         l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.@"0", err });
         return err;
     };
-    errdefer client.destroy(gpa, io);
+    errdefer managed.release(io);
+    const client = managed.inner;
 
     const req_buf = try gpa.alloc(u8, 256);
     defer gpa.free(req_buf);
@@ -125,7 +124,7 @@ fn connect(
     try client.conn.send_object(req_buf, proto.system.stats.Req, .{
         .from = from,
     });
-    return client;
+    return managed;
 }
 pub fn run(
     gpa: std.mem.Allocator,
@@ -135,20 +134,23 @@ pub fn run(
     remote: Remote,
 ) !void {
     const l = log(.monitor);
+    var clients: *Client.Manager = try .create(gpa, null, inst.identity);
+    defer clients.destroy(io);
+
     var arena: std.heap.ArenaAllocator = .init(gpa);
 
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    var maybe_client: ?*Client = try connect(
+    var maybe_client: ?*Client.Managed = try connect(
         gpa,
         io,
+        clients,
         remote,
-        inst.identity,
         .{ .nanoseconds = 0 },
     );
     defer if (maybe_client) |c|
-        c.destroy(gpa, io);
+        c.release(io);
 
     var frame_arena: std.heap.ArenaAllocator = .init(gpa);
     defer frame_arena.deinit();
@@ -183,7 +185,7 @@ pub fn run(
     var prev_tx_rate: ?u64 = null;
 
     while (true) {
-        const client = if (maybe_client) |c|
+        const managed = if (maybe_client) |c|
             c
         else {
             try std.Io.sleep(io, .fromSeconds(5), .real);
@@ -194,21 +196,22 @@ pub fn run(
             maybe_client = connect(
                 gpa,
                 io,
+                clients,
                 remote,
-                inst.identity,
                 from_ts,
             ) catch null;
             continue;
         };
+        const client = managed.inner;
         var iac = [_][]u8{stream_buf[read_pos..]};
         const n = client.conn.reader.readVec(&iac) catch {
-            client.destroy(gpa, io);
+            managed.release(io);
             maybe_client = null;
             read_pos = 0;
             continue;
         };
         if (n == 0) {
-            client.destroy(gpa, io);
+            managed.release(io);
             maybe_client = null;
             read_pos = 0;
             continue;

@@ -40,16 +40,15 @@ pub fn run(
         return error.RemoteNotFound;
     };
 
-    const addr = Weft.parse_remote_address(
-        io,
-        remote.*,
-    ) catch return error.InvalidRemoteConfig;
+    var clients: *Client.Manager = try .create(alloc, project, inst.identity);
+    defer clients.destroy(io);
 
-    const client = Client.connect(alloc, io, addr, inst.identity) catch |err| {
+    const managed = clients.connect_str(io, remote.@"1") catch |err| {
         l.err("could not reach remote '{s}': {any}", .{ remote_name, err });
         return err;
     };
-    defer client.destroy(alloc, io);
+    defer managed.release(io);
+    const client = managed.inner;
 
     var send_buf: [256]u8 = undefined;
     _ = try client.conn.send_object(&send_buf, proto.Request, .task_kill);

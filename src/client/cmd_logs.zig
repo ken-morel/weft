@@ -73,16 +73,18 @@ pub fn run(
 
     const buffer = try alloc.alloc(u8, Connection.max_packet_size);
 
-    var client = Client.connect(
-        alloc,
+    var clients: *Client.Manager = try .create(alloc, project, inst.identity);
+    defer clients.destroy(io);
+
+    var managed = clients.connect_str(
         io,
-        try Weft.parse_remote_address(io, remote.*),
-        inst.identity,
+        remote.@"1",
     ) catch |e| {
         l.err("connection to remote '{s}' failed: {any}", .{ remote_name, e });
         return e;
     };
-    defer client.destroy(alloc, io);
+    defer managed.release(io);
+    const client = managed.inner;
 
     var req_arena: std.heap.ArenaAllocator = .init(gpa);
     defer req_arena.deinit();

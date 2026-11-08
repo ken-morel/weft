@@ -14,8 +14,8 @@ const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Fetcher = @import("Fetcher.zig");
 const Project = @import("Project.zig");
-const View = @import("View.zig");
 const src = @import("src.zig");
+const View = @import("View.zig");
 
 pub fn run_deployment(
     gpa: std.mem.Allocator,
@@ -39,15 +39,18 @@ pub fn run_deployment(
 
     var depl: std.Io.Mutex = .init;
 
+    const clients: *Client.Manager = try .create(gpa, project, identity);
+    defer clients.destroy(io);
+
     var fetcher: Fetcher = .{
         .gpa = gpa,
         .dep = deployment,
         .depl = &depl,
-        .identity = identity,
         .project = &project,
         .remotes = remotes,
         .term = term,
         .view = &view,
+        .clients = clients,
     };
     defer fetcher.deinit(io);
 
@@ -63,16 +66,6 @@ pub fn run_deployment(
 
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
-
-    var poll_clients: std.StringHashMapUnmanaged(?*Client) = .empty;
-    defer {
-        var iter = poll_clients.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.*) |c|
-                c.destroy(gpa, io);
-        }
-        poll_clients.deinit(gpa);
-    }
 
     while (true) : (try std.Io.sleep(io, .fromMilliseconds(250), .awake)) {
         try depl.lock(io);
@@ -141,14 +134,9 @@ pub fn run_deployment(
             if (batch_tasks.items.len == 0)
                 continue;
 
-            const client_entry = try poll_clients.getOrPut(gpa, remote_name);
-            if (!client_entry.found_existing)
-                client_entry.value_ptr.* = null;
-
             poll_remote(
                 gpa,
                 io,
-                identity,
                 project,
                 deployment,
                 &view,
@@ -157,7 +145,7 @@ pub fn run_deployment(
                 &poll_arena,
                 log_buffer,
                 batch_tasks.items,
-                client_entry.value_ptr,
+                clients,
             );
         }
 
@@ -173,7 +161,6 @@ pub fn run_deployment(
 fn poll_remote(
     gpa: std.mem.Allocator,
     io: std.Io,
-    identity: Identity,
     project: Project,
     deployment: *Deployment,
     view: *View,
@@ -182,19 +169,14 @@ fn poll_remote(
     poll_arena: *std.heap.ArenaAllocator,
     log_buffer: []u8,
     batch: []const proto.task.poll.Req,
-    client_slot: *?*Client,
+    clients: *Client.Manager,
 ) void {
     const alloc = poll_arena.allocator();
-    if (client_slot.* == null) {
-        const addr = Weft.parse_remote_address(io, remote.*) catch return;
-        client_slot.* = Client.connect(gpa, io, addr, identity) catch return;
-        client_slot.*.?.conn.send_object(log_buffer, proto.Request, .task_poll) catch {
-            client_slot.*.?.destroy(gpa, io);
-            client_slot.* = null;
-            return;
-        };
-    }
-    const client = client_slot.*.?;
+    const managed = clients.connect_str(io, remote.@"1") catch return;
+    defer managed.release(io);
+    const client = managed.inner;
+
+    client.conn.send_object(log_buffer, proto.Request, .task_poll) catch return;
 
     poll_batch(
         gpa,
@@ -207,10 +189,7 @@ fn poll_remote(
         log_buffer,
         batch,
         client,
-    ) catch {
-        client.destroy(gpa, io);
-        client_slot.* = null;
-    };
+    ) catch return;
 }
 
 fn poll_batch(
@@ -227,6 +206,7 @@ fn poll_batch(
 ) !void {
     for (batch) |task|
         try client.conn.send_object(log_buffer, proto.task.poll.Req, task);
+    try client.conn.send_object(log_buffer, proto.task.poll.Req, null);
 
     var count: usize = 0;
     while (count < batch.len) : (count += 1) {
@@ -262,6 +242,9 @@ fn poll_batch(
             poll_res.status,
         );
     }
+    if (client.conn.recv_object_buf(log_buffer, proto.Res(proto.task.poll.Res))) |res| {
+        _ = res catch {};
+    } else |_| {}
 }
 
 fn fail_step(
@@ -404,15 +387,18 @@ pub fn run_task(
 
     var depl: std.Io.Mutex = .init;
 
+    const clients: *Client.Manager = try .create(gpa, project, identity);
+    defer clients.destroy(io);
+
     var fetcher: Fetcher = .{
         .gpa = gpa,
         .dep = deployment,
         .depl = &depl,
-        .identity = identity,
         .project = &project,
         .remotes = remotes,
         .term = term,
         .view = &view,
+        .clients = clients,
     };
     defer fetcher.deinit(io);
 
@@ -436,9 +422,6 @@ pub fn run_task(
 
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
-
-    var poll_client: ?*Client = null;
-    defer if (poll_client) |c| c.destroy(gpa, io);
 
     while (true) : (try std.Io.sleep(io, .fromMilliseconds(250), .awake)) {
         try depl.lock(io);
@@ -468,7 +451,6 @@ pub fn run_task(
         poll_remote(
             gpa,
             io,
-            identity,
             project,
             deployment,
             &view,
@@ -477,7 +459,7 @@ pub fn run_task(
             &poll_arena,
             log_buffer,
             &batch,
-            &poll_client,
+            clients,
         );
 
         _ = poll_arena.reset(.retain_capacity);
@@ -590,8 +572,9 @@ pub fn spawn_step(
     try view.set_task(io, step.remote, step.pipeline, .{ .status = .preparing });
 
     spawn_task: {
-        const client = try Client.connect(gpa, io, try Weft.parse_remote_address(io, remote.*), fetcher.identity);
-        defer client.destroy(gpa, io);
+        const managed = try fetcher.clients.connect_str(io, remote.@"1");
+        defer managed.release(io);
+        const client = managed.inner;
 
         try client.conn.send_object(buffer, proto.Request, .task_spawn);
         try client.conn.send_object(buffer, proto.task.spawn.Req, .{

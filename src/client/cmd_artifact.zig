@@ -9,8 +9,8 @@ const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const View = @import("View.zig");
 const transfer = @import("transfer.zig");
+const View = @import("View.zig");
 
 pub fn run(
     gpa: std.mem.Allocator,
@@ -23,6 +23,8 @@ pub fn run(
     remote_name: []const u8,
     deployment_spec: ?[]const u8,
 ) !void {
+    var clients: *Client.Manager = try .create(gpa, project, inst.identity);
+    defer clients.destroy(io);
     const l = log(.artifact);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -57,16 +59,15 @@ pub fn run(
 
     try view.set_transfer(io, name, remote_name, status, 0.0);
 
-    var client = Client.connect(
-        gpa,
+    var managed = clients.connect_str(
         io,
-        try Weft.parse_remote_address(io, remote.*),
-        inst.identity,
+        remote.@"1",
     ) catch |err| {
         l.err("connection to remote '{s}' failed: {any}", .{ remote_name, err });
         return err;
     };
-    defer client.destroy(gpa, io);
+    defer managed.release(io);
+    const client = managed.inner;
 
     if (direction == .push) {
         std.Io.Dir.cwd().access(io, artifact_path, .{}) catch |err| {

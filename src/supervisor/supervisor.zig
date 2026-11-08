@@ -278,7 +278,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 &task.id.deployment.to_string(),
                 isolate_arg,
             },
-            .start_suspended = true,
+            .start_suspended = isolate.cgroups,
         });
         const child_pid: std.posix.pid_t = child.id orelse unreachable;
         defer if (!isolate.cgroups) {
@@ -286,12 +286,13 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         };
 
         if (cgroup_mut) |*cgroup| {
+            var status: i32 = 0;
+            _ = std.os.linux.waitpid(child_pid, &status, std.os.linux.W.UNTRACED);
             try cgroup.procs_add(gpa, io, child_pid);
+            if (std.os.linux.errno(std.os.linux.kill(child_pid, .CONT)) != .SUCCESS)
+                return error.KillContFailed;
         }
         l.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
-
-        if (std.os.linux.errno(std.os.linux.kill(child_pid, .CONT)) != .SUCCESS)
-            return error.KillContFailed;
 
         try task.write_status(gpa, io, .running);
         const term = try child.wait(io);

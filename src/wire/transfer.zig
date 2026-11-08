@@ -18,8 +18,8 @@ pub const Status = struct {
     pub const init: @This() = .{};
 };
 
-pub fn pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []const u8, compress: bool, status: ?*Status) !void {
-    _pull(gpa, io, conn, dest, compress, status) catch |err| {
+pub fn pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []const u8, decompress: bool, status: ?*Status) !void {
+    _pull(gpa, io, conn, dest, decompress, status) catch |err| {
         if (status) |s| {
             s.err = err;
             s.done = true;
@@ -30,7 +30,7 @@ pub fn pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []const
         s.done = true;
 }
 
-pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []const u8, compress: bool, status: ?*Status) !void {
+pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []const u8, decompress: bool, status: ?*Status) !void {
     var dir = try std.Io.Dir.cwd().createDirPathOpen(io, dest, .{});
     defer dir.close(io);
 
@@ -53,7 +53,7 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
             .{
                 @backingInt(proto.Pack.pull),
                 std.mem.asBytes(&proto.Pack.Pull{
-                    .allow_compress = compress,
+                    .allow_compress = decompress,
                 }),
             },
         ),

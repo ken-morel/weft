@@ -61,7 +61,7 @@ pub fn register(
 
     l.info("registering client key on {s}...", .{target.ssh_dest});
     var reg_argv: std.ArrayList([]const u8) = .empty;
-    try reg_argv.append(alloc, "ssh");
+    try reg_argv.appendSlice(alloc, &.{ "ssh", "-o", "RemoteCommand=none", "-o", "RequestTTY=no" });
     if (target.port) |p|
         try reg_argv.appendSlice(alloc, &.{ "-p", p });
     try reg_argv.appendSlice(alloc, &.{
@@ -76,9 +76,13 @@ pub fn register(
         .argv = reg_argv.items,
     });
     if (reg_res.term != .exited or reg_res.term.exited != 0) {
-        l.err("remote client registration failed (exit code {any}): {s}", .{ reg_res.term, reg_res.stderr });
+        l.err(
+            "remote client registration failed (exit {any}):\nstderr: {s}\nstdout: {s}",
+            .{ reg_res.term, reg_res.stderr, reg_res.stdout },
+        );
         return error.RemoteRegisterFailed;
     }
+    l.info("successfully registered client key on {s}", .{target.ssh_dest});
 }
 
 pub fn install(
@@ -101,9 +105,9 @@ pub fn install(
     const scp_dst = try alloc.print("{s}:/tmp/weft", .{target.ssh_dest});
 
     const scp_argv: []const []const u8 = if (target.port) |p|
-        &.{ "scp", "-P", p, exe_path, scp_dst }
+        &.{ "scp", "-o", "RemoteCommand=none", "-o", "RequestTTY=no", "-P", p, exe_path, scp_dst }
     else
-        &.{ "scp", exe_path, scp_dst };
+        &.{ "scp", "-o", "RemoteCommand=none", "-o", "RequestTTY=no", exe_path, scp_dst };
 
     var scp_child = try std.process.spawn(io, .{
         .argv = scp_argv,
@@ -119,7 +123,7 @@ pub fn install(
 
     l.info("installing weft daemon on {s}...", .{target.ssh_dest});
     var install_argv: std.ArrayList([]const u8) = .empty;
-    try install_argv.append(alloc, "ssh");
+    try install_argv.appendSlice(alloc, &.{ "ssh", "-o", "RemoteCommand=none", "-o", "RequestTTY=no" });
     if (target.port) |p|
         try install_argv.appendSlice(alloc, &.{ "-p", p });
     try install_argv.appendSlice(alloc, &.{
@@ -131,12 +135,16 @@ pub fn install(
         .argv = install_argv.items,
     });
     if (setup_res.term != .exited or setup_res.term.exited != 0) {
-        l.err("remote setup failed (exit code {any}): {s}", .{ setup_res.term, setup_res.stderr });
+        l.err(
+            "remote setup failed (exit {any}):\nstderr: {s}\nstdout: {s}",
+            .{ setup_res.term, setup_res.stderr, setup_res.stdout },
+        );
         return error.RemoteInstallFailed;
     }
 
+    l.info("running daemon install on {s}...", .{target.ssh_dest});
     var daemon_argv: std.ArrayList([]const u8) = .empty;
-    try daemon_argv.append(alloc, "ssh");
+    try daemon_argv.appendSlice(alloc, &.{ "ssh", "-o", "RemoteCommand=none", "-o", "RequestTTY=no" });
     if (target.port) |p|
         try daemon_argv.appendSlice(alloc, &.{ "-p", p });
     try daemon_argv.appendSlice(alloc, &.{
@@ -152,9 +160,14 @@ pub fn install(
         .argv = daemon_argv.items,
     });
     if (daemon_res.term != .exited or daemon_res.term.exited != 0) {
-        l.err("remote installation failed (exit code {any}): {s}", .{ daemon_res.term, daemon_res.stderr });
+        l.err(
+            "remote installation failed (exit {any}):\nstderr: {s}\nstdout: {s}",
+            .{ daemon_res.term, daemon_res.stderr, daemon_res.stdout },
+        );
         return error.RemoteInstallFailed;
     }
+    if (daemon_res.stdout.len > 0)
+        l.info("daemon output:\n{s}", .{daemon_res.stdout});
 
     return try register(gpa, io, installation, ssh_target, null);
 }

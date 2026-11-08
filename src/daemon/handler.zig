@@ -25,7 +25,7 @@ pub fn handle(daemon: *Daemon, permits: *std.Io.Semaphore, stream: std.Io.net.St
     errdefer stream.close(daemon.io);
 
     _run(daemon, stream) catch |err| {
-        if (err == error.ReAssigned)
+        if (err == error.ReAssigned or err == error.EndOfStream)
             return;
         l.err("worker error: {any}", .{err});
         if (@errorReturnTrace()) |trace|
@@ -52,83 +52,89 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
         &writer.interface,
     );
 
-    const request = request: {
+    const response_buf = try alloc.alloc(u8, 4 << 10);
+
+    while (true) {
         var req_buffer: [1 << 5]u8 = undefined;
-        break :request conn.recv_object_buf(&req_buffer, proto.Request) catch |err|
+        const request = conn.recv_object_buf(&req_buffer, proto.Request) catch |err| {
+            if (err == error.EndOfStream)
+                return;
             return if (err == error.BufferTooSmall)
                 error.InvalidRequest
             else
                 err;
-    };
-    const t_start = std.Io.Clock.now(.real, daemon.io);
-    defer if (request != .system_stats) {
-        const t_end = std.Io.Clock.now(.real, daemon.io);
-        const dur = t_start.durationTo(t_end);
-        var dur_buf: [32]u8 = undefined;
-        l.info("{s} handled in {s}", .{ @tagName(request), format_duration(&dur_buf, dur.nanoseconds) });
-    };
-    l.debug("request: {any}", .{request}); //debug
+        };
 
-    const response_buf = try alloc.alloc(u8, 4 << 10);
-    switch (request) {
-        .artifact_push => {
-            const res = handlers.artifact.push(daemon, &conn) catch |err| err: {
-                if (@errorReturnTrace()) |trace|
-                    std.debug.dumpErrorReturnTrace(trace);
-                l.err("artifact_push failed: {any}", .{err});
-                break :err err;
-            };
-            try conn.send_object(response_buf, @TypeOf(res), res);
-        },
-        .task_spawn => {
-            const res = handlers.task.spawn(daemon, &conn) catch |err| err: {
-                if (@errorReturnTrace()) |trace|
-                    std.debug.dumpErrorReturnTrace(trace);
-                l.err("task_spawn failed: {any}", .{err});
-                break :err err;
-            };
-            try conn.send_object(response_buf, @TypeOf(res), res);
-        },
-        .artifact_pull => {
-            const res = handlers.artifact.pull(daemon, &conn) catch |err| err: {
-                if (@errorReturnTrace()) |trace|
-                    std.debug.dumpErrorReturnTrace(trace);
-                l.err("artifact_pull failed: {any}", .{err});
-                break :err err;
-            };
-            try conn.send_object(response_buf, @TypeOf(res), res);
-        },
-        .task_poll => {
-            const res = handlers.task.poll(daemon, &conn, response_buf) catch |err| err: {
-                if (@errorReturnTrace()) |trace|
-                    std.debug.dumpErrorReturnTrace(trace);
-                l.err("task_poll failed: {any}", .{err});
-                break :err err;
-            };
-            try conn.send_object(response_buf, @TypeOf(res), res);
-        },
-        .artifact_has => {
-            const res = handlers.artifact.has(daemon, &conn) catch |err| err: {
-                if (@errorReturnTrace()) |trace|
-                    std.debug.dumpErrorReturnTrace(trace);
-                l.err("artifact_has failed: {any}", .{err});
-                break :err err;
-            };
-            try conn.send_object(response_buf, @TypeOf(res), res);
-        },
-        .system_stats => {
-            const req = try conn.recv_object_buf(response_buf, proto.system.stats.Req);
-            try daemon.stats_server.add_listener(stream, req.from);
-            return error.ReAssigned;
-        },
-        .task_kill => {
-            const res = handlers.task.kill(daemon, &conn) catch |err| err: {
-                if (@errorReturnTrace()) |trace|
-                    std.debug.dumpErrorReturnTrace(trace);
-                l.err("task_kill failed: {any}", .{err});
-                break :err err;
-            };
-            try conn.send_object(response_buf, @TypeOf(res), res);
-        },
+        const t_start = std.Io.Clock.now(.real, daemon.io);
+        l.debug("request: {any}", .{request});
+
+        switch (request) {
+            .artifact_push => {
+                const res = handlers.artifact.push(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("artifact_push failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .task_spawn => {
+                const res = handlers.task.spawn(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("task_spawn failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .artifact_pull => {
+                const res = handlers.artifact.pull(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("artifact_pull failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .task_poll => {
+                const res = handlers.task.poll(daemon, &conn, response_buf) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("task_poll failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .artifact_has => {
+                const res = handlers.artifact.has(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("artifact_has failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .system_stats => {
+                const req = try conn.recv_object_buf(response_buf, proto.system.stats.Req);
+                try daemon.stats_server.add_listener(stream, req.from);
+                return error.ReAssigned;
+            },
+            .task_kill => {
+                const res = handlers.task.kill(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("task_kill failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+        }
+
+        if (request != .system_stats) {
+            const t_end = std.Io.Clock.now(.real, daemon.io);
+            const dur = t_start.durationTo(t_end);
+            var dur_buf: [32]u8 = undefined;
+            l.info("{s} handled in {s}", .{ @tagName(request), format_duration(&dur_buf, dur.nanoseconds) });
+        }
     }
 }

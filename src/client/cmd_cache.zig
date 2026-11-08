@@ -9,8 +9,8 @@ const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
-const View = @import("View.zig");
 const transfer = @import("transfer.zig");
+const View = @import("View.zig");
 
 fn is_valid_artifact_name(name: []const u8) bool {
     return name.len > 0 and
@@ -48,6 +48,9 @@ pub fn run(
         return error.InvalidRemote;
     };
 
+    var clients: *Client.Manager = try .create(gpa, project, inst.identity);
+    defer clients.destroy(io);
+
     for (caches) |name| {
         const cache_path = try project.cache_dir_path(gpa, io, remote_name, name);
         defer gpa.free(cache_path);
@@ -56,13 +59,10 @@ pub fn run(
         view.auto_update = true;
         defer view.deinit();
 
-        var client = try Client.connect(
-            gpa,
-            io,
-            try Weft.parse_remote_address(io, remote.*),
-            inst.identity,
-        );
-        defer client.destroy(gpa, io);
+        const managed = try clients.connect_str(io, remote.@"1");
+        defer managed.release(io);
+        const client = managed.inner;
+        _ = client;
 
         if (direction == .push) {
             // std.Io.Dir.cwd().access(io, cache_path, .{}) catch |err| {

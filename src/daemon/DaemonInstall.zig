@@ -31,13 +31,14 @@ pub const Isolate = packed struct(u8) {
 };
 
 pub const Scale = struct {
-    max_workers: u32 = 4,
-    compress: bool = false,
+    max_workers: u32,
+    compress: bool,
+    decompress: bool,
 
     pub const templates = [_]struct { []const u8, @This() }{
-        .{ "tiny", .{ .max_workers = 1, .compress = false } },
-        .{ "small", .{ .max_workers = 4, .compress = false } },
-        .{ "large", .{ .max_workers = 16, .compress = true } },
+        .{ "tiny", .{ .max_workers = 1, .compress = false, .decompress = false } },
+        .{ "small", .{ .max_workers = 4, .compress = false, .decompress = true } },
+        .{ "large", .{ .max_workers = 16, .compress = true, .decompress = true } },
     };
     pub fn template(name: []const u8) ?@This() {
         return inline for (templates) |t| {
@@ -63,8 +64,13 @@ pub const Config = struct {
                 cfg.isolate = iso
             else if (Scale.template(part)) |sc|
                 cfg.scale = sc
-            else
+            else {
+                log(.config).err(
+                    "unknown template component '{s}'. Valid isolates: kvm, lxc, vz, colab. Valid scales: tiny, small, large",
+                    .{part},
+                );
                 return error.TemplateNotFound;
+            }
         }
         return cfg;
     }
@@ -131,6 +137,9 @@ pub const InitSystem = enum {
             .none => {
                 try domain.spawn_detach(io, .{
                     .argv = &.{ paths.weft_binary, "daemon", "run" },
+                    .stdin = .ignore,
+                    .stdout = .ignore,
+                    .stderr = .ignore,
                 });
                 return;
             },
@@ -288,8 +297,7 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, template: ?[]const u8) !void 
 
         if (read_config_leaky(alloc, io)) |c| {
             config.port = c.port;
-        } else |e| if (e != error.FileNotFound)
-            return e;
+        } else |_| {}
 
         try cwd.createDirPath(io, paths.weft_config);
 
@@ -305,12 +313,21 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, template: ?[]const u8) !void 
         try config_writer.interface.flush();
 
         try config_file.replace(io);
-
+        l.info("wrote daemon config to {s} (isolate: cgroups={}, mount={}, pid={}, net={}; scale: max_workers={d})", .{
+            paths.weft_config_file,
+            config.isolate.cgroups,
+            config.isolate.mount,
+            config.isolate.pid,
+            config.isolate.net,
+            config.scale.max_workers,
+        });
         break :write_config;
     }
     try paths.ensure_dirs(io);
+    l.info("configuring service with init system: {s}", .{@tagName(pid1)});
     try pid1.setup_weft_svc(io);
     try setup_bin(gpa, io);
+    l.info("weft daemon successfully installed and started", .{});
 }
 
 const allowed_tools =
