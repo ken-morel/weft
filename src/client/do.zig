@@ -22,6 +22,7 @@ pub fn run(
         },
         retry: Deployment.Id,
     },
+    env: ?*std.process.Environ.Map,
 ) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -58,5 +59,6 @@ pub fn run(
         project,
         inst,
         &deployment,
+        env,
     );
 }

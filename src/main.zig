@@ -103,16 +103,6 @@ const Argz = union(enum) {
 
         deployment: ?[]const u8 = null,
     },
-    logs: struct {
-        pub const doc = "Get the logs for a running/completed pipeline";
-        pub const doc_pipeline = "The pipeline name to follow";
-        pub const doc_deployment = "The deployment id to follow (defaults to latest)";
-        pub const doc_remote = "The remote to query, defaults to load from deployment configuration";
-
-        pipeline: []const u8,
-        deployment: ?[]const u8 = null,
-        remote: ?[]const u8 = null,
-    },
     artifact: union(enum) {
         pub const doc = "Transfer artifacts to and from remotes";
 
@@ -195,13 +185,19 @@ const Argz = union(enum) {
         },
         kill: struct {
             pub const doc = "Kill a deployment or a specific pipeline in a deployment";
-            pub const doc_remote = "The remote where to kill the task";
-            pub const doc_deployment = "The deployment id";
-            pub const doc_pipeline = "The pipeline name to kill";
+            pub const doc_step = "The target spec to kill can be <pipeline>, <remote>.<pipeline>, or <mode>:<remote>.<pipeline>";
+            pub const doc_deployment = "The deployment id (defaults to latest)";
 
-            remote: []const u8,
-            deployment: []const u8,
-            pipeline: []const u8,
+            step: []const u8,
+            deployment: ?[]const u8 = null,
+        },
+        logs: struct {
+            pub const doc = "Get the logs for a running/completed pipeline";
+            pub const doc_step = "The target spec to follow can be <pipeline>, <remote>.<pipeline>, or <mode>:<remote>.<pipeline>";
+            pub const doc_deployment = "The deployment id to follow (defaults to latest)";
+
+            step: []const u8,
+            deployment: ?[]const u8 = null,
         },
     },
 
@@ -280,15 +276,12 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
     var environ_map = try minimal.environ.createMap(gpa);
     defer environ_map.deinit();
 
-    // var evented: std.Io.Evented = undefined;
-    // try evented.init(gpa, .{});
-
-    // const io = evented.io();
-
     var threaded: std.Io.Threaded = .init(gpa, .{
         .stack_size = 10 << 20, // just 1mb stack
         .environ = minimal.environ,
     });
+    defer threaded.deinit();
+
     const io = threaded.io();
 
     var term = try Term.init(gpa, io);
@@ -386,7 +379,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 .start = .{
                     .targets = targets,
                 },
-            });
+            }, &environ_map);
         },
         .@"resume" => |cmd| {
             const installation: ClientInstall = try .init(gpa, io, &environ_map);
@@ -405,23 +398,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     return error.NoDeployments;
                 };
 
-            return cmd_do.run(gpa, io, &term, project, &installation, .{ .retry = resume_id });
-        },
-        .logs => |cmd| {
-            const installation: ClientInstall = try .init(gpa, io, &environ_map);
-            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
-            defer project_dir.close(io);
-            const project = try Project.open_leaky(alloc, io, project_dir);
-
-            return cmd_logs.run(
-                gpa,
-                io,
-                project,
-                &installation,
-                cmd.pipeline,
-                cmd.deployment,
-                cmd.remote,
-            );
+            return cmd_do.run(gpa, io, &term, project, &installation, .{ .retry = resume_id }, &environ_map);
         },
         .artifact => |cmd| {
             const installation: ClientInstall = try .init(gpa, io, &environ_map);
@@ -440,6 +417,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     c.name,
                     c.remote,
                     c.deployment,
+                    &environ_map,
                 ),
                 .push => |c| cmd_artifact.run(
                     gpa,
@@ -451,6 +429,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     c.name,
                     c.remote,
                     c.deployment,
+                    &environ_map,
                 ),
                 .register => |c| cmd_artifact.register(
                     gpa,
@@ -485,7 +464,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 .path => |c| c.cache,
             };
             const caches = if (cache) |c|
-                try alloc.dupe([]const u8, &.{c})
+                &.{c}
             else caches: {
                 var keep: std.ArrayList([]const u8) = .empty;
                 defer keep.deinit(gpa);
@@ -509,6 +488,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     .pull,
                     caches,
                     c.remote,
+                    &environ_map,
                 ),
                 .push => |c| cmd_cache.run(
                     gpa,
@@ -520,6 +500,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     .push,
                     caches,
                     c.remote,
+                    &environ_map,
                 ),
                 .path => |c| cmd_cache.path(
                     gpa,
@@ -552,6 +533,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     target,
 
                     s.deployment,
+                    &environ_map,
                 );
             },
             .kill => |k| {
@@ -560,7 +542,25 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 defer project_dir.close(io);
                 const project = try Project.open_leaky(alloc, io, project_dir);
 
-                return try cmd_kill.run(gpa, io, project, &installation, k.pipeline, k.remote, k.deployment);
+                const target: Step = Step.parse_target(k.step, "default") catch |e| {
+                    log.err("Invalid target: {any}: '{s}':", .{ e, k.step });
+                    return e;
+                };
+
+                return cmd_kill.run(gpa, io, project, &installation, target, k.deployment, &environ_map);
+            },
+            .logs => |l| {
+                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+                defer project_dir.close(io);
+                const project = try Project.open_leaky(alloc, io, project_dir);
+
+                const target: Step = Step.parse_target(l.step, "default") catch |e| {
+                    log.err("Invalid target: {any}: '{s}':", .{ e, l.step });
+                    return e;
+                };
+
+                return cmd_logs.run(gpa, io, project, &installation, target, l.deployment, &environ_map);
             },
         },
         .remote => |r| switch (r) {
@@ -588,13 +588,13 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 const remote_name = cmd.remote;
                 const installation: ClientInstall = try .init(gpa, io, &environ_map);
                 if (std.mem.eql(u8, remote_name, "local")) {
-                    return cmd_monitor.run(gpa, io, &term, &installation, null, Weft.remote_local);
+                    return cmd_monitor.run(gpa, io, &term, &installation, null, Weft.remote_local, &environ_map);
                 } else if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
                     _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
                         log.err("Invalid ip address: {any}", .{e});
                         return error.InvalidIpAddress;
                     };
-                    return cmd_monitor.run(gpa, io, &term, &installation, null, .{ "remote", remote_name, "" });
+                    return cmd_monitor.run(gpa, io, &term, &installation, null, .{ "remote", remote_name, "" }, &environ_map);
                 } else {
                     const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
                     defer project_dir.close(io);
@@ -607,7 +607,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                         log.err("Remote '{s}' not found", .{remote_name});
                         return error.RemoteNotFound;
                     };
-                    return cmd_monitor.run(gpa, io, &term, &installation, project, remote);
+                    return cmd_monitor.run(gpa, io, &term, &installation, project, remote, &environ_map);
                 }
             },
         },

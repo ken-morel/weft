@@ -11,15 +11,16 @@ const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
+const Step = @import("Step.zig");
 
 pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
     project: Project,
     inst: *const ClientInstall,
-    pipeline_name: []const u8,
+    step: Step,
     deployment_spec: ?[]const u8,
-    remote_spec: ?[]const u8,
+    env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.follow);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -35,23 +36,22 @@ pub fn run(
 
     const remotes = try deployment.config.remotes_with_local_leaky(alloc);
 
-    _ = deployment.config.get_pipeline(pipeline_name) orelse {
+    const pipeline_name = step.pipeline;
+    const pipeline = deployment.config.get_pipeline(pipeline_name) orelse {
         l.err("pipeline '{s}' not found in deployment {s}", .{ pipeline_name, &deployment.id.to_string() });
         return error.InvalidPipeline;
     };
 
-    const remote_name = if (remote_spec) |s|
-        s
-    else for (deployment.artifacts) |art| {
-        if (std.mem.eql(u8, art.pipeline, pipeline_name))
-            break art.remote;
-    } else for (deployment.running) |run_| {
-        if (std.mem.eql(u8, run_.pipeline, pipeline_name))
-            break run_.remote;
-    } else {
-        l.err("Couldn't find where pipeline {s} did ran", .{pipeline_name});
-        return error.RemoteNotFound;
-    };
+    const remote_name = if (std.mem.eql(u8, step.remote, "_"))
+        for (deployment.artifacts) |art| {
+            if (std.mem.eql(u8, art.pipeline, pipeline_name))
+                break art.remote;
+        } else for (deployment.running) |run_| {
+            if (std.mem.eql(u8, run_.pipeline, pipeline_name))
+                break run_.remote;
+        } else deployment.config.select_remote_for(pipeline, null) orelse "local"
+    else
+        step.remote;
 
     const remote: *const Remote = for (remotes) |*rem| {
         if (std.mem.eql(u8, rem.@"0", remote_name))
@@ -73,7 +73,7 @@ pub fn run(
 
     const buffer = try alloc.alloc(u8, Connection.max_packet_size);
 
-    var clients: *Client.Manager = try .create(alloc, project, inst.identity);
+    var clients: *Client.Manager = try .create(alloc, project, inst.identity, env);
     defer clients.destroy(io);
 
     var managed = clients.connect_str(

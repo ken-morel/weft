@@ -22,8 +22,9 @@ pub fn run(
     name: []const u8,
     remote_name: []const u8,
     deployment_spec: ?[]const u8,
+    env: ?*std.process.Environ.Map,
 ) !void {
-    var clients: *Client.Manager = try .create(gpa, project, inst.identity);
+    var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
     defer clients.destroy(io);
     const l = log(.artifact);
     var arena: std.heap.ArenaAllocator = .init(gpa);

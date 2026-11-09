@@ -24,6 +24,7 @@ pub fn run_deployment(
     project: Project,
     inst: *const ClientInstall,
     deployment: *Deployment,
+    env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.runner);
     l.info("Running deployment {s}", .{&deployment.id.to_string()});
@@ -40,7 +41,7 @@ pub fn run_deployment(
 
     var depl: std.Io.Mutex = .init;
 
-    const clients: *Client.Manager = try .create(gpa, project, identity);
+    const clients: *Client.Manager = try .create(gpa, project, identity, env);
     defer clients.destroy(io);
 
     var fetcher: Fetcher = .{
@@ -362,6 +363,7 @@ pub fn run_task(
     inst: *const ClientInstall,
     deployment: *Deployment,
     step: Deployment.Step,
+    env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.runner);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -389,7 +391,7 @@ pub fn run_task(
 
     var depl: std.Io.Mutex = .init;
 
-    const clients: *Client.Manager = try .create(gpa, project, identity);
+    const clients: *Client.Manager = try .create(gpa, project, identity, env);
     defer clients.destroy(io);
 
     var fetcher: Fetcher = .{

@@ -102,7 +102,7 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
     return self;
 }
 
-fn connect(gpa: std.mem.Allocator, io: std.Io, project: ?Project, addr: Weft.RemoteAddress, identity: Identity) !*@This() {
+fn connect(gpa: std.mem.Allocator, io: std.Io, project: ?Project, addr: Weft.RemoteAddress, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
     const transport: Transport = transport: switch (addr) {
         .cmd => |cmd| if (project) |p| {
             if (cmd.len == 0)
@@ -118,6 +118,7 @@ fn connect(gpa: std.mem.Allocator, io: std.Io, project: ?Project, addr: Weft.Rem
                 .stdin = .pipe,
                 .stdout = .pipe,
                 .stderr = .inherit,
+                .environ_map = env,
             });
             break :transport .{
                 .stdio = .{
@@ -185,8 +186,9 @@ pub const Manager = struct {
     project: ?Project,
     gpa: std.mem.Allocator,
     identity: Identity,
+    env: ?*std.process.Environ.Map,
 
-    pub fn create(gpa: std.mem.Allocator, project: ?Project, identity: Identity) !*@This() {
+    pub fn create(gpa: std.mem.Allocator, project: ?Project, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
         const self = try gpa.create(@This());
         errdefer gpa.destroy(self);
         self.* = .{
@@ -195,6 +197,7 @@ pub const Manager = struct {
             .lock = .init,
             .project = project,
             .identity = identity,
+            .env = env,
         };
         return self;
     }
@@ -217,6 +220,7 @@ pub const Manager = struct {
             self.project,
             addr,
             self.identity,
+            self.env,
         );
         errdefer client.destroy(self.gpa, io);
 
@@ -235,8 +239,8 @@ pub const Manager = struct {
             .bounded = bounded,
         };
 
+        try managed.lock.lock(io);
         if (bounded) {
-            try managed.lock.lock(io);
             try self.clients.append(self.gpa, managed);
             return managed;
         } else return managed;

@@ -291,20 +291,16 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 &depl_buf,
                 isolate_arg,
             },
-            .start_suspended = isolate.cgroups,
+            .start_suspended = false,
         });
         const child_pid: std.posix.pid_t = child.id orelse unreachable;
         defer if (!isolate.cgroups) {
             _ = std.os.linux.kill(-child_pid, .KILL);
         };
 
-        if (cgroup_mut) |*cgroup| {
-            var status: i32 = 0;
-            _ = std.os.linux.waitpid(child_pid, &status, std.os.linux.W.UNTRACED);
+        if (cgroup_mut) |*cgroup|
             try cgroup.procs_add(gpa, io, child_pid);
-            if (std.os.linux.errno(std.os.linux.kill(child_pid, .CONT)) != .SUCCESS)
-                return error.KillContFailed;
-        }
+
         l.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
 
         try task.write_status(gpa, io, .running);

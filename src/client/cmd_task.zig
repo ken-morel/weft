@@ -15,6 +15,7 @@ pub fn spawn(
     inst: *const ClientInstall,
     step: Step,
     deployment_spec: ?[]const u8,
+    env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.spawn);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -37,5 +38,5 @@ pub fn spawn(
     var deployment = try project.load_deployment_leaky(gpa, alloc, io, dep_id);
     deployment.config = config;
 
-    return runner.run_task(alloc, io, term, project, inst, &deployment, step);
+    return runner.run_task(alloc, io, term, project, inst, &deployment, step, env);
 }

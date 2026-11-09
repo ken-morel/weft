@@ -134,9 +134,10 @@ pub fn run(
     inst: *const ClientInstall,
     project: ?Project,
     remote: Remote,
+    env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.monitor);
-    var clients: *Client.Manager = try .create(gpa, project, inst.identity);
+    var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
     defer clients.destroy(io);
 
     var arena: std.heap.ArenaAllocator = .init(gpa);

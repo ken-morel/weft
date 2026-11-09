@@ -33,6 +33,7 @@ pub fn run(
     direction: enum { pull, push },
     caches: []const []const u8,
     remote_name: []const u8,
+    env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.artifact);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -48,7 +49,7 @@ pub fn run(
         return error.InvalidRemote;
     };
 
-    var clients: *Client.Manager = try .create(gpa, project, inst.identity);
+    var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
     defer clients.destroy(io);
 
     for (caches) |name| {
