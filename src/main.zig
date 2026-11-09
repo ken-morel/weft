@@ -588,13 +588,13 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 const remote_name = cmd.remote;
                 const installation: ClientInstall = try .init(gpa, io, &environ_map);
                 if (std.mem.eql(u8, remote_name, "local")) {
-                    return cmd_monitor.run(gpa, io, &term, &installation, Weft.remote_local);
+                    return cmd_monitor.run(gpa, io, &term, &installation, null, Weft.remote_local);
                 } else if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
                     _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
                         log.err("Invalid ip address: {any}", .{e});
                         return error.InvalidIpAddress;
                     };
-                    return cmd_monitor.run(gpa, io, &term, &installation, .{ "remote", remote_name, "" });
+                    return cmd_monitor.run(gpa, io, &term, &installation, null, .{ "remote", remote_name, "" });
                 } else {
                     const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
                     defer project_dir.close(io);
@@ -607,7 +607,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                         log.err("Remote '{s}' not found", .{remote_name});
                         return error.RemoteNotFound;
                     };
-                    return cmd_monitor.run(gpa, io, &term, &installation, remote);
+                    return cmd_monitor.run(gpa, io, &term, &installation, project, remote);
                 }
             },
         },

@@ -11,6 +11,7 @@ const zoto = @import("../util/zoto.zig");
 const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
+const Project = @import("Project.zig");
 
 fn format_time_only(buf: *[8]u8, ns: i128) []const u8 {
     const epoch_seconds: u64 = if (ns > 0) @intCast(@divTrunc(ns, std.time.ns_per_s)) else 0;
@@ -131,10 +132,11 @@ pub fn run(
     io: std.Io,
     term: *Term,
     inst: *const ClientInstall,
+    project: ?Project,
     remote: Remote,
 ) !void {
     const l = log(.monitor);
-    var clients: *Client.Manager = try .create(gpa, null, inst.identity);
+    var clients: *Client.Manager = try .create(gpa, project, inst.identity);
     defer clients.destroy(io);
 
     var arena: std.heap.ArenaAllocator = .init(gpa);
