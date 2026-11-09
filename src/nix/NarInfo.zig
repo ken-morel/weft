@@ -63,8 +63,9 @@ pub fn deinit(self: @This(), gpa: std.mem.Allocator) void {
 }
 
 pub fn fetch(gpa: std.mem.Allocator, client: *std.http.Client, hash: []const u8) !@This() {
-    const key = if (hash.len >= 32) hash[0..32] else hash;
-    const url = try gpa.print("https://cache.nixos.org/{s}.narinfo", .{key});
+    if (hash.len != 32)
+        return error.InvalidHash;
+    const url = try gpa.print("https://cache.nixos.org/{s}.narinfo", .{hash});
     defer gpa.free(url);
 
     var allocating: std.Io.Writer.Allocating = .init(gpa);

@@ -13,7 +13,6 @@ const mount = @import("mount.zig");
 const default_max_pids = 256;
 const max_freeze_depth = 32;
 
-// I don't know much about this double fork
 pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate: DaemonInstall.Isolate) !void {
     const exe_path = try std.process.executablePathAlloc(io, gpa);
     defer gpa.free(exe_path);
@@ -93,10 +92,20 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     const task_dir_path = try alloc.print(paths.task, task.id.wpd());
     const scratch_path = try alloc.print(paths.scratch, task.id.wpd());
     const active_link = try alloc.printSentinel(paths.active_link, task.id.wpd(), 0);
+    const in_fifo_path = try alloc.printSentinel(paths.task_run_in, .{task.id.wpd()}, 0);
 
     const l = l: {
         const log_path = try balloc.print(paths.task_log, task.id.wpd());
         const log_file = try cwd.createFile(io, log_path, .{ .truncate = false });
+        _ = std.posix.mkfifo(in_fifo_path.ptr, 0o600);
+
+        // 2. Open with O_RDWR!
+        // IMPORTANT: If you open a FIFO as O_RDONLY, it blocks until a writer connects,
+        // and triggers EOF as soon as the writer closes. Opening O_RDWR keeps it open permanently.
+        const in_fd = std.os.linux.open(in_fifo_path.ptr, .{ .ACCMODE = .RDWR }, 0);
+        if (std.os.linux.errno(in_fd) == .SUCCESS) {
+            _ = std.os.linux.dup2(@intCast(in_fd), std.posix.STDIN_FILENO);
+        }
         defer log_file.close(io);
         _ = std.os.linux.dup2(log_file.handle, std.posix.STDOUT_FILENO);
         _ = std.os.linux.dup2(log_file.handle, std.posix.STDERR_FILENO);
@@ -135,7 +144,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
             cwd,
             try balloc.print(paths.task_run_pid, task.id.wpd()),
             try balloc.print("{d}", .{std.os.linux.getpid()}),
-            .{},
+            .{ .replace = true },
         );
         try task.write_status(gpa, io, .preparing);
         break :write_pid;

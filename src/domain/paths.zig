@@ -29,6 +29,8 @@ pub const weft_nix_store = weft_nix ++ "store/";
 pub const weft_nix_store_lock = weft_nix_store ++ ".lock";
 pub const weft_nix_nar = weft_nix ++ "nar/";
 pub const weft_nix_narinfo = weft_nix ++ "narinfo/";
+/// fmt: package hash
+pub const weft_nix_narinfo_file = weft_nix_narinfo ++ "{s}.narinfo";
 
 /// fmt: workspace
 pub const workspace = weft_workspace ++ "{s}/";

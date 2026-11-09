@@ -67,7 +67,7 @@ pub fn run_deployment(
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
 
-    while (true) : (try std.Io.sleep(io, .fromMilliseconds(250), .awake)) {
+    while (true) : (try std.Io.sleep(io, .fromSeconds(2), .awake)) {
         try depl.lock(io);
         defer depl.unlock(io);
         if (deployment.completed() and fetcher.is_idle(io))
@@ -423,7 +423,7 @@ pub fn run_task(
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
 
-    while (true) : (try std.Io.sleep(io, .fromMilliseconds(250), .awake)) {
+    while (true) : (try std.Io.sleep(io, .fromSeconds(2), .awake)) {
         try depl.lock(io);
         defer depl.unlock(io);
 
