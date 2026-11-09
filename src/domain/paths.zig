@@ -68,7 +68,6 @@ pub const tasks_run_parent = workspace_run ++ "{s}/";
 /// fmt: workspace, pipeline, deployment (Scratch space for running task)
 pub const task_run = workspace_run ++ "{s}/{d}/";
 /// fmt: workspace, pipeline, deployment (FIFO for stdin)
-///
 pub const task_run_in = task_run ++ "in";
 /// fmt: workspace, pipeline, deployment (Supervisor's host PID)
 pub const task_run_pid = task_run ++ "pid";

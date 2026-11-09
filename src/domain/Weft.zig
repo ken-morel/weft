@@ -50,6 +50,11 @@ pub const Pipeline = struct {
         const Io = struct {
             io_weight: ?u32 = null,
             pids_max: ?u64 = null,
+            mount: []const struct {
+                []const u8,
+                enum { tmpfs, read, read_write },
+                []const u8,
+            } = &.{},
         };
         cpu: Cpu = .{},
         mem: Mem = .{},

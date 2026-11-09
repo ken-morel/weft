@@ -92,27 +92,25 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     const task_dir_path = try alloc.print(paths.task, task.id.wpd());
     const scratch_path = try alloc.print(paths.scratch, task.id.wpd());
     const active_link = try alloc.printSentinel(paths.active_link, task.id.wpd(), 0);
-    const in_fifo_path = try alloc.printSentinel(paths.task_run_in, .{task.id.wpd()}, 0);
+    const in_fifo_path = try alloc.printSentinel(paths.task_run_in, task.id.wpd(), 0);
 
     const l = l: {
         const log_path = try balloc.print(paths.task_log, task.id.wpd());
         const log_file = try cwd.createFile(io, log_path, .{ .truncate = false });
-        _ = std.posix.mkfifo(in_fifo_path.ptr, 0o600);
 
-        // 2. Open with O_RDWR!
-        // IMPORTANT: If you open a FIFO as O_RDONLY, it blocks until a writer connects,
-        // and triggers EOF as soon as the writer closes. Opening O_RDWR keeps it open permanently.
         const in_fd = std.os.linux.open(in_fifo_path.ptr, .{ .ACCMODE = .RDWR }, 0);
-        if (std.os.linux.errno(in_fd) == .SUCCESS) {
+        if (std.os.linux.errno(in_fd) == .SUCCESS)
             _ = std.os.linux.dup2(@intCast(in_fd), std.posix.STDIN_FILENO);
-        }
+
         defer log_file.close(io);
         _ = std.os.linux.dup2(log_file.handle, std.posix.STDOUT_FILENO);
         _ = std.os.linux.dup2(log_file.handle, std.posix.STDERR_FILENO);
         break :l std.log.scoped(.supervisor_supervise);
     };
 
-    l.info("supervising task {s}/{s}/{d}", .{ task.id.workspace, task.id.pipeline, task.id.deployment });
+    const cgroup_name = try task.cgroup_name(gpa);
+    defer gpa.free(cgroup_name);
+    l.info("supervising task {s}", .{cgroup_name});
 
     ensure_dirs: {
         try cwd.createDirPath(io, root_path);
@@ -204,9 +202,9 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         var waited: u32 = 0;
         while (waited < do_sibling.wait) : (waited += do_sibling.poll) {
             const sibling = try first_active_sibling(gpa, io, &task) orelse break;
-            const cgroup_name = try sibling.cgroup_name(gpa);
-            defer gpa.free(cgroup_name);
-            l.warn("waiting {d}s for active sibling {s}...", .{ do_sibling.wait - waited, cgroup_name });
+            const sibling_cgroup_name = try sibling.cgroup_name(gpa);
+            defer gpa.free(sibling_cgroup_name);
+            l.warn("waiting {d}s for active sibling {s}...", .{ do_sibling.wait - waited, sibling_cgroup_name });
             try std.Io.sleep(io, .fromSeconds(do_sibling.poll), .awake);
         }
         if (waited == 0)
@@ -377,6 +375,10 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
     defer arena.deinit();
     const alloc = arena.allocator();
 
+    var barena: std.heap.ArenaAllocator = .init(gpa);
+    defer barena.deinit();
+    const balloc = barena.allocator();
+
     const spec = try task.read_spec(gpa, alloc, io);
     l.info("spawning task {s}/{s}/{d}", .{ task.id.workspace, task.id.pipeline, task.id.deployment });
     const workspace = task.get_workspace();
@@ -407,12 +409,14 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
             defer rootfs_dir.close(io);
 
-            const user_home_rel = try alloc.printSentinel("home/{s}", .{username}, 0);
+            const user_home_rel = try gpa.printSentinel("home/{s}", .{username}, 0);
+            defer gpa.free(user_home_rel);
             for ([_][]const u8{
-                "nix/store", "bin", "usr", "usr/lib", "proc", "tmp", "dev/shm", "etc", "work", "in", "out", user_home_rel,
-            }) |dir| {
+                "nix/store", "bin",         "usr", "usr/lib", "proc",
+                "tmp",       "dev/shm",     "etc", "work",    "in",
+                "out",       user_home_rel,
+            }) |dir|
                 try rootfs_dir.createDirPath(io, dir);
-            }
 
             _ = std.os.linux.symlinkat("/bin", rootfs_dir.handle, "usr/bin");
             _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib");
@@ -426,30 +430,32 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                 .flags = .{ .permissions = .executable_file },
             });
 
-            const passwd = try alloc.print(
-                \\root:x:0:0:root:/root:/bin/sh
-                \\{s}:x:{d}:{d}:{s}:/home/{s}:/bin/sh
-                \\nobody:x:65534:65534:nobody:/nonexistent:/bin/false
-            ,
-                .{ username, uid, uid, username, username },
-            );
-            try rootfs_dir.writeFile(
-                io,
-                .{ .data = passwd, .sub_path = "etc/passwd" },
-            );
+            {
+                defer _ = barena.reset(.retain_capacity);
+                const passwd = try balloc.print(
+                    \\root:x:0:0:root:/root:/bin/sh
+                    \\{s}:x:{d}:{d}:{s}:/home/{s}:/bin/sh
+                    \\nobody:x:65534:65534:nobody:/nonexistent:/bin/false
+                ,
+                    .{ username, uid, uid, username, username },
+                );
+                try rootfs_dir.writeFile(
+                    io,
+                    .{ .data = passwd, .sub_path = "etc/passwd" },
+                );
 
-            const group = try alloc.print(
-                \\root:x:0:
-                \\{s}:x:{d}:
-                \\nobody:x:65534:
-            ,
-                .{ username, uid },
-            );
-            try rootfs_dir.writeFile(
-                io,
-                .{ .data = group, .sub_path = "etc/group" },
-            );
-
+                const group = try balloc.print(
+                    \\root:x:0:
+                    \\{s}:x:{d}:
+                    \\nobody:x:65534:
+                ,
+                    .{ username, uid },
+                );
+                try rootfs_dir.writeFile(
+                    io,
+                    .{ .data = group, .sub_path = "etc/group" },
+                );
+            }
             if (std.os.linux.errno(std.os.linux.chdir(rootfs_path.ptr)) != .SUCCESS)
                 return error.ChdirFailed;
 
@@ -494,13 +500,14 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             }
 
             for (spec.inputs) |inp| {
-                const target_in = try alloc.printSentinel(
+                defer _ = barena.reset(.retain_capacity);
+                const target_in = try balloc.printSentinel(
                     "in/{s}",
                     .{inp},
                     0,
                 );
                 try rootfs_dir.createDirPath(io, target_in);
-                const host_in = try alloc.printSentinel(
+                const host_in = try balloc.printSentinel(
                     paths.artifact,
                     task.id.w_d(inp),
                     0,
@@ -513,13 +520,14 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             }
 
             for (spec.outputs) |out| {
-                const target_out = try alloc.printSentinel(
+                defer _ = barena.reset(.retain_capacity);
+                const target_out = try balloc.printSentinel(
                     "out/{s}",
                     .{out},
                     0,
                 );
                 try rootfs_dir.createDirPath(io, target_out);
-                const host_out = try alloc.printSentinel(
+                const host_out = try balloc.printSentinel(
                     paths.scratch_output,
                     task.id.wpd_(out),
                     0,
@@ -528,13 +536,14 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             }
 
             for (spec.keep) |k| {
-                const target_keep = try alloc.printSentinel(
+                defer _ = barena.reset(.retain_capacity);
+                const target_keep = try balloc.printSentinel(
                     "work/{s}",
                     .{k.@"1"},
                     0,
                 );
                 try rootfs_dir.createDirPath(io, target_keep);
-                const host_keep = try alloc.printSentinel(
+                const host_keep = try balloc.printSentinel(
                     paths.keep,
                     task.id.w_(k.@"0"),
                     0,
@@ -544,6 +553,31 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                     target_keep,
                     .{ .read_only = false, .allow_exec = true },
                 );
+            }
+            for (spec.tune.io.mount) |m| {
+                defer _ = barena.reset(.retain_capacity);
+                const target, const mode, const source = m;
+                const target_nul = try balloc.dupeSentinel(u8, target, 0);
+                const source_nul = try balloc.dupeSentinel(u8, source, 0);
+                switch (mode) {
+                    .read => try mount.bind(
+                        source_nul,
+                        target_nul,
+                        .{ .allow_exec = true },
+                    ),
+                    .read_write => try mount.bind(
+                        source_nul,
+                        target_nul,
+                        .{ .read_only = false, .allow_exec = true },
+                    ),
+                    .tmpfs => try mount.mount_fs(
+                        "tmpfs",
+                        target_nul,
+                        "tmpfs",
+                        "mode=1777",
+                        true,
+                    ),
+                }
             }
         }
 
@@ -576,32 +610,52 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
 
         try rootfs_dir.createDirPath(io, "in");
         for (spec.inputs) |inp| {
-            const host_in = try alloc.printSentinel(paths.artifact, task.id.w_d(inp), 0);
-            const target_in = try alloc.printSentinel("in/{s}", .{inp}, 0);
+            defer _ = barena.reset(.retain_capacity);
+            const host_in = try balloc.printSentinel(paths.artifact, task.id.w_d(inp), 0);
+            const target_in = try balloc.printSentinel("in/{s}", .{inp}, 0);
             _ = std.os.linux.symlinkat(host_in.ptr, rootfs_dir.handle, target_in.ptr);
         }
 
         try rootfs_dir.createDirPath(io, "out");
         for (spec.outputs) |out| {
-            const host_out = try alloc.printSentinel(paths.scratch_output, task.id.wpd_(out), 0);
-            const target_out = try alloc.printSentinel("out/{s}", .{out}, 0);
+            defer _ = barena.reset(.retain_capacity);
+            const host_out = try balloc.printSentinel(paths.scratch_output, task.id.wpd_(out), 0);
+            const target_out = try balloc.printSentinel("out/{s}", .{out}, 0);
             _ = std.os.linux.symlinkat(host_out.ptr, rootfs_dir.handle, target_out.ptr);
         }
 
         var cwd_dir = try cwd.openDir(io, host_cwd, .{});
         defer cwd_dir.close(io);
+        const root_dir = try cwd.openDir(io, "/", .{});
+        defer root_dir.close(io);
         for (spec.keep) |k| {
-            const host_keep = try alloc.printSentinel(paths.keep, task.id.w_(k.@"0"), 0);
-            const target_keep = try alloc.printSentinel("{s}", .{k.@"1"}, 0);
+            defer _ = barena.reset(.retain_capacity);
+            const host_keep = try balloc.printSentinel(paths.keep, task.id.w_(k.@"0"), 0);
+            const target_keep = try balloc.printSentinel("{s}", .{k.@"1"}, 0);
             _ = std.os.linux.symlinkat(host_keep.ptr, cwd_dir.handle, target_keep.ptr);
+        }
+        for (spec.tune.io.mount) |m| {
+            defer _ = barena.reset(.retain_capacity);
+            const target, const mode, const source = m;
+            const source_nul = try balloc.dupeSentinel(u8, source, 0);
+            const target_nul = try balloc.printSentinel("/{s}", .{target}, 0);
+            switch (mode) {
+                .read, .read_write => _ = std.os.linux.symlinkat(source_nul.ptr, cwd_dir.handle, target_nul.ptr),
+                .tmpfs => {
+                    var rand: [1 << 5]u8 = undefined;
+                    io.random(&rand);
+                    const tmp_path = try balloc.printSentinel("/tmp/weft-tmp/{s}", .{&std.fmt.bytesToHex(rand, .lower)}, 0);
+                    try cwd_dir.createDirPath(io, tmp_path);
+                    _ = std.os.linux.symlinkat(source_nul.ptr, cwd_dir.handle, tmp_path.ptr);
+                },
+            }
         }
 
         if (std.os.linux.errno(std.os.linux.chdir(host_cwd.ptr)) != .SUCCESS)
             return error.ChdirFailed;
     }
 
-    // Drop privileges to workspace UID/GID
-    l.debug("dropping privileges to uid {d}", .{uid}); //debug
+    l.debug("dropping privileges to uid {d}", .{uid});
     if (std.os.linux.errno(std.os.linux.syscall2(.setgroups, 0, 0)) != .SUCCESS)
         return error.SetGroupsFailed;
     if (std.os.linux.errno(std.os.linux.setresgid(uid, uid, uid)) != .SUCCESS)
@@ -612,10 +666,10 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         return error.NoNewPrivsFailed;
 
     var env_map = env_map: {
-        var env_map: std.process.Environ.Map = .init(alloc);
+        var env_map: std.process.Environ.Map = .init(gpa);
         errdefer env_map.deinit();
 
-        var path_writer: std.Io.Writer.Allocating = .init(alloc);
+        var path_writer: std.Io.Writer.Allocating = .init(gpa);
         defer path_writer.deinit();
 
         for (spec.pkgs) |pkg|
@@ -628,7 +682,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         try path_writer.writer.flush();
 
         const home_val = if (isolate.mount)
-            try std.fmt.allocPrint(alloc, "/home/{s}", .{username})
+            try alloc.print("/home/{s}", .{username})
         else
             host_home;
 
@@ -653,7 +707,12 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
     defer env_map.deinit();
     l.debug("environment ready, spawning entry", .{}); //debug
 
-    const entry_path = if (isolate.mount) "/entry" else try alloc.print("{s}entry", .{rootfs_path});
+    const entry_path = if (isolate.mount)
+        "/entry"
+    else
+        try alloc.print("{s}entry", .{rootfs_path});
+
+    _ = barena.reset(.free_all);
     const child = try std.process.spawn(io, .{
         .argv = &.{entry_path},
         .environ_map = &env_map,
