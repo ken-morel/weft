@@ -165,7 +165,7 @@ pub const InitSystem = enum {
             .argv = cmd,
         });
         const term = try child.wait(io);
-        if (!term.success() or term.exited != 0) {
+        if (term != .exited or term.exited != 0) {
             l.err("Error spawning task: {any}", .{term});
             return error.CallFailed;
         }
@@ -360,6 +360,8 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
 
         const target = if (cwd.access(io, try alloc.print("/bin/{s}", .{tool}), .{})) |_|
             try alloc.print("/bin/{s}", .{tool})
+        else |_| if (cwd.access(io, try alloc.print("/usr/bin/{s}", .{tool}), .{})) |_|
+            try alloc.print("/usr/bin/{s}", .{tool})
         else |_| if (cwd.access(io, try alloc.print("/usr/local/bin/{s}", .{tool}), .{})) |_|
             try alloc.print("/usr/local/bin/{s}", .{tool})
         else |_|

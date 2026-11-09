@@ -116,15 +116,26 @@ pub fn run(
             return e;
         };
 
+        var has_more_logs = false;
         if (data) |item| {
             if (item.logs) |logs| {
                 try stdout.writeStreamingAll(io, logs.data);
                 offset = logs.end_offset;
+                if (logs.data.len > 0)
+                    has_more_logs = true;
             }
             status = item.status;
+            if (status) |s| switch (s) {
+                .done, .failed, .killed, .skipped, .frozen => {
+                    if (!has_more_logs)
+                        break;
+                },
+                else => {},
+            };
         } else break;
 
-        try std.Io.sleep(io, .fromSeconds(2), .awake);
+        if (!has_more_logs)
+            try std.Io.sleep(io, .fromSeconds(2), .awake);
     }
 
     if (status) |s| switch (s) {
