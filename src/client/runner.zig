@@ -34,7 +34,8 @@ pub fn run_deployment(
     const remotes = try deployment.config.remotes_with_local_leaky(alloc);
     const identity = inst.identity;
 
-    var view: View = .init(gpa, term, &deployment.id.to_string());
+    var depl_buf = deployment.id.to_string();
+    var view: View = .init(gpa, term, &depl_buf);
     defer view.deinit();
 
     var depl: std.Io.Mutex = .init;
@@ -382,7 +383,8 @@ pub fn run_task(
         return error.InvalidRemote;
     }
 
-    var view: View = .init(gpa, term, &deployment.id.to_string());
+    var depl_buf = deployment.id.to_string();
+    var view: View = .init(gpa, term, &depl_buf);
     defer view.deinit();
 
     var depl: std.Io.Mutex = .init;

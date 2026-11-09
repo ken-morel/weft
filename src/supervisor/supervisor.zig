@@ -20,6 +20,8 @@ pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate
     const isolate_arg = try gpa.print("{d}", .{@backingInt(isolate)});
     defer gpa.free(isolate_arg);
 
+    var depl_buf = id.deployment.to_string();
+
     try spawn_detach(io, .{
         .argv = &.{
             exe_path,
@@ -27,7 +29,7 @@ pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate
             "supervise",
             id.workspace,
             id.pipeline,
-            &id.deployment.to_string(),
+            &depl_buf,
             isolate_arg,
         },
     });
@@ -278,6 +280,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         };
 
         const isolate_arg = try alloc.print("{d}", .{@backingInt(isolate)});
+        var depl_buf = task.id.deployment.to_string();
         const child = try std.process.spawn(io, .{
             .argv = &.{
                 "/proc/self/exe",
@@ -285,7 +288,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 "spawn",
                 task.id.workspace,
                 task.id.pipeline,
-                &task.id.deployment.to_string(),
+                &depl_buf,
                 isolate_arg,
             },
             .start_suspended = isolate.cgroups,

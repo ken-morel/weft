@@ -51,7 +51,8 @@ pub fn run(
         .workspace = config.workspace,
     };
 
-    var view: View = .init(gpa, term, &dep_id.to_string());
+    var depl_buf = dep_id.to_string();
+    var view: View = .init(gpa, term, &depl_buf);
     view.auto_update = true;
     defer view.deinit();
 

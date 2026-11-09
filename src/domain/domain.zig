@@ -42,7 +42,12 @@ pub fn spawn_detach(io: std.Io, spawn_options: std.process.SpawnOptions) !void {
         if (child_pid != 0)
             std.os.linux.exit_group(0);
 
-        _ = std.process.spawn(io, spawn_options) catch std.os.linux.exit_group(1);
+        _ = std.process.spawn(io, spawn_options) catch |err| {
+            _ = std.os.linux.write(std.posix.STDERR_FILENO, "spawn_detach failed: ", "spawn_detach failed: ".len);
+            _ = std.os.linux.write(std.posix.STDERR_FILENO, @errorName(err).ptr, @errorName(err).len);
+            _ = std.os.linux.write(std.posix.STDERR_FILENO, "\n", 1);
+            std.os.linux.exit_group(1);
+        };
         std.os.linux.exit_group(0);
     } else {
         var status: i32 = 0;
