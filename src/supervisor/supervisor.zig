@@ -96,7 +96,10 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
 
     const l = l: {
         const log_path = try balloc.print(paths.task_log, task.id.wpd());
-        const log_file = try cwd.createFile(io, log_path, .{ .truncate = false });
+        const log_file = try cwd.createFile(io, log_path, .{
+            .truncate = false,
+            .permissions = domain.read_only_user_permissions,
+        });
 
         const in_fd = std.os.linux.open(in_fifo_path.ptr, .{ .ACCMODE = .RDWR }, 0);
         if (std.os.linux.errno(in_fd) == .SUCCESS)
@@ -478,6 +481,18 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             if (!spec.tune.net.private) {
                 try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/resolv.conf" });
                 try mount.bind("/etc/resolv.conf", "etc/resolv.conf", .{ .read_only = true });
+
+                inline for (.{
+                    .{ "/etc/ssl", "etc/ssl" },
+                    .{ "/etc/ca-certificates", "etc/ca-certificates" },
+                    .{ "/etc/pki", "etc/pki" },
+                }) |cert_pair| {
+                    if (cwd.openDir(io, cert_pair.@"0", .{})) |dir| {
+                        dir.close(io);
+                        rootfs_dir.createDirPath(io, cert_pair.@"1") catch {};
+                        mount.bind(cert_pair.@"0", cert_pair.@"1", .{ .read_only = true }) catch {};
+                    } else |_| {}
+                }
             }
 
             try mount.bind(host_home, user_home_rel, .{ .read_only = false, .allow_exec = true });
@@ -558,25 +573,33 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                 defer _ = barena.reset(.retain_capacity);
                 const target, const mode, const source = m;
                 const target_nul = try balloc.dupeSentinel(u8, target, 0);
-                const source_nul = try balloc.dupeSentinel(u8, source, 0);
                 switch (mode) {
-                    .read => try mount.bind(
-                        source_nul,
-                        target_nul,
-                        .{ .allow_exec = true },
-                    ),
-                    .read_write => try mount.bind(
-                        source_nul,
-                        target_nul,
-                        .{ .read_only = false, .allow_exec = true },
-                    ),
-                    .tmpfs => try mount.mount_fs(
-                        "tmpfs",
-                        target_nul,
-                        "tmpfs",
-                        "mode=1777",
-                        true,
-                    ),
+                    .read, .read_write => {
+                        const source_host = try balloc.printSentinel("{s}/{s}", .{ host_cwd, source }, 0);
+                        if (cwd.openDir(io, source_host, .{})) |d| {
+                            d.close(io);
+                            rootfs_dir.createDirPath(io, target) catch {};
+                        } else |_| {
+                            if (std.fs.path.dirname(target)) |p|
+                                rootfs_dir.createDirPath(io, p) catch {};
+                            rootfs_dir.writeFile(io, .{ .data = "", .sub_path = target }) catch {};
+                        }
+                        try mount.bind(
+                            source_host,
+                            target_nul,
+                            .{ .read_only = (mode == .read), .allow_exec = true },
+                        );
+                    },
+                    .tmpfs => {
+                        rootfs_dir.createDirPath(io, target) catch {};
+                        try mount.mount_fs(
+                            "tmpfs",
+                            target_nul,
+                            "tmpfs",
+                            "mode=1777",
+                            true,
+                        );
+                    },
                 }
             }
         }
@@ -637,16 +660,21 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         for (spec.tune.io.mount) |m| {
             defer _ = barena.reset(.retain_capacity);
             const target, const mode, const source = m;
-            const source_nul = try balloc.dupeSentinel(u8, source, 0);
-            const target_nul = try balloc.printSentinel("/{s}", .{target}, 0);
+            const target_nul = try balloc.dupeSentinel(u8, target, 0);
+            if (std.fs.path.dirname(target)) |p|
+                cwd_dir.createDirPath(io, p) catch {};
             switch (mode) {
-                .read, .read_write => _ = std.os.linux.symlinkat(source_nul.ptr, cwd_dir.handle, target_nul.ptr),
+                .read, .read_write => {
+                    const source_nul = try balloc.dupeSentinel(u8, source, 0);
+                    _ = std.os.linux.symlinkat(source_nul.ptr, cwd_dir.handle, target_nul.ptr);
+                },
                 .tmpfs => {
                     var rand: [1 << 5]u8 = undefined;
                     io.random(&rand);
                     const tmp_path = try balloc.printSentinel("/tmp/weft-tmp/{s}", .{&std.fmt.bytesToHex(rand, .lower)}, 0);
-                    try cwd_dir.createDirPath(io, tmp_path);
-                    _ = std.os.linux.symlinkat(source_nul.ptr, cwd_dir.handle, tmp_path.ptr);
+                    cwd.createDirPath(io, "/tmp/weft-tmp") catch {};
+                    cwd.createDirPath(io, tmp_path) catch {};
+                    _ = std.os.linux.symlinkat(tmp_path.ptr, cwd_dir.handle, target_nul.ptr);
                 },
             }
         }
