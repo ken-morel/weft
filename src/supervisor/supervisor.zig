@@ -268,7 +268,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         };
 
         const isolate_arg = try alloc.print("{d}", .{@backingInt(isolate)});
-        var child = try std.process.spawn(io, .{
+        const child = try std.process.spawn(io, .{
             .argv = &.{
                 "/proc/self/exe",
                 "supervisor",
@@ -295,7 +295,26 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         l.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
 
         try task.write_status(gpa, io, .running);
-        const term = try child.wait(io);
+        var child_status: u32 = 0;
+        const term: std.process.Child.Term = term: {
+            while (true) {
+                const res = std.os.linux.waitpid(child_pid, @ptrCast(&child_status), 0);
+                if (std.os.linux.errno(res) == .INTR)
+                    continue;
+                if (std.os.linux.errno(res) != .SUCCESS) {
+                    l.err("waitpid error: {s}", .{@tagName(std.os.linux.errno(res))});
+                    return error.TaskFailed;
+                }
+                if (std.os.linux.W.IFEXITED(child_status))
+                    break :term .{ .exited = std.os.linux.W.EXITSTATUS(child_status) }
+                else if (std.os.linux.W.IFSIGNALED(child_status))
+                    break :term .{ .signal = std.os.linux.W.TERMSIG(child_status) }
+                else if (std.os.linux.W.IFSTOPPED(child_status))
+                    break :term .{ .stopped = std.os.linux.W.STOPSIG(child_status) }
+                else
+                    break :term .{ .unknown = child_status };
+            }
+        };
         switch (term) {
             .exited => |code| l.info("task exited with code {d}", .{code}),
             .signal => |sig| l.err("task terminated by signal {s}", .{@tagName(sig)}),
