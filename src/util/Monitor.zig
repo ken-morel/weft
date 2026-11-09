@@ -1,6 +1,10 @@
 const std = @import("std");
 
+const Deployment = @import("../client/Deployment.zig");
+const paths = @import("../domain/paths.zig");
+const proto = @import("../domain/proto.zig");
 const Task = @import("../daemon/Task.zig");
+const zoto = @import("zoto.zig");
 
 prev_ticks: ?CpuTicks = null,
 
@@ -381,67 +385,389 @@ fn fetch_load(io: std.Io) struct { load: [3]f32, threads: [2]u32 } {
     };
 }
 
-fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
-    var cgroup_dir = std.Io.Dir.cwd().openDir(io, "/sys/fs/cgroup/weft", .{ .iterate = true }) catch return &.{};
-    defer cgroup_dir.close(io);
+const TaskMetrics = struct {
+    cpu_usage_usec: u64 = 0,
+    memory_bytes: u64 = 0,
+    memory_peak_bytes: u64 = 0,
+    pids: u32 = 0,
+};
 
-    var list = std.ArrayList(Stats.Service).empty;
-    errdefer list.deinit(gpa);
+fn parse_task_dir_path(path: []const u8) ?proto.task.Id {
+    var p = path;
+    while (p.len > 0 and p[p.len - 1] == '/')
+        p = p[0 .. p.len - 1];
 
-    var iter = cgroup_dir.iterate();
-    while (try iter.next(io)) |entry| {
-        if (entry.kind != .directory)
+    var it = std.mem.splitBackwardsScalar(u8, p, '/');
+    const deployment_str = it.next() orelse return null;
+    const deployment = Deployment.Id.parse(deployment_str) catch return null;
+    const pipeline = it.next() orelse return null;
+    const task_tag = it.next() orelse return null;
+    if (!std.mem.eql(u8, task_tag, "task"))
+        return null;
+    const workspace = it.next() orelse return null;
+
+    return .{
+        .workspace = workspace,
+        .pipeline = pipeline,
+        .deployment = deployment,
+    };
+}
+
+fn parse_active_name(name: []const u8) ?proto.task.Id {
+    if (name.len < 10)
+        return null;
+    const deployment_str = name[name.len - 8 ..];
+    if (name[name.len - 9] != '_')
+        return null;
+    const deployment = Deployment.Id.parse(deployment_str) catch return null;
+    const rest = name[0 .. name.len - 9];
+    const sep = std.mem.indexOfScalar(u8, rest, '_') orelse return null;
+    const workspace = rest[0..sep];
+    const pipeline = rest[sep + 1 ..];
+    if (workspace.len == 0 or pipeline.len == 0)
+        return null;
+    return .{
+        .workspace = workspace,
+        .pipeline = pipeline,
+        .deployment = deployment,
+    };
+}
+
+fn collect_proc_tree_metrics(io: std.Io, root_pid: i32, metrics: *TaskMetrics) void {
+    var proc_dir = std.Io.Dir.cwd().openDir(io, "/proc", .{ .iterate = true }) catch {
+        metrics.pids = 1;
+        return;
+    };
+    defer proc_dir.close(io);
+
+    const ProcEntry = struct {
+        pid: i32,
+        ppid: i32,
+    };
+    var procs: [512]ProcEntry = undefined;
+    var num_procs: usize = 0;
+
+    var iter = proc_dir.iterate();
+    while (iter.next(io) catch null) |entry| {
+        if (num_procs >= procs.len)
+            break;
+        const pid = std.fmt.parseInt(i32, entry.name, 10) catch continue;
+
+        var stat_path_buf: [64]u8 = undefined;
+        const stat_path = std.fmt.bufPrint(&stat_path_buf, "/proc/{d}/stat", .{pid}) catch continue;
+        var stat_buf: [512]u8 = undefined;
+        const stat_content = read_file(io, stat_path, &stat_buf) orelse continue;
+
+        const rparen = std.mem.lastIndexOfScalar(u8, stat_content, ')') orelse continue;
+        var it = std.mem.tokenizeScalar(u8, stat_content[rparen + 1 ..], ' ');
+        _ = it.next();
+        const ppid_str = it.next() orelse continue;
+        const ppid = std.fmt.parseInt(i32, ppid_str, 10) catch continue;
+
+        procs[num_procs] = .{ .pid = pid, .ppid = ppid };
+        num_procs += 1;
+    }
+
+    var in_tree: [512]bool = @splat(false);
+    for (procs[0..num_procs], 0..) |p, i| {
+        if (p.pid == root_pid) {
+            in_tree[i] = true;
+            break;
+        }
+    }
+
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (procs[0..num_procs], 0..) |p, i| {
+            if (!in_tree[i]) {
+                for (procs[0..num_procs], 0..) |parent, j| {
+                    if (in_tree[j] and p.ppid == parent.pid) {
+                        in_tree[i] = true;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    for (procs[0..num_procs], 0..) |p, i| {
+        if (!in_tree[i])
             continue;
 
-        const t = Task.from_cgroup_name(entry.name) orelse continue;
+        metrics.pids += 1;
 
-        var svc_dir = cgroup_dir.openDir(io, entry.name, .{}) catch continue;
-        defer svc_dir.close(io);
-
-        var mem_buf: [64]u8 = undefined;
-        var mem_bytes: u64 = 0;
-        if (svc_dir.openFile(io, "memory.current", .{ .mode = .read_only })) |f| {
-            defer f.close(io);
-            const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
-            mem_bytes = std.fmt.parseInt(u64, std.mem.trim(u8, mem_buf[0..n], " \t\r\n"), 10) catch 0;
-        } else |_| {}
-
-        var peak_bytes: u64 = 0;
-        if (svc_dir.openFile(io, "memory.peak", .{ .mode = .read_only })) |f| {
-            defer f.close(io);
-            const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
-            peak_bytes = std.fmt.parseInt(u64, std.mem.trim(u8, mem_buf[0..n], " \t\r\n"), 10) catch 0;
-        } else |_| {}
-
-        var cpu_stat_buf: [512]u8 = undefined;
-        var cpu_usage_usec: u64 = 0;
-        if (svc_dir.openFile(io, "cpu.stat", .{ .mode = .read_only })) |f| {
-            defer f.close(io);
-            const n = f.readPositionalAll(io, &cpu_stat_buf, 0) catch 0;
-            var clines = std.mem.splitScalar(u8, cpu_stat_buf[0..n], '\n');
-            while (clines.next()) |cline| {
-                if (std.mem.startsWith(u8, cline, "usage_usec ")) {
-                    var it = std.mem.tokenizeScalar(u8, cline["usage_usec ".len..], ' ');
-                    cpu_usage_usec = parse_next_u64(&it);
+        var statm_path_buf: [64]u8 = undefined;
+        var statm_buf: [128]u8 = undefined;
+        if (std.fmt.bufPrint(&statm_path_buf, "/proc/{d}/statm", .{p.pid})) |statm_path| {
+            if (read_file(io, statm_path, &statm_buf)) |statm_content| {
+                var it = std.mem.tokenizeScalar(u8, statm_content, ' ');
+                _ = it.next();
+                if (it.next()) |rss_str| {
+                    const rss_pages = std.fmt.parseInt(u64, rss_str, 10) catch 0;
+                    metrics.memory_bytes += rss_pages * 4096;
                 }
             }
         } else |_| {}
 
-        var pids: u32 = 0;
-        if (svc_dir.openFile(io, "pids.current", .{ .mode = .read_only })) |f| {
-            defer f.close(io);
-            const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
-            pids = std.fmt.parseInt(u32, std.mem.trim(u8, mem_buf[0..n], " \t\r\n"), 10) catch 0;
+        var stat_path_buf: [64]u8 = undefined;
+        var stat_buf: [512]u8 = undefined;
+        if (std.fmt.bufPrint(&stat_path_buf, "/proc/{d}/stat", .{p.pid})) |stat_path| {
+            if (read_file(io, stat_path, &stat_buf)) |stat_content| {
+                if (std.mem.lastIndexOfScalar(u8, stat_content, ')')) |rparen| {
+                    var it = std.mem.tokenizeScalar(u8, stat_content[rparen + 1 ..], ' ');
+                    var idx: usize = 0;
+                    var utime: u64 = 0;
+                    var stime: u64 = 0;
+                    while (it.next()) |tok| : (idx += 1) {
+                        if (idx == 11)
+                            utime = std.fmt.parseInt(u64, tok, 10) catch 0
+                        else if (idx == 12) {
+                            stime = std.fmt.parseInt(u64, tok, 10) catch 0;
+                            break;
+                        }
+                    }
+                    metrics.cpu_usage_usec += (utime + stime) * 10_000;
+                }
+            }
         } else |_| {}
-
-        try list.append(gpa, .{
-            .task = try t.dupe(gpa),
-            .cpu_usage_usec = cpu_usage_usec,
-            .memory_bytes = mem_bytes,
-            .memory_peak_bytes = peak_bytes,
-            .pids = pids,
-        });
     }
+
+    if (metrics.pids == 0)
+        metrics.pids = 1;
+    metrics.memory_peak_bytes = @max(metrics.memory_peak_bytes, metrics.memory_bytes);
+}
+
+fn is_pid_alive(pid: i32) bool {
+    const rc = std.os.linux.syscall2(.kill, @as(u32, @bitCast(pid)), 0);
+    return std.os.linux.errno(rc) != .SRCH;
+}
+
+fn collect_task_metrics(io: std.Io, tid: proto.task.Id, sup_pid: ?i32) TaskMetrics {
+    var metrics: TaskMetrics = .{};
+
+    var cg_path_buf: [256]u8 = undefined;
+    const cg_path = std.fmt.bufPrint(&cg_path_buf, "/sys/fs/cgroup/weft/{s}--{s}--{s}", .{
+        tid.workspace,
+        tid.pipeline,
+        &tid.deployment.to_string(),
+    }) catch null;
+
+    if (cg_path) |cgp| {
+        if (std.Io.Dir.cwd().openDir(io, cgp, .{})) |svc_dir| {
+            defer svc_dir.close(io);
+            var mem_buf: [64]u8 = undefined;
+            if (svc_dir.openFile(io, "pids.current", .{ .mode = .read_only })) |f| {
+                defer f.close(io);
+                const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
+                metrics.pids = std.fmt.parseInt(u32, std.mem.trim(u8, mem_buf[0..n], " \t\r\n"), 10) catch 0;
+            } else |_| {}
+
+            if (metrics.pids > 0) {
+                if (svc_dir.openFile(io, "memory.current", .{ .mode = .read_only })) |f| {
+                    defer f.close(io);
+                    const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
+                    metrics.memory_bytes = std.fmt.parseInt(u64, std.mem.trim(u8, mem_buf[0..n], " \t\r\n"), 10) catch 0;
+                } else |_| {}
+
+                if (svc_dir.openFile(io, "memory.peak", .{ .mode = .read_only })) |f| {
+                    defer f.close(io);
+                    const n = f.readPositionalAll(io, &mem_buf, 0) catch 0;
+                    metrics.memory_peak_bytes = std.fmt.parseInt(u64, std.mem.trim(u8, mem_buf[0..n], " \t\r\n"), 10) catch 0;
+                } else |_| {}
+
+                var cpu_stat_buf: [512]u8 = undefined;
+                if (svc_dir.openFile(io, "cpu.stat", .{ .mode = .read_only })) |f| {
+                    defer f.close(io);
+                    const n = f.readPositionalAll(io, &cpu_stat_buf, 0) catch 0;
+                    var clines = std.mem.splitScalar(u8, cpu_stat_buf[0..n], '\n');
+                    while (clines.next()) |cline| {
+                        if (std.mem.startsWith(u8, cline, "usage_usec ")) {
+                            var it = std.mem.tokenizeScalar(u8, cline["usage_usec ".len..], ' ');
+                            metrics.cpu_usage_usec = parse_next_u64(&it);
+                        }
+                    }
+                } else |_| {}
+
+                return metrics;
+            }
+        } else |_| {}
+    }
+
+    if (sup_pid) |sp|
+        collect_proc_tree_metrics(io, sp, &metrics);
+
+    return metrics;
+}
+
+fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
+    var list: std.ArrayList(Stats.Service) = .empty;
+    errdefer {
+        for (list.items) |svc|
+            svc.task.free_duped(gpa);
+        list.deinit(gpa);
+    }
+
+    if (std.Io.Dir.cwd().openDir(io, paths.weft_active, .{ .iterate = true })) |active_dir| {
+        defer active_dir.close(io);
+        var iter = active_dir.iterate();
+        while (iter.next(io) catch null) |entry| {
+            var task_id: ?proto.task.Id = null;
+
+            var link_buf: [std.posix.PATH_MAX]u8 = undefined;
+            if (active_dir.readLink(io, entry.name, &link_buf)) |len| {
+                task_id = parse_task_dir_path(link_buf[0..len]);
+            } else |_| {}
+
+            if (task_id == null)
+                task_id = parse_active_name(entry.name);
+
+            const tid = task_id orelse continue;
+
+            const already_added = existing: for (list.items) |existing| {
+                if (std.mem.eql(u8, existing.task.id.workspace, tid.workspace) and
+                    std.mem.eql(u8, existing.task.id.pipeline, tid.pipeline) and
+                    existing.task.id.deployment.raw == tid.deployment.raw)
+                    break :existing true;
+            } else false;
+            if (already_added)
+                continue;
+
+            var task_dir = active_dir.openDir(io, entry.name, .{}) catch continue;
+            defer task_dir.close(io);
+
+            var status_buf: [128]u8 = undefined;
+            const status_len = if (task_dir.openFile(io, "status", .{ .mode = .read_only })) |f| blk: {
+                defer f.close(io);
+                break :blk f.readPositionalAll(io, &status_buf, 0) catch 0;
+            } else |_| 0;
+            if (status_len == 0)
+                continue;
+
+            var slice: []const u8 = status_buf[0..status_len];
+            const status = zoto.deserialize(null, &slice, Task.Status, .{ .header = true }) catch continue;
+            switch (status) {
+                .preparing, .running, .harvesting, .frozen => {},
+                .done, .skipped, .failed, .killed => continue,
+            }
+
+            var pid_path_buf: [256]u8 = undefined;
+            const pid_path = std.fmt.bufPrint(&pid_path_buf, paths.task_run_pid, .{ tid.workspace, tid.pipeline, tid.deployment }) catch null;
+            var sup_pid: ?i32 = null;
+            if (pid_path) |pp| {
+                var pid_buf: [32]u8 = undefined;
+                if (read_file(io, pp, &pid_buf)) |pid_str| {
+                    const trimmed = std.mem.trim(u8, pid_str, " \t\r\n");
+                    if (std.fmt.parseInt(i32, trimmed, 10)) |p| {
+                        if (!is_pid_alive(p))
+                            continue;
+                        sup_pid = p;
+                    } else |_| {}
+                }
+            }
+
+            const metrics = collect_task_metrics(io, tid, sup_pid);
+            const t = Task{ .id = tid };
+            try list.append(gpa, .{
+                .task = try t.dupe(gpa),
+                .cpu_usage_usec = metrics.cpu_usage_usec,
+                .memory_bytes = metrics.memory_bytes,
+                .memory_peak_bytes = metrics.memory_peak_bytes,
+                .pids = metrics.pids,
+            });
+        }
+    } else |_| {}
+
+    if (std.Io.Dir.cwd().openDir(io, paths.weft_workspace, .{ .iterate = true })) |ws_dir| {
+        defer ws_dir.close(io);
+        var ws_iter = ws_dir.iterate();
+        while (ws_iter.next(io) catch null) |ws_entry| {
+            if (ws_entry.kind != .directory)
+                continue;
+
+            var scratch_path_buf: [256]u8 = undefined;
+            const scratch_path = std.fmt.bufPrint(&scratch_path_buf, "{s}/scratch", .{ws_entry.name}) catch continue;
+            var scratch_dir = ws_dir.openDir(io, scratch_path, .{ .iterate = true }) catch continue;
+            defer scratch_dir.close(io);
+
+            var pipe_iter = scratch_dir.iterate();
+            while (pipe_iter.next(io) catch null) |pipe_entry| {
+                if (pipe_entry.kind != .directory)
+                    continue;
+
+                var pipe_dir = scratch_dir.openDir(io, pipe_entry.name, .{ .iterate = true }) catch continue;
+                defer pipe_dir.close(io);
+
+                var dep_iter = pipe_dir.iterate();
+                while (dep_iter.next(io) catch null) |dep_entry| {
+                    if (dep_entry.kind != .directory)
+                        continue;
+
+                    const dep_id = Deployment.Id.parse(dep_entry.name) catch continue;
+                    const tid = proto.task.Id{
+                        .workspace = ws_entry.name,
+                        .pipeline = pipe_entry.name,
+                        .deployment = dep_id,
+                    };
+
+                    const already_added = existing: for (list.items) |existing| {
+                        if (std.mem.eql(u8, existing.task.id.workspace, tid.workspace) and
+                            std.mem.eql(u8, existing.task.id.pipeline, tid.pipeline) and
+                            existing.task.id.deployment.raw == tid.deployment.raw)
+                            break :existing true;
+                    } else false;
+                    if (already_added)
+                        continue;
+
+                    var task_path_buf: [256]u8 = undefined;
+                    const task_path = std.fmt.bufPrint(&task_path_buf, paths.task, .{ tid.workspace, tid.pipeline, tid.deployment }) catch continue;
+                    var task_dir = std.Io.Dir.cwd().openDir(io, task_path, .{}) catch continue;
+                    defer task_dir.close(io);
+
+                    var status_buf: [128]u8 = undefined;
+                    const status_len = if (task_dir.openFile(io, "status", .{ .mode = .read_only })) |f| blk: {
+                        defer f.close(io);
+                        break :blk f.readPositionalAll(io, &status_buf, 0) catch 0;
+                    } else |_| 0;
+                    if (status_len == 0)
+                        continue;
+
+                    var slice: []const u8 = status_buf[0..status_len];
+                    const status = zoto.deserialize(null, &slice, Task.Status, .{ .header = true }) catch continue;
+                    switch (status) {
+                        .preparing, .running, .harvesting, .frozen => {},
+                        .done, .skipped, .failed, .killed => continue,
+                    }
+
+                    var pid_path_buf: [256]u8 = undefined;
+                    const pid_path = std.fmt.bufPrint(&pid_path_buf, paths.task_run_pid, .{ tid.workspace, tid.pipeline, tid.deployment }) catch null;
+                    var sup_pid: ?i32 = null;
+                    if (pid_path) |pp| {
+                        var pid_buf: [32]u8 = undefined;
+                        if (read_file(io, pp, &pid_buf)) |pid_str| {
+                            const trimmed = std.mem.trim(u8, pid_str, " \t\r\n");
+                            if (std.fmt.parseInt(i32, trimmed, 10)) |p| {
+                                if (!is_pid_alive(p))
+                                    continue;
+                                sup_pid = p;
+                            } else |_| {}
+                        }
+                    }
+
+                    const metrics = collect_task_metrics(io, tid, sup_pid);
+                    const t = Task{ .id = tid };
+                    try list.append(gpa, .{
+                        .task = try t.dupe(gpa),
+                        .cpu_usage_usec = metrics.cpu_usage_usec,
+                        .memory_bytes = metrics.memory_bytes,
+                        .memory_peak_bytes = metrics.memory_peak_bytes,
+                        .pids = metrics.pids,
+                    });
+                }
+            }
+        }
+    } else |_| {}
 
     return try list.toOwnedSlice(gpa);
 }
