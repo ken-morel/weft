@@ -197,6 +197,10 @@ pub const InitSystem = enum {
                     .sub_path = "/etc/systemd/system/weft.service",
                 });
 
+                _ = _do(io, &.{ "systemctl", "stop", "weftd.service" }) catch {};
+                _ = _do(io, &.{ "systemctl", "disable", "weftd.service" }) catch {};
+                cwd.deleteFile(io, "/etc/systemd/system/weftd.service") catch {};
+
                 _ = try _do(io, &.{ "systemctl", "daemon-reload" });
                 _ = try _do(io, &.{ "systemctl", "enable", "--now", "weft.service" });
                 _ = try _do(io, &.{ "systemctl", "restart", "weft.service" });
