@@ -82,7 +82,7 @@ pub fn artifact_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, depl
         &.{ deployment_dir_path, "artifacts", pipeline },
     );
 }
-pub fn cache_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, remote: []const u8, cache: ?[]const u8) ![]const u8 {
+pub fn cache_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, remote: []const u8, cache: ?[]const u8) ![:0]const u8 {
     const rel_path = try std.fs.path.join(gpa, if (cache) |c| &.{
         ".weft",
         "caches",

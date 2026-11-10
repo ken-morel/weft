@@ -16,6 +16,7 @@ const Task = @import("Task.zig");
 
 const handlers = struct {
     const artifact = @import("./handler/artifact.zig");
+    const cache = @import("./handler/cache.zig");
     const task = @import("./handler/task.zig");
 };
 
@@ -110,6 +111,33 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
                     if (@errorReturnTrace()) |trace|
                         std.debug.dumpErrorReturnTrace(trace);
                     l.err("artifact_has failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .cache_push => {
+                const res = handlers.cache.push(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("cache_push failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .cache_pull => {
+                const res = handlers.cache.pull(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("cache_pull failed: {any}", .{err});
+                    break :err err;
+                };
+                try conn.send_object(response_buf, @TypeOf(res), res);
+            },
+            .cache_has => {
+                const res = handlers.cache.has(daemon, &conn) catch |err| err: {
+                    if (@errorReturnTrace()) |trace|
+                        std.debug.dumpErrorReturnTrace(trace);
+                    l.err("cache_has failed: {any}", .{err});
                     break :err err;
                 };
                 try conn.send_object(response_buf, @TypeOf(res), res);

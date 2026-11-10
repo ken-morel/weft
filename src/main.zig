@@ -149,27 +149,23 @@ const Argz = union(enum) {
         pub const doc = "Interact with workspace caches on a remote";
         pull: struct {
             const doc = "Pull one or more caches from a remote";
-            const doc_remote = "The remote to pull the cache from";
-            const doc_cache = "The name of the cache to pull from the remote. Ommit to pull all caches stored on the remote for this workspace";
+            const doc_source = "The remote[.cache] to pull the cache from, not specifying a cache pulls all the caches";
 
-            remote: []const u8,
-            cache: ?[]const u8 = null,
+            source: []const u8,
         },
         push: struct {
             const doc = "Push one or more caches from a remote";
-            const doc_remote = "The remote to push the cache to";
-            const doc_cache = "The name of the cache to push to the remote. Ommiting to push all caches in $(weft cache path $remote) to the remote for this workspace";
+            const doc_source = "The remote[.cache] to load the cache from locally";
+            const doc_dest = "The remote[.cache] to push the cache to";
 
-            remote: []const u8,
-            cache: ?[]const u8 = null,
+            source: []const u8,
+            dest: ?[]const u8 = null,
         },
         path: struct {
             const doc = "Get the path where a cache would be stored";
-            const doc_remote = "The remote name";
-            const doc_cache = "The cache name, ommiting this gives the root path for all caches";
+            const doc_source = "The remote[.cache] name, omit cache to output remote caches folder";
 
-            remote: []const u8,
-            cache: ?[]const u8 = null,
+            source: []const u8,
         },
     },
     task: union(enum) {
@@ -458,48 +454,26 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             //TODO: Find a better way to non-repeat, maybe forcing it to be one type and represent all of
             // them in the same way
             const config = try project.get_config_leaky(alloc, io);
-            const cache = switch (cmd) {
-                .pull => |c| c.cache,
-                .push => |c| c.cache,
-                .path => |c| c.cache,
-            };
-            const caches = if (cache) |c|
-                &.{c}
-            else caches: {
-                var keep: std.ArrayList([]const u8) = .empty;
-                defer keep.deinit(gpa);
-                for (config.pipelines) |p|
-                    for (p.keep) |k|
-                        for (keep.items) |i|
-                            if (std.mem.eql(u8, i, k.@"0"))
-                                break
-                            else
-                                try keep.append(gpa, k.@"0");
-                break :caches try keep.toOwnedSlice(alloc);
-            };
             try switch (cmd) {
-                .pull => |c| cmd_cache.run(
+                .pull => |c| cmd_cache.pull(
                     gpa,
                     io,
                     &term,
                     project,
                     config,
                     &installation,
-                    .pull,
-                    caches,
-                    c.remote,
+                    c.source,
                     &environ_map,
                 ),
-                .push => |c| cmd_cache.run(
+                .push => |c| cmd_cache.push(
                     gpa,
                     io,
                     &term,
                     project,
                     config,
                     &installation,
-                    .push,
-                    caches,
-                    c.remote,
+                    c.source,
+                    c.dest,
                     &environ_map,
                 ),
                 .path => |c| cmd_cache.path(
@@ -507,8 +481,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     io,
                     &term,
                     project,
-                    c.remote,
-                    c.cache,
+                    c.source,
                 ),
             };
         },

@@ -79,6 +79,77 @@ pub fn push_dir(
     try view.set_transfer(io, artifact, remote_name, .ready, 1.0);
 }
 
+pub fn pull_cache(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    conn: *Connection,
+    cache_id: proto.cache.Id,
+    dir_path: []const u8,
+    view: *View,
+    remote_name: []const u8,
+    cache_name: []const u8,
+) !void {
+    const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
+    defer gpa.free(conn_buffer);
+
+    try conn.send_object(conn_buffer, proto.Request, .cache_pull);
+    try conn.send_object(
+        conn_buffer,
+        proto.cache.pull.Req,
+        .{ .id = cache_id },
+    );
+
+    var status: transfer.Status = .init;
+    var group: std.Io.Group = .init;
+
+    try spawn(io, &group, transfer.pull, .{ gpa, io, conn, dir_path, true, &status });
+
+    {
+        errdefer group.cancel(io);
+        while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
+            try view.set_transfer(io, cache_name, remote_name, .pulling, progress(&status));
+    }
+    try group.await(io);
+    if (status.err) |err|
+        return err;
+
+    _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.pull.Res));
+    try view.set_transfer(io, cache_name, remote_name, .ready, 1.0);
+}
+
+pub fn push_cache(
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    conn: *Connection,
+    cache_id: proto.cache.Id,
+    dir_path: []const u8,
+    view: *View,
+    remote_name: []const u8,
+    cache_name: []const u8,
+) !void {
+    const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
+    defer gpa.free(conn_buffer);
+
+    try conn.send_object(conn_buffer, proto.Request, .cache_push);
+    try conn.send_object(conn_buffer, proto.cache.push.Req, .{ .id = cache_id });
+
+    var status: transfer.Status = .init;
+    var group: std.Io.Group = .init;
+    try spawn(io, &group, transfer.push, .{ gpa, io, conn, dir_path, true, &status });
+
+    {
+        errdefer group.cancel(io);
+        while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
+            try view.set_transfer(io, cache_name, remote_name, .pushing, progress(&status));
+    }
+    try group.await(io);
+    if (status.err) |err|
+        return err;
+
+    _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.push.Res));
+    try view.set_transfer(io, cache_name, remote_name, .ready, 1.0);
+}
+
 fn progress(status: *const transfer.Status) f32 {
     if (status.done)
         return 1.0;

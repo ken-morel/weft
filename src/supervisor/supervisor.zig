@@ -690,7 +690,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
         defer rootfs_dir.close(io);
 
-        const script = spec.script orelse no_run_script;
+        const script = spec.script orelse unreachable;
         try rootfs_dir.writeFile(io, .{
             .data = script,
             .sub_path = "entry",

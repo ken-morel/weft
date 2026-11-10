@@ -54,7 +54,24 @@ pub const artifact = struct {
     pub const Id = task.Id;
 };
 pub const cache = struct {
-    pub const push = struct {};
+    pub const Id = struct {
+        workspace: []const u8,
+        name: []const u8,
+    };
+    pub const push = struct {
+        pub const Req = struct { id: Id };
+        pub const Res = struct {};
+    };
+    pub const pull = struct {
+        pub const Req = struct { id: Id };
+        pub const Res = struct {};
+    };
+    pub const has = struct {
+        pub const Req = struct { id: Id };
+        pub const Res = struct {
+            has: bool,
+        };
+    };
 };
 pub const task = struct {
     pub const Id = struct {
@@ -146,6 +163,10 @@ pub const Request = enum(u8) {
     artifact_pull,
     artifact_has,
 
+    cache_push,
+    cache_pull,
+    cache_has,
+
     task_spawn,
     task_poll,
     task_kill,
@@ -165,6 +186,12 @@ pull_req: artifact.pull.Req,
 pull_res: artifact.pull.Res,
 has_req: artifact.has.Req,
 has_res: artifact.has.Res,
+cache_push_req: cache.push.Req,
+cache_push_res: cache.push.Res,
+cache_pull_req: cache.pull.Req,
+cache_pull_res: cache.pull.Res,
+cache_has_req: cache.has.Req,
+cache_has_res: cache.has.Res,
 spawn_req: task.spawn.Req,
 spawn_res: task.spawn.Res,
 poll_req: task.poll.Req,
