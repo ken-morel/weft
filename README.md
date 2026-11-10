@@ -1,24 +1,13 @@
 # Weft
 
-Weft is a deployment and task orchestration tool for Linux written in Zig. A single static binary with zero external dependencies serves as the CLI client, the remote daemon, and the native Linux task supervisor.
+Weft is a deployment and task orchestration tool for Linux written in Zig. A single static binary with zero external dependencies serves as the CLI client, the remote daemon, and the task supervisor.
 
-Weft is designed to target everything from bare-metal servers to severely resource-constrained environments—such as $0.30 TierHive instances, low-memory VPS hosts, unprivileged LXC/OpenVZ containers, or ephemeral environments like Google Colab—without sacrificing reproducible environments or task isolation.
+The primary goal of Weft is to make reproducible, multi-stage deployments practical even on constrained targets such as $0.30 TierHive instances, low-memory VPS hosts, unprivileged LXC or OpenVZ containers, and ephemeral environments like Google Colab, while scaling up cleanly to dedicated bare-metal servers.
 
-Instead of relying on container runtimes like Docker or Podman, or requiring a full Nix daemon on the target machine, Weft operates directly on Linux kernel primitives and upstream binary caches:
-
-- **Low-footprint daemon and adaptive isolation**: The remote daemon consumes minimal memory and adapts its sandboxing strategy (`kvm`, `lxc`, `vz`, `colab`) and worker concurrency (`tiny`, `small`, `large`) to the capabilities of the host kernel. When supported by the host, tasks run inside isolated Linux namespaces (`CLONE_NEWNS`, `NEWPID`, `NEWNET`, `NEWCGROUP`, `NEWUTS`, `NEWIPC`) with `pivot_root` and cgroups v2 resource controls.
-- **Daemon-less Nix package provisioning**: Environments declare Nix store package identifiers directly in the project configuration. The target daemon downloads and extracts `.nar` archives from upstream binary caches into `/var/lib/weft/store/` using a built-in streaming unpacker, mounting them read-only into the task sandbox without requiring Nix or NixOS on the host.
-- **Direct or stdio-tunneled transport**: Remotes can be reached over direct TCP sockets or piped through arbitrary local commands (such as SSH tunnels or custom proxy scripts) for hosts without public IP addresses.
-
-## Authentication and Wire Protocol
-
-Communication between the client and any remote daemon runs over a stateful, authenticated, and encrypted binary protocol:
-
-1. **Identity and Key Registry**: On first use, the client generates an Ed25519 keypair stored in `$XDG_CONFIG_HOME/weft/key` (or `~/.config/weft/key`). Each remote daemon maintains a directory of authorized 32-byte client public keys.
-2. **Client Hello**: Upon connecting (via TCP or child process stdio), the client sends a `ClientHello` packet containing the `weft` magic bytes, the 64-bit compile-time protocol hash (`proto.hash`), the client's Ed25519 public key, an ephemeral X25519 public key, and a 24-byte random outbound nonce.
-3. **Server Challenge**: The daemon verifies that `proto_hash` matches its own build and checks the client's public key against its authorized key store. If accepted, the daemon replies with a `ServerChallenge` containing a status byte (`ok`, `unauthorized`, or `proto_mismatch`), a 32-byte random challenge, the daemon's ephemeral X25519 public key, and a 24-byte random inbound nonce.
-4. **Signature Verification and Key Exchange**: The client signs the concatenation of the 32-byte server challenge and the 32-byte server ephemeral public key using its Ed25519 secret key, sending the 64-byte signature in a `ClientAuth` packet. Both sides compute a shared 32-byte secret via X25519 Diffie-Hellman (`scalarmult`) over their ephemeral keypairs.
-5. **Encrypted Framing (`zoto`)**: All subsequent messages are serialized using `zoto` (Weft's binary encoding format), prefixed with a 16-bit little-endian payload length, and encrypted in-place using XChaCha20-Poly1305 AEAD with incrementing directional nonces and a 16-byte authentication tag per frame.
+- Tasks run directly under a built-in Linux supervisor rather than a container runtime like Docker or Podman, avoiding background daemon bloat and image registry overhead while adapting isolation to what the host kernel permits.
+- Pipeline environments can provision packages directly from Nix package repositories without requiring NixOS or a Nix daemon on the target machine.
+- Remotes can be reached either over direct TCP connections or through arbitrary local stdio proxy commands (such as SSH tunnels or custom connection scripts) when deploying to machines without public IP addresses.
+- Client-to-daemon communication is authenticated using Ed25519 keypairs and encrypted end-to-end with XChaCha20-Poly1305 AEAD. On first use, the client generates a private key in `$XDG_CONFIG_HOME/weft/key` (or `~/.config/weft/key`). Remote daemons maintain a registry of authorized client public keys, verifying the client's signature and protocol version hash during a Diffie-Hellman key exchange before accepting commands or transferring data.
 
 ---
 
@@ -40,7 +29,7 @@ sudo chmod +x /usr/local/bin/weft
 ```yaml
 - uses: ken-morel/weft@nightly
   with:
-    version: nightly # or a specific release tag
+    version: nightly
 ```
 
 #### Building from Source
@@ -51,7 +40,7 @@ Requires Zig `0.18.0` or newer:
 zig build -Doptimize=ReleaseSafe
 ```
 
-The resulting binary is placed at `zig-out/bin/weft`.
+The compiled binary is output to `zig-out/bin/weft`.
 
 ---
 
@@ -59,143 +48,114 @@ The resulting binary is placed at `zig-out/bin/weft`.
 
 #### `weft remote`
 
-Manage and monitor remote daemons.
+- `weft remote install {[user@]{ssh_alias|domain|ip}[:port]} [isolate[-scale]]`  
+  Uploads the local `weft` binary to the target host via `scp`, runs `weft daemon install` over `ssh`, and registers the local client's public key with the remote daemon.
+  - The SSH target accepts an `~/.ssh/config` host alias, a domain name, or an IP address. Omitting `user@` defaults to `root@`, and omitting `:port` uses port 22 or the port configured in `~/.ssh/config`.
+  - The optional `[isolate[-scale]]` argument (such as `kvm-small`, `lxc-large`, `vz-tiny`, or `colab`) configures the remote daemon's containerization and worker concurrency profile, detailed in the Daemon section below.
 
-- **`weft remote install {[user@]{ssh_alias|domain|ip}[:port]} [isolate[-scale]]`**  
-  Copies the local `weft` binary to the target machine over `scp`, installs and starts the daemon service via `ssh`, and registers the local client's public key.
-  - `ssh`: Accepts an SSH config alias, domain name, or IP address. If `user@` is omitted, it defaults to `root@`. If `:port` is omitted, SSH uses port 22 or the port configured for the alias in `~/.ssh/config`.
-  - `extra` (`[isolate[-scale]]`): Optional template passed to `weft daemon install` on the remote. Combining an isolation profile and a scale profile (for example `kvm-small`, `lxc-large`, `vz-tiny`, or `colab`) configures the remote daemon for the target environment's kernel and memory constraints.
+- `weft remote register {[user@]{ssh_alias|domain|ip}[:port]} [pubkey]`  
+  Registers an authorized client public key on a remote daemon over SSH by invoking `/usr/local/bin/weft daemon register <pubkey>` on the target host.
+  - If `pubkey` (a 64-character hex Ed25519 public key) is omitted, the local client's public key is used.
 
-- **`weft remote register {[user@]{ssh_alias|domain|ip}[:port]} [pubkey]`**  
-  Registers a client Ed25519 public key on a remote daemon over SSH by invoking `/usr/local/bin/weft daemon register <pubkey>` on the target.
-  - `ssh`: Target SSH destination (`[user@]{ssh_alias|domain|ip}[:port]`).
-  - `pubkey`: Optional 64-character hex public key. If omitted, registers the local client's public key.
-
-- **`weft remote monitor [{remote_name|domain:port|ip:port|local}]`**  
-  Connects to a daemon and opens the live terminal UI displaying host CPU usage, RAM, swap, disk usage, disk I/O rates, network RX/TX rates, and active tasks.
-  - `remote`: Can be a remote name defined in `weft/weft.zon`, an explicit `host:port` socket address (usable outside of a project directory), or `local` (the default).
+- `weft remote monitor [{remote_name|domain:port|ip:port|local}]`  
+  Connects to a daemon and opens the interactive terminal monitor showing live CPU usage, RAM, swap, disk usage, disk I/O throughput, network RX/TX rates, and active tasks.
+  - The target can be a remote name declared in `weft/weft.zon`, an explicit `host:port` address (which works outside of a project directory), or `local` by default.
 
 #### `weft daemon`
 
-Manage the daemon on the local machine (Linux only).
+- `weft daemon install [isolate[-scale]]`  
+  Installs the currently running binary to `/usr/local/bin/weft`, writes the daemon configuration to `/etc/weft/weft.zon`, populates sandbox utility links, and registers and starts the service under the host's init system (`systemd`, `openrc`, or `runit`). Requires superuser privileges.
+  - The optional `[isolate[-scale]]` template selects the isolation profile (`kvm`, `lxc`, `vz`, `colab`) and worker scale profile (`tiny`, `small`, `large`), defaulting to `kvm-small`. See the Daemon section below for full details on each profile.
 
-- **`weft daemon install [isolate[-scale]]`**  
-  Installs the currently executing binary to `/usr/local/bin/weft`, writes `/etc/weft/weft.zon`, populates the sandbox utility links, and configures and starts the service under the detected init system (`systemd`, `openrc`, or `runit`). Requires root privileges.
-  - `template` (`[isolate[-scale]]`): Dash-separated combination of an isolation template and/or a scale template (defaults to `kvm-small`):
-    - **Isolation templates**:
-      - `kvm` (default): Enables `cgroups`, `mount`, `pid`, and `net` namespaces.
-      - `lxc`: Enables `mount`, `pid`, and `net` namespaces; disables `cgroups` management.
-      - `vz`: Disables all namespace and cgroup operations for restricted OpenVZ/Virtuozzo containers.
-      - `colab`: Disables all namespace and cgroup operations for unprivileged container environments.
-    - **Scale templates**:
-      - `tiny`: `max_workers = 1`, disables wire compression and decompression (suited for ultra-low-RAM instances).
-      - `small` (default): `max_workers = 4`, disables compression, enables decompression.
-      - `large`: `max_workers = 16`, enables both compression and decompression.
+- `weft daemon run`  
+  Runs the daemon in the foreground. Normally invoked by the host's service manager after installation.
 
-- **`weft daemon run`**  
-  Runs the daemon process in the foreground using the configuration in `/etc/weft/weft.zon`. Managed automatically by the system's service manager after `weft daemon install`.
-
-- **`weft daemon register <key>`**  
-  Adds a 64-character hex-encoded Ed25519 public key to the local daemon's authorized keys directory and signals the running daemon via IPC to reload its key store without restarting.
+- `weft daemon register <key>`  
+  Adds a 64-character hex Ed25519 public key to `/etc/weft/keys` and notifies the running local daemon over IPC to reload its authorized keys without restarting.
 
 #### `weft do`
 
-- **`weft do {[mode:][remote.]pipeline ...}`**  
-  Resolves the dependency graph for one or more target steps, packages required local sources, transfers missing artifacts between remotes, and executes the pipelines across the target remotes while rendering progress in the terminal UI.
-  - Target syntax: `[<mode>:][<remote>.]<pipeline>`.
-  - If `<remote>.` is omitted, the target defaults to `local.<pipeline>`.
-  - If `<mode>:` is omitted on the first target, it defaults to `default`. When multiple targets are passed, an omitted `<mode>:` inherits the mode specified on the preceding target (for example, `weft do prod:ds.migrate ds.server` runs both targets under mode `prod`).
+- `weft do {[mode:][remote.]pipeline ...}`  
+  Resolves the dependency graph for one or more targets, packages required local sources, transfers missing artifacts between remotes, and executes the pipelines across the target remotes while displaying live status in the terminal UI.
+  - Omitting `<remote>.` defaults the target remote to `local`.
+  - Omitting `<mode>:` on the first target defaults to `default`. When multiple targets are given on the command line, any target without an explicit `<mode>:` prefix inherits the mode of the preceding target (for example, `weft do prod:ds.migrate ds.server` executes both steps under mode `prod`).
 
 #### `weft resume`
 
-- **`weft resume [deployment]`**  
-  Resumes an interrupted or failed deployment from its recorded state in `.weft/`, skipping steps whose outputs are already satisfied and retrying unfinished steps.
-  - `deployment`: Full deployment ID or a unique trailing suffix of the deployment ID. Defaults to the latest deployment in `.weft/`.
+- `weft resume [deployment]`  
+  Resumes an interrupted or failed deployment using its recorded state in `.weft/`, skipping steps whose outputs are already present and retrying incomplete or failed steps.
+  - `deployment` accepts either a full deployment ID or a unique trailing character suffix, and defaults to the latest deployment in `.weft/`.
 
 #### `weft task`
 
-Inspect or control individual pipeline executions within a deployment.
+- `weft task spawn {[mode:][remote.]pipeline} [deployment]`  
+  Spawns a single pipeline step in a deployment without resolving or running its upstream dependencies. All input artifacts required by the pipeline must already be registered in the specified deployment (defaults to latest).
 
-- **`weft task spawn {[mode:][remote.]pipeline} [deployment]`**  
-  Spawns a single pipeline step on the specified remote within an existing deployment without resolving or executing its upstream dependencies. Expects required input artifacts to already be registered in the deployment.
-  - `step`: Target specifier (`<pipeline>`, `<remote>.<pipeline>`, or `<mode>:<remote>.<pipeline>`).
-  - `deployment`: Deployment ID or unique suffix (defaults to latest).
+- `weft task kill {[mode:][remote.]pipeline} [deployment]`  
+  Terminates the running task for the specified pipeline step in the given deployment (defaults to latest).
 
-- **`weft task kill {[mode:][remote.]pipeline} [deployment]`**  
-  Sends a kill request to the remote daemon to terminate the running process group for the specified pipeline step.
-  - `step`: Target specifier (`<pipeline>`, `<remote>.<pipeline>`, or `<mode>:<remote>.<pipeline>`).
-  - `deployment`: Deployment ID or unique suffix (defaults to latest).
-
-- **`weft task logs {[mode:][remote.]pipeline} [deployment]`**  
-  Fetches and streams the stdout/stderr log output of a running or completed pipeline step from its remote.
-  - `step`: Target specifier (`<pipeline>`, `<remote>.<pipeline>`, or `<mode>:<remote>.<pipeline>`).
-  - `deployment`: Deployment ID or unique suffix (defaults to latest).
+- `weft task logs {[mode:][remote.]pipeline} [deployment]`  
+  Streams or prints the combined stdout/stderr logs for a running or completed pipeline step in the given deployment (defaults to latest).
 
 #### `weft artifact`
 
-Transfer and inspect versioned deployment artifacts stored under `.weft/<deployment>/artifacts/`.
+- `weft artifact pull <name> [remote] [deployment]`  
+  Downloads artifact `<name>` from `<remote>` (defaults to `local`) in `<deployment>` (defaults to latest) into the local `.weft/<deployment>/artifacts/<name>` directory and records `local` as holding the artifact.
 
-- **`weft artifact pull <name> [remote] [deployment]`**  
-  Downloads artifact `<name>` from `<remote>` (defaults to `local`) for `<deployment>` (defaults to latest) into the local deployment directory and records `"local"` as a holder of the artifact.
+- `weft artifact push <name> [remote] [deployment]`  
+  Uploads artifact or source `<name>` from the local deployment directory to `<remote>` (defaults to `local`) in `<deployment>` (defaults to latest) and records `<remote>` as holding the artifact.
 
-- **`weft artifact push <name> [remote] [deployment]`**  
-  Uploads artifact (or source) `<name>` from the local deployment directory to `<remote>` (defaults to `local`) for `<deployment>` (defaults to latest) and records `<remote>` as a holder in the deployment metadata.
+- `weft artifact register <name> [remote] [deployment]`  
+  Records `<remote>` (defaults to `local`) as holding artifact `<name>` in `<deployment>` (defaults to latest) without transferring data over the network, and prints the local expected path for that artifact.
 
-- **`weft artifact register <name> [remote] [deployment]`**  
-  Registers `<remote>` (defaults to `local`) as holding artifact `<name>` in `<deployment>` (defaults to latest) without transferring files over the network, and prints the local expected path for that artifact to stdout. Useful when external scripts populate the artifact directory directly.
-
-- **`weft artifact path <name> [deployment]`**  
-  Prints the local filesystem path where artifact `<name>` is (or would be) located for `<deployment>` (defaults to latest) without modifying deployment metadata.
+- `weft artifact path <name> [deployment]`  
+  Prints the local filesystem path where artifact `<name>` is stored for `<deployment>` (defaults to latest).
 
 #### `weft cache`
 
-Synchronize persistent workspace caches (`keep` directories) between local disk (`.weft/caches/<remote>/<cache>`) and remote daemons. `pull` transfers strictly from remote to local; `push` transfers strictly from local to a remote and errors immediately if the source cache does not exist locally.
+`pull` transfers workspace caches strictly from a remote to `.weft/caches/<remote>/<cache>` on the local machine. `push` transfers strictly from `.weft/caches/` on the local machine to a remote, verifying that the local cache exists on disk before connecting and failing immediately with `error.CacheNotFound` if it is missing.
 
-- **`weft cache pull {remote[.cache]}`**  
-  Pulls workspace cache(s) from `<remote>` into `.weft/caches/<remote>/<cache>`.
-  - `remote.cache`: Pulls the single named cache `<cache>` from `<remote>`.
-  - `remote`: Pulls all caches declared in `keep` across all pipelines in `weft/weft.zon` from `<remote>`.
+- `weft cache pull {remote[.cache]}`  
+  Pulls a specific cache when given `remote.cache`, or pulls all caches declared in `keep` across all pipelines in `weft/weft.zon` when given `remote`.
 
-- **`weft cache push {src_remote[.src_cache]} [dst_remote[.dst_cache]]`**  
-  Pushes local cache(s) from `.weft/caches/<src_remote>/` to a destination remote. Verifies that the local cache directory exists on disk before opening any network connection, returning `error.CacheNotFound` if missing. Supported forms:
-  - `weft cache push a.foo`: Pushes local `.weft/caches/a/foo` to remote `a` under cache name `foo`.
-  - `weft cache push a`: Pushes all caches currently present in `.weft/caches/a/` to remote `a`.
-  - `weft cache push a.foo b.foo` or `weft cache push a.foo b`: Pushes local `.weft/caches/a/foo` to remote `b` under cache name `foo`.
-  - `weft cache push a.foo b.bar`: Pushes local `.weft/caches/a/foo` to remote `b` under cache name `bar`.
-  - `weft cache push a b`: Pushes all caches currently present in `.weft/caches/a/` to remote `b` under their respective names.
+- `weft cache push {src_remote[.src_cache]} [dst_remote[.dst_cache]]`  
+  Pushes one or more locally stored caches to a remote.
+  - Passing `a.foo` pushes `.weft/caches/a/foo` to remote `a` as `foo`.
+  - Passing `a` pushes all caches currently present under `.weft/caches/a/` to remote `a`.
+  - Passing `a.foo b.foo` or `a.foo b` pushes `.weft/caches/a/foo` to remote `b` as `foo`.
+  - Passing `a.foo b.bar` pushes `.weft/caches/a/foo` to remote `b` under the renamed cache `bar`.
+  - Passing `a b` pushes all caches currently present under `.weft/caches/a/` to remote `b` under their respective names.
 
-- **`weft cache path {remote[.cache]}`**  
+- `weft cache path {remote[.cache]}`  
   Prints the local filesystem path `.weft/caches/<remote>[/<cache>]` without creating directories on disk.
 
 #### `weft nix`
 
-Search and inspect Nix packages via the Devbox package index for use in `.pkgs` lists.
+- `weft nix search <query>`  
+  Searches the Devbox Nix package index for `<query>` and lists matching package names and descriptions.
 
-- **`weft nix search <query>`**  
-  Queries the package index for `<query>` and prints matching package names and summaries.
-
-- **`weft nix query <name>`**  
-  Fetches release metadata for package `<name>`, listing available versions, update dates, target platforms (highlighting the current host architecture), and the exact output store paths (`<hash>-<name>-<version>`) to place in `weft/weft.zon`.
+- `weft nix query <name>`  
+  Queries available versions, release dates, platforms, and store path identifiers (`<hash>-<name>-<version>`) for package `<name>`.
 
 #### `weft check`, `weft key`, `weft decode`, `weft version`
 
-- **`weft check`**  
-  Parses and validates `weft/weft.zon`. Verifies identifier syntax, checks that all referenced environments and sources exist, detects dependency cycles across pipelines, validates inline script shebangs and referenced script files in `weft/`, and checks task resolution across remotes.
+- `weft check`  
+  Validates `weft/weft.zon`, checking identifier syntax, environment and source references, pipeline dependency cycles, script files and shebangs, and remote placement rules.
 
-- **`weft key`**  
-  Prints the local client's 64-character uppercase hex Ed25519 public key to stdout.
+- `weft key`  
+  Prints the local client's 64-character hex Ed25519 public key to stdout.
 
-- **`weft decode [file]`**  
-  Reads a `zoto`-encoded binary payload from `<file>` (or `stdin` when omitted or `-`) and pretty-prints its structure as syntax-highlighted Zig struct literals. Used to inspect `.weft/<deployment>/status` files, task specs, or raw wire packets.
+- `weft decode [file]`  
+  Decodes a `zoto`-serialized binary file (or `stdin` when omitted or `-`) and prints it as formatted Zig struct literals.
 
-- **`weft version`**  
-  Prints the Weft version, protocol hash, and build optimization mode (`Weft v<version>#<proto_hash>.<mode>`).
+- `weft version`  
+  Prints the build version, wire protocol hash, and optimization mode.
 
 ---
 
 ## 2. Project Configuration (`weft/weft.zon`)
 
-A Weft project is configured by a `weft/weft.zon` file inside the project root, alongside any pipeline or transport scripts in the `weft/` directory. `weft/weft.zon` is parsed directly into the root `Weft` Zig struct (`src/domain/Weft.zig`):
+A project is configured via `weft/weft.zon` in the project root, alongside any pipeline scripts in `weft/`. The configuration file deserializes into the root `Weft` struct (`src/domain/Weft.zig`):
 
 ```zig
 modes: []const []const u8 = &.{"default"},
@@ -209,13 +169,11 @@ remotes: []const Remote = &.{},
 retention: Retention = .{},
 ```
 
-Below is a reference of every top-level configuration option and its inner structures.
-
 ---
 
 ### `.pipelines`
 
-`pipelines` defines the build steps, tasks, migrations, and long-running services of the project. Each entry is a `Pipeline` struct:
+`pipelines` defines the tasks, build stages, migrations, and services of the workspace. Each entry is a `Pipeline` struct:
 
 ```zig
 pub const Pipeline = struct {
@@ -245,23 +203,18 @@ pub const Pipeline = struct {
 
 #### `.name`
 
-The unique identifier of the pipeline (`[]const u8`). Must begin with an ASCII letter and contain only ASCII alphanumeric characters, `-`, or `_`.
+The identifier of the pipeline (`[]const u8`). Must begin with an ASCII letter and contain only ASCII alphanumeric characters, `-`, or `_`.
 
-#### `.in` and `.out` (Inputs, Outputs, and Dependency Resolution)
+#### `.in` and `.out`
 
-Pipelines depend on one another through named **artifacts**:
+Pipelines connect to sources and to one another through artifacts declared in `.in` and `.out`:
 
-- **Sources as inputs**: An input string starting with `-` (such as `"-backend"`) refers to a local source directory named `"backend"` in the top-level `.sources` list (or `"-"` for the root source `"."` when `.sources` is `null`). Before the pipeline runs, Weft packages that source directory and transfers it to the target remote. Inside the task's working directory, the source contents are unpacked directly into `.` (or linked under `<name>`).
-- **Pipeline artifacts as inputs**: Any input string not starting with `-` refers to an output artifact produced by another pipeline. When `weft do` targets a pipeline, it walks `.in` recursively to find the producer pipeline for each required artifact, schedules upstream pipelines first, and transfers resulting artifacts to the consumer's remote if they were produced on a different machine. Inside the sandbox, each input artifact `<artifact>` is exposed at `/in/<artifact>` (or linked into the working directory).
-- **Outputs (`.out`)**: Declares the artifacts produced by this pipeline.
-  - When `.out` is `null` (the default), the pipeline implicitly produces a single artifact named after `.name`, and files written to `/out/<name>` (or the output directory) are harvested when the script exits with code `0`.
-  - When `.out` is an explicit slice (e.g. `.{ "bin", "assets" }`), the supervisor mounts output directories for each declared name and harvests each of them upon completion.
-  - When `.out = &.{}`, the pipeline produces no artifacts.
-- **Mode-conditional inputs/outputs**: Any entry in `.in` or `.out` may be prefixed with `<mode>:` (for example `"prod:migrations"`). That dependency or output is included only when the deployment is invoked under `<mode>` and ignored under other modes.
+- An entry in `.in` prefixed with `-` (for example `"-backend"`, or `"-"` for the root source) references a local source directory from `.sources`. Before the pipeline executes, the client packages that directory and uploads it to the target remote, where it is extracted into the task's working directory.
+- An entry in `.in` without a leading `-` references an output artifact produced by another pipeline. During `weft do`, Weft resolves the producer pipeline for each input, executes upstream pipelines first, transfers artifacts across remotes when the producer and consumer run on different hosts, and exposes each input artifact inside the sandbox at `$IN/<artifact>`.
+- When `.out` is `null` (the default), the pipeline implicitly declares a single output artifact with the same name as `.name`. When `.out` is provided, it specifies the exact list of artifact names produced by the pipeline (or `&.{}` for none). Files written to `$OUT/<artifact>` during execution are harvested as deployment artifacts when the task exits with code `0`.
+- Entries in `.in` and `.out` can be prefixed with `<mode>:` (such as `"prod:migrate"`), making that dependency or output active only when running under `<mode>`.
 
-#### `.run` (`Pipeline.Run`)
-
-Specifies what the pipeline executes:
+#### `.run`
 
 ```zig
 pub const Run = union(enum) {
@@ -271,19 +224,19 @@ pub const Run = union(enum) {
 };
 ```
 
-- **`.{ .script = "..." }`**: An inline script string. Must be non-empty and start with a `#!` shebang line (e.g. `#!/usr/bin/env bash`).
-- **`.{ .file = "name" }`**: Executes a script file from the project's `weft/` directory, resolving `weft/<name>` or `weft/<name>.sh`.
-- **`null` (omitted)**: Defaults to `.{ .file = pipeline.name }`, looking up `weft/<pipeline.name>` or `weft/<pipeline.name>.sh`.
-- **`.nothing`**: Marks the pipeline as a virtual target that runs no remote process. Used to group several pipelines under a single target name (for example, a `build` pipeline with `.in = .{ "backend-build", "frontend-build" }` and `.run = .nothing`).
+- Setting `.run = .{ .script = "..." }` executes the inline string as the task entry script; the string must be non-empty and start with a `#!` shebang.
+- Setting `.run = .{ .file = "name" }` loads the script from `weft/<name>` or `weft/<name>.sh` in the project directory.
+- Leaving `.run` as `null` defaults to `.{ .file = pipeline.name }`, resolving `weft/<pipeline.name>` or `weft/<pipeline.name>.sh`.
+- Setting `.run = .nothing` defines a virtual target that spawns no remote process, used to group multiple upstream pipelines in `.in` under a single target name.
 
-#### `.on` (Remote Placement Constraints)
+#### `.on`
 
-An optional list of remote names or remote group tags (`?[]const []const u8`).
+An optional list of remote names or remote group tags (`?[]const []const u8`) restricting where the pipeline is allowed to run.
 
-- When `.on` is `null`, the pipeline can execute on any remote.
-- When `.on` is specified (for example `.on = .{ "local", "builders" }`), the pipeline may only run on a remote whose name or space-separated tag list matches an entry in `.on`. If a downstream pipeline on a restricted production VPS (e.g. `prod`) depends on a heavy build pipeline restricted to `.on = .{"local"}`, running `weft do prod.app` automatically executes the build on `local` and pushes only the compiled artifact to `prod`.
+- When `.on` is `null`, the pipeline can run on any remote.
+- When `.on` is set (for example `.on = .{ "local", "build-nodes" }`), the pipeline only executes on remotes matching one of the listed names or tags. If a pipeline on another remote depends on this pipeline's output, Weft automatically schedules this pipeline on a matching remote from `.on` and transfers the resulting artifact to the downstream remote.
 
-#### `.keep` (Persistent Workspace Caches)
+#### `.keep`
 
 ```zig
 pub const Keep = struct {
@@ -292,13 +245,12 @@ pub const Keep = struct {
 };
 ```
 
-Each entry is a 2-tuple `.{ "<cache_name>", "<relative_workdir_path>" }`.
+Each entry is a tuple `.{ "<cache_name>", "<relative_workdir_path>" }` mapping a persistent workspace cache on the remote to a path inside the task's working directory.
 
-While artifacts are immutable snapshots scoped to a single deployment ID, `keep` directories persist across deployments on a given remote at `/var/lib/weft/workspaces/<workspace>/caches/<cache_name>`. When the pipeline runs, the supervisor links or mounts that persistent directory into the task's working directory at `<relative_workdir_path>`. This is used both for build caches (such as `.{ "cargo-target", "target/" }` or `.{ "web-modules", "node_modules/" }`) and for stateful service storage (such as `.{ "pg-data", "pg-data" }`). These caches can be pulled from and pushed to remotes using `weft cache`.
+- Unlike deployment artifacts, which are immutable and versioned per deployment, `keep` directories persist across deployments on the remote and are mounted or linked into the working directory at `<relative_workdir_path>` before the script starts.
+- Used both for incremental build directories (such as `.{ "cargo-target", "target/" }` or `.{ "web-modules", "node_modules/" }`) and for persistent service state (such as `.{ "pg-data", "pg-data" }`).
 
-#### `.sibling` (`Pipeline.HandleSibling`)
-
-Controls how the supervisor handles an already-running instance of the same pipeline in the same workspace on the remote:
+#### `.sibling`
 
 ```zig
 pub const HandleSibling = struct {
@@ -313,15 +265,16 @@ pub const HandleSibling = struct {
 };
 ```
 
-When a task is spawned on a remote, the supervisor checks whether another process for `<workspace>/<pipeline>` is currently active:
-1. If `wait > 0`, the supervisor polls every `poll` seconds for up to `wait` seconds waiting for the existing sibling to terminate.
-2. If the sibling is still running after `wait` seconds (or immediately when `wait == 0`), the supervisor applies `then`:
-   - **`.kill`**: Sends `SIGTERM`/`SIGKILL` to the existing sibling's process group and waits for it to exit before starting the new task. Standard for long-running services (`backend-run`, `pg_cluster`) so redeployments cleanly replace the old process.
-   - **`.ignore`**: Leaves the existing sibling running and starts the new task concurrently.
-   - **`.fail`**: Aborts the new task with an error if the sibling is still running. Useful paired with `wait` (e.g. `.{ .wait = 180, .then = .fail }`) to serialize migrations and fail if a prior migration is stuck.
-   - **`.skip`**: Exits the new task immediately without error, leaving the existing sibling untouched.
+Defines what happens when another instance of the same `<workspace>/<pipeline>` (a sibling) is already running on the remote when the task starts:
 
-#### `.env` (Packages, Variables, and Environment Inheritance)
+- When `wait > 0`, the supervisor polls every `poll` seconds for up to `wait` seconds waiting for the active sibling to exit on its own.
+- If the sibling is still running after `wait` seconds (or immediately when `wait == 0`), `then` is applied:
+  - `.kill` terminates the existing sibling's process group before starting the new task, used for redeploying long-running services.
+  - `.ignore` starts the new task alongside the existing sibling.
+  - `.fail` aborts the new task with `error.SiblingRunning`, often combined with `wait` for exclusive tasks like database migrations.
+  - `.skip` exits the new task cleanly without running its script if a sibling is active.
+
+#### `.env`
 
 ```zig
 env: struct {
@@ -331,15 +284,11 @@ env: struct {
 } = .{},
 ```
 
-- **`uses`**: List of environment names from the top-level `.environments` slice. The pipeline inherits all `pkgs` and `vars` from those environments (expanding transitive `uses` in order).
-- **`pkgs`**: List of Nix store package basenames (`"<32-char-hash>-<name>-<version>"`). Before starting the task, the daemon ensures each package is unpacked in `/var/lib/weft/store/<pkg>`, bind-mounts it read-only at `/nix/store/<pkg>` inside the sandbox, and adds `/nix/store/<pkg>/bin` to the task's `PATH`.
-- **`vars`**: List of `.{ "<KEY>", <VALUE_OR_NULL> }` pairs:
-  - `.{ "PORT", "6210" }`: Sets `PORT=6210` in the task environment.
-  - `.{ "DATABASE_URL", null }`: When the value is `null`, the value is resolved from the **client's local environment variables** when the deployment is started (or falls back to a value defined in an inherited `.environments` entry if present). This allows passing secrets from a local `.env` or CI secret store without committing sensitive values to `weft.zon`.
+- `uses` lists environment names from the top-level `.environments` slice whose `pkgs` and `vars` are inherited by the pipeline.
+- `pkgs` lists Nix store package identifiers (`"<hash>-<name>-<version>"`) to provision and add to `PATH` inside the task sandbox.
+- `vars` lists environment variable pairs `.{ "<KEY>", <VALUE_OR_NULL> }`. Providing a string literal sets the variable to that value; setting the value to `null` instructs the client to read `<KEY>` from the local host environment when starting the deployment (or fall back to an inherited environment value) and forward it to the remote task.
 
-#### `.tune` (`Pipeline.Tune`)
-
-Configures kernel-level resource limits and namespace isolation for the pipeline:
+#### `.tune`
 
 ```zig
 pub const Tune = struct {
@@ -380,31 +329,21 @@ pub const Tune = struct {
 };
 ```
 
-- **`cpu`**: Writes to the task's cgroup v2 `cpu.max` controller (`quota` and period `max` in microseconds).
-- **`mem`**:
-  - `max`: Hard memory limit in bytes (`memory.max`).
-  - `high`: Throttle threshold in bytes (`memory.high`).
-  - `swap.max`: Swap usage limit in bytes (`memory.swap.max`).
-  - `oom_score_adjust`: Adjusts the Linux OOM killer score (`/proc/self/oom_score_adj`, from `-1000` to `1000`).
-- **`net`**:
-  - `private`: When `true` (and the daemon's isolation template includes `net`), unshares `CLONE_NEWNET` so the task runs in an isolated network namespace with no external network access (useful for enforcing hermetic offline builds after dependencies are fetched).
-  - `hosts`: Content written to `/etc/hosts` inside the task sandbox.
-- **`io`**:
-  - `io_weight`: Block I/O weight in cgroup v2 (`io.weight`, `1`–`10000`).
-  - `pids_max`: Maximum number of processes/threads allowed in the task's cgroup (`pids.max`).
-  - `mount`: Additional filesystem mounts inside the sandbox, specified as `.{ "<source>", .<mode>, "<target_path>" }`, where mode is `.tmpfs`, `.read` (read-only bind mount), or `.read_write` (read-write bind mount).
+- `cpu.quota` and `cpu.max` configure the cgroup v2 `cpu.max` bandwidth quota and period in microseconds.
+- `mem.max`, `mem.high`, and `mem.swap.max` set cgroup v2 byte limits for hard memory cap, memory throttling threshold, and swap usage; `mem.oom_score_adjust` sets `/proc/self/oom_score_adj`.
+- `net.private`, when set to `true`, isolates the task in a private network namespace (`CLONE_NEWNET`) with no external network access; `net.hosts` defines the contents of `/etc/hosts` when mount isolation is active.
+- `io.io_weight` and `io.pids_max` configure cgroup v2 block I/O weight and maximum process count (`pids.max`).
+- `io.mount` specifies custom mount entries as `.{ "<target_path>", .<mode>, "<source_path>" }` where mode is `.tmpfs`, `.read` (read-only bind), or `.read_write` (read-write bind).
 
 #### `.timeout`, `.max_retries`, `.retention`
 
-- **`timeout`**: Optional maximum execution time in seconds (`?u32`).
-- **`max_retries`**: Maximum retry count on transient failure (`u16`, defaults to `10`).
-- **`retention`**: Optional per-pipeline `Retention` policy overriding the workspace-level `.retention` setting.
+- `timeout` sets an optional maximum execution duration in seconds (`?u32`).
+- `max_retries` sets the maximum number of retry attempts (`u16`, default `10`).
+- `retention` optionally overrides the top-level `Retention` policy for this pipeline.
 
 ---
 
 ### `.remotes`
-
-`remotes` defines the machines available to execute pipelines and store caches or artifacts:
 
 ```zig
 pub const Remote = struct {
@@ -418,19 +357,17 @@ pub const Remote = struct {
 pub const remote_local: Remote = .{ "local", "127.0.0.1:9338", "local" };
 ```
 
-Each remote is a 3-element tuple `.{ "<name>", "<address>", "<tags>" }`:
+Each entry in `remotes` is a 3-tuple `.{ "<name>", "<address>", "<tags>" }` representing a host running the Weft daemon:
 
-1. **Name (`remote.@"0"`)**: Identifier used in CLI targets (e.g. `weft do ds.backend-run`) and `.on` lists. A remote named `"local"` pointing to `127.0.0.1:9338` with tag `"local"` is always implicitly registered unless explicitly overridden in `.remotes`.
-2. **Address (`remote.@"1"`, parsed as `Weft.RemoteAddress`)**: Supports two transport mechanisms:
-   - **Network address (`{domain|ip}[:port]`)**: Connects over TCP to the specified hostname or IP address. If `:port` is omitted, defaults to `9338`.
-   - **Command transport (`!<script> [args...]`)**: When the address string begins with `!` (for example, `.{ "colab", "!remote colab", "colab" }`), Weft locates `<script>` inside the project's `weft/` directory (`weft/remote` or `weft/remote.sh`), spawns it with `[args...]` as a child process, and speaks the encrypted Weft wire protocol over the child process's `stdin` and `stdout`. This allows reaching remotes behind NAT, custom SSH ProxyJump chains, or cloud notebooks without exposing a public TCP port.
-3. **Tags (`remote.@"2"`)**: Space-separated group names (e.g. `"prod eu"`). Pipelines can reference any tag in their `.on` field to target a class of remotes rather than a single hardcoded host.
+- The first element is the remote name referenced in CLI targets and `.on` constraints. A `"local"` remote (`127.0.0.1:9338`, tag `"local"`) is always implicitly present unless overridden.
+- The second element is the remote address (`Weft.RemoteAddress`), which supports two forms:
+  - A network address `{domain|ip}[:port]` (defaulting to port `9338`), connected over TCP.
+  - A command transport `!<script> [args...]` (such as `"!remote colab"`), which resolves `weft/<script>` or `weft/<script>.sh` in the project directory, spawns it as a child process, and runs the encrypted wire protocol over the child's `stdin` and `stdout` pipes.
+- The third element is a space-separated string of group tags that pipelines can target in `.on`.
 
 ---
 
 ### `.environments`
-
-`environments` declares reusable named sets of Nix packages and environment variables that pipelines (or other environments) can inherit via `uses`:
 
 ```zig
 pub const Env = struct {
@@ -441,10 +378,7 @@ pub const Env = struct {
 };
 ```
 
-- **`name`**: Name of the environment, referenced in `pipeline.env.uses` or another environment's `uses`.
-- **`uses`**: Other environment names to inherit from before applying this environment's `pkgs` and `vars`.
-- **`pkgs`**: Nix store package basenames (`"<hash>-<name>-<version>"`).
-- **`vars`**: Key-value pairs `.{ "<KEY>", "<VALUE>" }` or `.{ "<KEY>", null }`. A `null` value in a shared environment acts as a declaration that the variable must be supplied either by a child environment/pipeline or from the client's host environment at runtime.
+Defines reusable named sets of Nix packages (`pkgs`), environment variables (`vars`), and parent environment references (`uses`) that can be shared across pipelines via `pipeline.env.uses`.
 
 ---
 
@@ -454,47 +388,109 @@ pub const Env = struct {
 sources: ?[]const struct { []const u8, []const u8 } = null,
 ```
 
-Maps logical source names to relative directory paths inside the project:
-
-- Each entry is `.{ "<source_name>", "<relative_path>" }` (for example, `.{ "backend", "backend/" }`).
-- Pipelines depend on a source by prefixing its name with `-` in `.in` (for example, `.in = .{"-backend"}`).
-- When `.sources` is `null`, Weft provides a single default root source `.{ "", "." }`, which pipelines can reference as `"-"`.
+Maps source names to relative directories in the project root as `.{ "<name>", "<path>" }`, referenced in pipeline `.in` lists as `"-<name>"`. When `.sources` is `null`, a single root source `.{ "", "." }` is implicitly defined and referenced as `"-"`.
 
 ---
 
-### `.workspace`
+### `.workspace`, `.modes`, `.retention`
 
 ```zig
 workspace: []const u8,
-```
-
-Required string naming the project workspace. Remote daemons use `workspace` to isolate deployments, logs, artifacts, and persistent `keep` caches on disk under `/var/lib/weft/workspaces/<workspace>/`.
-
----
-
-### `.modes`
-
-```zig
 modes: []const []const u8 = &.{"default"},
-```
+retention: Retention = .{},
 
-List of valid deployment mode names for the project (defaults to `&.{ "default" }`). Modes allow a single `weft/weft.zon` to parameterize pipeline dependency graphs via `<mode>:<artifact>` entries in `.in` and `.out` when invoked as `weft do <mode>:<remote>.<pipeline>`.
-
----
-
-### `.retention`
-
-```zig
 pub const Retention = struct {
     artifacts: u32 = 2,
     archive: u32 = 10,
 };
 ```
 
-Configures how many historical deployments the daemon retains on disk before garbage-collecting older entries (can be overridden per pipeline via `pipeline.retention`):
+- `workspace` is the required project identifier used by remote daemons to namespace all state belonging to this project on disk.
+- `modes` lists the valid execution modes (defaulting to `&.{ "default" }`) accepted in `<mode>:<remote>.<pipeline>` target specifiers and `<mode>:<artifact>` conditional inputs/outputs.
+- `retention` configures how many recent deployments keep their built output directories (`artifacts`, default `2`) and task log/status records (`archive`, default `10`) before older deployments are garbage-collected.
 
-- **`artifacts`**: Number of most recent deployments whose built output artifacts are kept on disk (defaults to `2`).
-- **`archive`**: Number of most recent deployments whose task logs and status metadata are kept in the archive (defaults to `10`).
+---
+
+## 3. The Weft Daemon
+
+### Daemon Configuration and Templates (`/etc/weft/weft.zon`)
+
+When `weft daemon install [isolate[-scale]]` runs, it generates `/etc/weft/weft.zon`, serialized from `DaemonInstall.Config` (`src/daemon/DaemonInstall.zig`):
+
+```zig
+pub const Config = struct {
+    port: u16 = 9338,
+    isolate: Isolate = .default,
+    scale: Scale = .default,
+};
+
+pub const Isolate = packed struct(u8) {
+    cgroups: bool,
+    mount: bool,
+    pid: bool,
+    net: bool,
+    _pad: u4 = 0,
+};
+
+pub const Scale = struct {
+    max_workers: u32,
+    compress: bool,
+    decompress: bool,
+};
+```
+
+#### Isolation Profiles (`Isolate`)
+
+The `isolate` struct controls which Linux kernel isolation mechanisms the supervisor uses when spawning tasks, allowing the daemon to run on kernels where certain namespaces or cgroup controllers are restricted:
+
+- `kvm` (`cgroups = true, mount = true, pid = true, net = true`, default) enables full isolation for standard Linux VMs and bare-metal servers, running tasks in dedicated mount, UTS, IPC, PID, cgroup, and (when requested) network namespaces with a `pivot_root` rootfs and cgroups v2 resource limits.
+- `lxc` (`cgroups = false, mount = true, pid = true, net = true`) targets LXC containers where unsharing mount, PID, and network namespaces is permitted, but creating or delegating child cgroup v2 hierarchies is restricted by the host container manager.
+- `vz` (`cgroups = false, mount = false, pid = false, net = false`) targets restricted OpenVZ or Virtuozzo containers where namespace `unshare` and `mount` syscalls are blocked by the kernel.
+- `colab` (`cgroups = false, mount = false, pid = false, net = false`) uses the same unprivileged execution mode as `vz` for cloud notebook and restricted container environments.
+
+#### Scale Profiles (`Scale`)
+
+The `scale` struct tunes daemon concurrency and wire transfer CPU/memory usage for the host's hardware capacity:
+
+- `tiny` (`max_workers = 1, compress = false, decompress = false`) serializes worker execution to a single thread and disables on-the-fly archive compression and decompression to minimize RAM and CPU spikes on micro-instances.
+- `small` (`max_workers = 4, compress = false, decompress = true`, default) runs up to 4 concurrent worker tasks and decompresses incoming transfers while skipping outbound compression.
+- `large` (`max_workers = 16, compress = true, decompress = true`) runs up to 16 concurrent worker tasks with bidirectional stream compression enabled.
+
+---
+
+### Daemon Filesystem Layout
+
+The daemon organizes its configuration, package store, workspace state, and runtime sandboxes across `/etc/weft`, `/var/lib/weft`, and `/run/weft` (`src/domain/paths.zig`):
+
+- `/etc/weft/weft.zon` stores the serialized `DaemonInstall.Config`, and `/etc/weft/keys` stores the newline-separated hex Ed25519 public keys of authorized clients.
+- `/var/lib/weft/bin/` contains symlinks to a curated set of host coreutils (`sh`, `bash`, `cp`, `mv`, `rm`, `tar`, `gzip`, `zstd`, `grep`, `sed`, `awk`, `find`, `weft`, etc.) exposed as `/bin` inside mount-isolated sandboxes so tasks do not inherit arbitrary host binaries from `/usr/bin`.
+- `/var/lib/weft/nix/store/` holds unpacked Nix store packages shared across all workspaces, guarded by `/var/lib/weft/nix/store/.lock`, with cached NAR metadata in `/var/lib/weft/nix/narinfo/`.
+- `/var/lib/weft/active/` holds symlinks named `<workspace>_<pipeline>_<deployment>` pointing to currently running tasks for fast sibling discovery and monitoring.
+- `/var/lib/weft/workspace/<workspace>/` stores all persistent state for a given project workspace:
+  - `uid` records the dedicated numeric Linux UID assigned to the workspace (allocated monotonically from `/var/lib/weft/workspace/uid`).
+  - `home/` provides the persistent home directory for the workspace user (`weft-<workspace>`).
+  - `keep/<cache>/` stores persistent workspace cache directories across deployments.
+  - `artifact/<artifact>/<deployment>/` stores immutable harvested artifacts and uploaded sources.
+  - `task/<pipeline>/<deployment>/` stores the persistent task record (`spec`, combined stdout/stderr `log`, and `status`).
+  - `scratch/<pipeline>/<deployment>/` holds the temporary execution working directory (`cwd/`) and staged output directories (`out/<output>/`) while a task is running.
+- `/run/weft/` holds ephemeral runtime state including the daemon `pid` file, the `weft.pipe` IPC socket, and per-task runtime directories `/run/weft/<workspace>/<pipeline>/<deployment>/` containing the supervisor `pid`, the `in` stdin FIFO, and the `root/` mount point for the task's sandbox rootfs.
+
+---
+
+### Task Spawning and the Supervisor
+
+When the daemon schedules a pipeline task, it spawns a detached `weft supervisor supervise` process for `<workspace>/<pipeline>/<deployment>` along with the daemon's `Isolate` bitmask (`src/supervisor/supervisor.zig`):
+
+- The supervisor first resolves (or assigns) the workspace's dedicated UID, fetches and unpacks any missing Nix packages listed in `spec.pkgs` into `/var/lib/weft/nix/store/`, and creates and chowns the workspace `home/`, scratch `cwd/`, staged `out/<output>/`, and persistent `keep/<cache>/` directories to the workspace UID.
+- Next, it inspects `/var/lib/weft/active/` for any running sibling of the same `<workspace>/<pipeline>`, waits up to `sibling.wait` seconds (polling every `sibling.poll` seconds), and applies `sibling.then` (`kill`, `fail`, `skip`, or `ignore`).
+- For process and resource isolation:
+  - When `isolate.pid` is enabled, the supervisor calls `unshare(CLONE_NEWPID)` before spawning the child `weft supervisor spawn` process so the spawner becomes PID 1 inside the new PID namespace. When `isolate.pid` is disabled, the spawner instead calls `setsid()` to run in a dedicated process group that is killed via `kill(-child_pid, SIGKILL)` on teardown.
+  - When `isolate.cgroups` is enabled, the supervisor creates a cgroup v2 directory for the task, applies the pipeline's `tune.cpu`, `tune.mem`, `tune.io.io_weight`, and `tune.io.pids_max` settings, places the child spawner PID into `cgroup.procs`, and destroys and kills the cgroup when the task exits. When `isolate.cgroups` is disabled, cgroup creation and resource limits are skipped.
+- Inside `weft supervisor spawn`, filesystem and network setup depend on `isolate.mount`:
+  - When `isolate.mount` is `true` (`kvm`, `lxc`), the spawner unshares `CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC` (plus `CLONE_NEWCGROUP` if `isolate.cgroups` is set, and `CLONE_NEWNET` if `isolate.net` and `tune.net.private` are set). It mounts a `16m` `tmpfs` at `/run/weft/<workspace>/<pipeline>/<deployment>/root/`, generates minimal `/etc/passwd`, `/etc/group`, and `/etc/hosts` files, bind-mounts `/var/lib/weft/nix/store` to `/nix/store`, `/var/lib/weft/bin` to `/bin`, and host `/usr/lib`, `/lib`, and `/lib64` read-only, mounts `/proc`, `/tmp`, `/dev/shm`, and `/dev/{null,zero,full,random,urandom}`, and (unless `tune.net.private` is true) bind-mounts `/etc/resolv.conf` and host CA certificates read-only. It then bind-mounts each input artifact read-only at `/in/<artifact>`, each staged output directory read-write at `/out/<output>`, each `keep` cache at `/work/<path>`, and any custom `tune.io.mount` entries, locks the root mount read-only, calls `pivot_root` into the new rootfs, and changes directory to `/work`.
+  - When `isolate.mount` is `false` (`vz`, `colab`), the spawner avoids `mount` and `pivot_root` syscalls altogether so tasks can run inside unprivileged containers. If `isolate.net` and `tune.net.private` are enabled, it unshares `CLONE_NEWNET`. It creates a host symlink from `/nix/store` to `/var/lib/weft/nix/store`, writes the entry script and creates `in/<artifact>` and `out/<output>` as symlinks inside `/run/weft/<workspace>/<pipeline>/<deployment>/root/`, creates symlinks for `keep` caches and `tune.io.mount` entries inside the task's scratch `cwd/` (emulating `.tmpfs` mounts with random directories under `/tmp/weft-tmp/`), and changes directory directly into the scratch `cwd/`.
+- Before executing the script, the spawner clears supplementary groups (`setgroups`), drops real, effective, and saved UID/GID (`setresgid`, `setresuid`) to the unprivileged workspace UID, sets `PR_SET_NO_NEW_PRIVS`, constructs the clean environment (`PATH` with `/nix/store/<pkg>/bin` entries followed by `/bin`, `HOME`, `USER`, `LOGNAME`, `TMPDIR`, `IN`, `OUT`, `WEFT_VERSION`, `WEFT_MODE`, `WEFT_WORKSPACE`, `WEFT_PIPELINE`, `WEFT_DEPLOYMENT`, and pipeline `vars`), and spawns the entry script while reaping child processes until the entry script exits.
+- If the entry script exits with status `0`, the outer supervisor transitions the task status to `harvesting`, recursively strips write permissions and resets ownership to `root:root` (`freeze_dir`) on each staged output directory, and atomically renames each output into `/var/lib/weft/workspace/<workspace>/artifact/<output>/<deployment>/` before marking the task `done`.
 
 ---
 
