@@ -176,9 +176,11 @@ pub fn load_deployment_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem
 }
 
 pub fn locate_script_in_dir(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, name: []const u8) !?[:0]const u8 {
+    const iter_dir = try dir.openDir(io, ".", .{ .iterate = true });
+    defer iter_dir.close(io);
     const script_with_dot = try std.mem.join(gpa, "", &.{ name, "." });
     defer gpa.free(script_with_dot);
-    var iter = dir.iterate();
+    var iter = iter_dir.iterate();
     while (try iter.next(io)) |entry| {
         if (entry.kind == .file and
             ((std.mem.startsWith(u8, entry.name, script_with_dot) and

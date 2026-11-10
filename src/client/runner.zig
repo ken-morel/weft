@@ -23,7 +23,7 @@ pub fn run_deployment(
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     deployment: *Deployment,
     env: ?*std.process.Environ.Map,
 ) !void {
@@ -86,7 +86,7 @@ pub fn run_deployment(
 
         while (try deployment.next_step(term)) |step| {
             const remote = for (remotes) |*remote| {
-                if (std.mem.eql(u8, remote.name, step.remote))
+                if (std.mem.eql(u8, remote.name, step.group))
                     break remote;
             } else return error.InvalidRemote;
 
@@ -114,11 +114,11 @@ pub fn run_deployment(
             defer batch_tasks.deinit(poll_arena.allocator());
 
             for (deployment.running) |step| {
-                if (!std.mem.eql(u8, step.remote, remote_name))
+                if (!std.mem.eql(u8, step.group, remote_name))
                     continue;
                 const step_task = view.get_task(
                     io,
-                    step.remote,
+                    step.group,
                     step.pipeline,
                 ) orelse continue;
                 if (!step_task.is_active())
@@ -177,7 +177,7 @@ fn poll_remote(
     fetcher: ?*Fetcher,
 ) void {
     const alloc = poll_arena.allocator();
-    const managed = clients.connect_str(io, remote.address) catch return;
+    const managed = clients.connect(io, remote.address) catch return;
     defer managed.release(io);
     const client = managed.inner;
 
@@ -266,8 +266,8 @@ fn fail_step(
 ) void {
     depl.lock(io) catch return;
     defer depl.unlock(io);
-    dep.remove_running(gpa, step.remote, step.pipeline);
-    view.set_task(io, step.remote, step.pipeline, .{ .status = .failed, .err = msg }) catch {};
+    dep.remove_running(gpa, step.group, step.pipeline);
+    view.set_task(io, step.group, step.pipeline, .{ .status = .failed, .err = msg }) catch {};
     dep.save(io, project) catch {};
 }
 
@@ -365,7 +365,7 @@ pub fn run_task(
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     deployment: *Deployment,
     step: Deployment.Step,
     env: ?*std.process.Environ.Map,
@@ -378,7 +378,7 @@ pub fn run_task(
     const identity = inst.identity;
 
     const remote = for (remotes) |*remote| {
-        if (std.mem.eql(u8, remote.name, step.remote))
+        if (std.mem.eql(u8, remote.name, step.group))
             break remote;
     } else return error.InvalidRemote;
 
@@ -390,7 +390,7 @@ pub fn run_task(
         return error.InvalidRemote;
     }
 
-    const res_status = try deployment.resolve_pipeline(term, step.pipeline, 0);
+    const res_status = try deployment.resolve_step(term, step.pipeline, 0);
     const reports_need = switch (res_status) {
         .needs, .needs_failed, .waits => true,
         else => false,
@@ -508,14 +508,14 @@ pub fn run_task(
         defer depl.unlock(io);
 
         const still_running = for (deployment.running) |running| {
-            if (std.mem.eql(u8, running.remote, step.remote) and std.mem.eql(u8, running.pipeline, step.pipeline))
+            if (std.mem.eql(u8, running.group, step.group) and std.mem.eql(u8, running.pipeline, step.pipeline))
                 break true;
         } else false;
 
         if (!still_running)
             break;
 
-        const step_task = view.get_task(io, step.remote, step.pipeline) orelse break;
+        const step_task = view.get_task(io, step.group, step.pipeline) orelse break;
         if (!step_task.is_active())
             continue;
 
@@ -535,7 +535,7 @@ pub fn run_task(
             deployment,
             &view,
             remote,
-            step.remote,
+            step.group,
             &poll_arena,
             log_buffer,
             &batch,
@@ -551,7 +551,7 @@ pub fn run_task(
         l.warn("error waiting for artifact transfers: {any}", .{err});
     try view.update(io);
 
-    const final_task = view.get_task(io, step.remote, step.pipeline) orelse {
+    const final_task = view.get_task(io, step.group, step.pipeline) orelse {
         l.err("task {s} was never registered", .{step.pipeline});
         return error.DeploymentFailed;
     };
@@ -649,10 +649,10 @@ pub fn spawn_step(
     const buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(buffer);
 
-    try view.set_task(io, step.remote, step.pipeline, .{ .status = .preparing });
+    try view.set_task(io, step.group, step.pipeline, .{ .status = .preparing });
 
     spawn_task: {
-        const managed = try fetcher.clients.connect_str(io, remote.address);
+        const managed = try fetcher.clients.connect(io, remote.address);
         defer managed.release(io);
         const client = managed.inner;
 
@@ -670,7 +670,7 @@ pub fn spawn_step(
         };
 
         if (res) |_| {
-            try view.set_task(io, step.remote, step.pipeline, .{ .status = .running });
+            try view.set_task(io, step.group, step.pipeline, .{ .status = .running });
         } else |err| {
             fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;

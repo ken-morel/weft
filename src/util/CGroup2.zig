@@ -1,6 +1,6 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const log = std.log.scoped;
+const builtin = @import("builtin");
 
 const cgroup_root = "/sys/fs/cgroup";
 const cgroup_procs = "cgroup.procs";
@@ -215,7 +215,7 @@ pub fn events_get(self: @This(), gpa: std.mem.Allocator, io: std.Io) !Events {
         } else if (std.mem.startsWith(u8, line, "frozen ")) {
             const val = std.mem.trim(u8, line["frozen ".len..], " \t\r\n");
             ev.frozen = std.mem.eql(u8, val, "1");
-        } else {}
+        }
     }
     return ev;
 }
@@ -372,8 +372,7 @@ pub fn cpu_stat_get(self: @This(), gpa: std.mem.Allocator, io: std.Io) !CpuStat 
         else if (std.mem.eql(u8, key, "nr_throttled"))
             stat.nr_throttled = val
         else if (std.mem.eql(u8, key, "throttled_usec"))
-            stat.throttled_usec = val
-        else {}
+            stat.throttled_usec = val;
     }
     return stat;
 }

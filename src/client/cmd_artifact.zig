@@ -18,7 +18,7 @@ pub fn run(
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     direction: enum { pull, push },
     name: []const u8,
     remote_name: []const u8,
@@ -62,7 +62,7 @@ pub fn run(
 
     try view.set_transfer(io, name, remote_name, status, 0.0);
 
-    var managed = clients.connect_str(
+    var managed = clients.connect(
         io,
         remote.address,
     ) catch |err| {

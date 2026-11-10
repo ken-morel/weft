@@ -15,7 +15,7 @@ pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
     project: Project,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     step: Step,
     deployment_spec: ?[]const u8,
     env: ?*std.process.Environ.Map,
@@ -25,33 +25,38 @@ pub fn run(
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const dep_id = try project.resolve_deployment_id(io, deployment_spec);
+    const needs_resolution = if (deployment_spec) |d|
+        d.len != 8
+    else
+        false;
+    const dep_id: Deployment.Id = if (needs_resolution)
+        try project.resolve_deployment_id(io, deployment_spec)
+    else
+        try .parse(deployment_spec orelse unreachable);
 
-    var deployment = project.load_deployment_leaky(gpa, alloc, io, dep_id) catch |err| {
+    const deployment = project.load_deployment_leaky(gpa, alloc, io, dep_id) catch |err| {
         l.err("failed to load deployment: {any}", .{err});
         return err;
     };
 
     const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
 
-    const pipeline_name = step.pipeline;
-    const pipeline = deployment.config.get_pipeline(pipeline_name) orelse {
-        l.err("pipeline '{s}' not found in deployment {s}", .{ pipeline_name, &deployment.id.to_string() });
-        return error.InvalidPipeline;
-    };
-
-    const remote_name = if (std.mem.eql(u8, step.remote, "_"))
+    const remote_name = if (std.mem.eql(u8, step.group, "_"))
         for (deployment.running) |run_| {
-            if (std.mem.eql(u8, run_.pipeline, pipeline_name))
-                break run_.remote;
+            if (std.mem.eql(u8, run_.pipeline, step.pipeline))
+                break run_.group;
         } else for (deployment.artifacts) |art| {
-            if (std.mem.eql(u8, art.pipeline, pipeline_name))
+            if (std.mem.eql(u8, art.pipeline, step.pipeline))
                 break art.remote;
-        } else deployment.config.select_remote_for(pipeline, null) orelse "local"
+        } else {
+            l.err("Could not find where pipeline {s} did run", .{step.pipeline});
+            return error.TaskRemoteNotFound;
+        }
     else
-        step.remote;
+        step.group;
+    // TODO: Make sure that you error if a remote isn't a group but a remote name
 
-    const remote = for (remotes) |*r| {
+    const remote = for (remotes) |r| {
         if (std.mem.eql(u8, r.name, remote_name))
             break r;
     } else {
@@ -62,7 +67,7 @@ pub fn run(
     var clients: *Client.Manager = try .create(alloc, project, inst.identity, env);
     defer clients.destroy(io);
 
-    const managed = clients.connect_str(io, remote.address) catch |err| {
+    const managed = clients.connect(io, remote.address) catch |err| {
         l.err("could not reach remote '{s}': {any}", .{ remote_name, err });
         return err;
     };
@@ -74,7 +79,7 @@ pub fn run(
     _ = try client.conn.send_object(&send_buf, proto.task.kill.Req, .{
         .workspace = deployment.config.workspace,
         .deployment = dep_id,
-        .pipeline = pipeline_name,
+        .pipeline = step.pipeline,
     });
 
     _ = try client.conn.recv_object(alloc, proto.Res(proto.task.kill.Res)) catch |err| {

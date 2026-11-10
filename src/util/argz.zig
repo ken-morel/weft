@@ -282,12 +282,10 @@ pub fn parse_value(comptime T: type, alloc: std.mem.Allocator, io: ?std.Io, val:
             ArgzParseError.InvalidArgument,
         inline .float => std.fmt.parseFloat(T, val) catch
             ArgzParseError.InvalidArgument,
-        inline .@"enum" => |E| inline for (E.fields) |field|
+        inline .@"enum" => |E| inline for (E.fields) |field| {
             if (flag_matches(field.name, val))
-                break :a @fromBackingInt(@intCast(field.value))
-            else {}
-        else
-            ArgzParseError.InvalidArgument,
+                break :a @fromBackingInt(@intCast(field.value));
+        } else ArgzParseError.InvalidArgument,
         inline .@"union" => |U| inline for (U.fields) |field| {
             if (std.mem.startsWith(u8, val, field.name ++ ":"))
                 break @unionInit(

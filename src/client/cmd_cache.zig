@@ -4,11 +4,11 @@ const log = std.log.scoped;
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const Remote = @import("Remote.zig").Remote;
-const client_remote = @import("Remote.zig");
 const Client = @import("Client.zig");
+const client_remote = @import("Remote.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Project = @import("Project.zig");
+const Remote = @import("Remote.zig").Remote;
 const transfer = @import("transfer.zig");
 const View = @import("View.zig");
 
@@ -125,7 +125,7 @@ pub fn pull(
     term: *Term,
     project: Project,
     config: Weft,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     source: []const u8,
     env: ?*std.process.Environ.Map,
 ) !void {
@@ -152,8 +152,7 @@ pub fn pull(
         if (cfg_caches.len == 0) {
             l.warn("no caches configured for workspace '{s}'", .{config.workspace});
             return;
-        } else
-            break :caches cfg_caches;
+        } else break :caches cfg_caches;
     };
 
     var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
@@ -163,7 +162,7 @@ pub fn pull(
     view.auto_update = true;
     defer view.deinit();
 
-    const managed = try clients.connect_str(io, remote.address);
+    const managed = try clients.connect(io, remote.address);
     defer managed.release(io);
     const client = managed.inner;
 
@@ -186,8 +185,7 @@ pub fn pull(
             if (err == error.FileNotFound or err == error.ArtifactNotFound) {
                 l.err("cache '{s}' not found on remote '{s}'", .{ cache_name, target.remote });
                 return error.CacheNotFound;
-            } else
-                return err;
+            } else return err;
         };
 
         try view.set_transfer(io, cache_name, target.remote, .ready, 1.0);
@@ -201,7 +199,7 @@ pub fn push(
     term: *Term,
     project: Project,
     config: Weft,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     source: []const u8,
     dest: ?[]const u8,
     env: ?*std.process.Environ.Map,
@@ -256,7 +254,7 @@ pub fn push(
         view.auto_update = true;
         defer view.deinit();
 
-        const managed = try clients.connect_str(io, dst_remote.address);
+        const managed = try clients.connect(io, dst_remote.address);
         defer managed.release(io);
         const client = managed.inner;
 
@@ -292,7 +290,7 @@ pub fn push(
         view.auto_update = true;
         defer view.deinit();
 
-        const managed = try clients.connect_str(io, dst_remote.address);
+        const managed = try clients.connect(io, dst_remote.address);
         defer managed.release(io);
         const client = managed.inner;
 

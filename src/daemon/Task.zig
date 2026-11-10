@@ -118,6 +118,22 @@ pub fn is_active(self: @This(), gpa: std.mem.Allocator, io: std.Io) !bool {
     defer cg.deinit(gpa);
     return cg.is_active(gpa, io);
 }
+pub fn send_input(self: @This(), gpa: std.mem.Allocator, io: std.Io, data: []const u8) !bool {
+    const in_path = try gpa.print(paths.task_run_in, self.id.wpd());
+    defer gpa.free(in_path);
+    const f = std.Io.Dir.cwd().openFile(io, in_path, .{
+        .allow_directory = false,
+        .lock = .exclusive,
+        .mode = .write_only,
+        .follow_symlinks = false,
+    }) catch |err|
+        return if (err == error.FileNotFound)
+            false
+        else
+            err;
+    defer f.close(io);
+    f.writeStreamingAll(io, data);
+}
 
 pub fn cgroup_name(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
     return try gpa.print("weft/{s}--{s}--{s}", .{
@@ -147,11 +163,10 @@ pub const TaskSiblingsIterator = struct {
             while (try iter.next(io)) |entry| {
                 if (entry.kind != .directory)
                     continue
-                else if (ignore_deployment) |i|
+                else if (ignore_deployment) |i| {
                     if (std.mem.eql(u8, entry.name, &i))
-                        continue
-                    else {}
-                else {
+                        continue;
+                } else {
                     const dep_id = Deployment.Id.parse(entry.name) catch continue;
                     var sibling = self.task.*;
                     sibling.id.deployment = dep_id;

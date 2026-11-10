@@ -5,6 +5,7 @@ const domain = @import("../domain/domain.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
+const CGroup2 = @import("../util/CGroup2.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
 const Crypt = @import("../wire/Crypt.zig");
@@ -13,7 +14,6 @@ const handler = @import("handler.zig");
 const Server = @import("Server.zig");
 const StatsServer = @import("StatsServer.zig");
 const Task = @import("Task.zig");
-const CGroup2 = @import("../util/CGroup2.zig");
 
 io: std.Io,
 gpa: std.mem.Allocator,
@@ -192,11 +192,12 @@ fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
 }
 
 pub fn run(self: *@This()) !void {
+    _ = std.os.linux.syscall3(.setpriority, 0, 0, 10);
     const l = log(.daemon);
     const pid = std.os.linux.getpid();
     var pid_buf: [16]u8 = undefined;
     const pid_str = std.fmt.bufPrint(&pid_buf, "{d}\n", .{pid}) catch unreachable;
-    domain.write_file_atomic(self.io, std.Io.Dir.cwd(), paths.weft_pid, pid_str, .{}) catch {};
+    try domain.write_file_atomic(self.io, std.Io.Dir.cwd(), paths.weft_pid, pid_str, .{});
     defer std.Io.Dir.cwd().deleteFile(self.io, paths.weft_pid) catch {};
 
     try paths.ensure_dirs(self.io);
@@ -206,14 +207,14 @@ pub fn run(self: *@This()) !void {
     if (self.config.isolate.cgroups) init_cgroup: {
         var root_cg = CGroup2.init_absolute_take("/sys/fs/cgroup");
         for ([_][]const u8{ "+cpu", "+memory", "+io", "+pids" }) |ctrl|
-            root_cg.subtree_control_set(self.gpa, self.io, ctrl) catch {};
+            try root_cg.subtree_control_set(self.gpa, self.io, ctrl);
 
         var weft_cg = CGroup2.init(self.gpa, "weft") catch break :init_cgroup;
         defer weft_cg.deinit(self.gpa);
         weft_cg.create(self.io) catch |err|
             l.warn("could not create /sys/fs/cgroup/weft: {any}", .{err});
         for ([_][]const u8{ "+cpu", "+memory", "+io", "+pids" }) |ctrl|
-            weft_cg.subtree_control_set(self.gpa, self.io, ctrl) catch {};
+            try weft_cg.subtree_control_set(self.gpa, self.io, ctrl);
     }
 
     var group: std.Io.Group = .init;

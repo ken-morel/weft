@@ -224,12 +224,9 @@ pub fn run(
         if (pipeline.on) |on_list| {
             for (on_list) |target| {
                 const found = for (config.remotes) |r| {
-                    if (Weft.remote_matches(r, target))
+                    if (Weft.remote_has_group(r, target))
                         break true;
-                } else if (Weft.remote_matches(Weft.remote_local, target))
-                    true
-                else
-                    false;
+                } else false;
 
                 if (!found) {
                     l.err("pipeline '{s}': .on group '{s}' does not match any remote group", .{ pipeline.name, target });

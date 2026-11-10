@@ -106,7 +106,7 @@ pub const Pipeline = struct {
     pub fn matches_remote(self: @This(), remote: anytype) bool {
         return if (self.on) |on_list|
             for (on_list) |target| {
-                if (remote_matches(remote, target))
+                if (remote_has_group(remote, target))
                     break true;
             } else false
         else
@@ -121,7 +121,6 @@ pub const Remote = struct {
     /// The remote tags seperated by spaces
     []const u8,
 };
-pub const remote_local: Remote = .{ "local", null, "local" };
 
 pub fn remote_has_group(remote: anytype, group: []const u8) bool {
     const raw_groups = if (@hasField(@TypeOf(remote), "groups"))
@@ -135,154 +134,15 @@ pub fn remote_has_group(remote: anytype, group: []const u8) bool {
     } else false;
 }
 
-pub fn remote_matches(remote: anytype, group: []const u8) bool {
-    return remote_has_group(remote, group);
-}
-
-pub fn remotes_with_local_leaky(self: @This(), ara: std.mem.Allocator) ![]const Remote {
-    for (self.remotes) |r|
-        if (std.mem.eql(u8, r.@"0", "local"))
-            return self.remotes;
-    const new_remotes = try ara.alloc(Remote, self.remotes.len + 1);
-
-    @memcpy(new_remotes[0..self.remotes.len], self.remotes);
-    new_remotes[self.remotes.len] = remote_local;
-    return new_remotes;
-}
-
 modes: []const []const u8 = &.{"default"},
 environments: []const Env = &.{},
 workspace: []const u8,
 sources: ?[]const struct { []const u8, []const u8 } = null,
 
 pipelines: []const Pipeline = &.{},
-remotes: []const Remote = &.{},
+remotes: []const Remote = &.{.{ "local", null, "local" }},
 
 retention: Retention = .{},
-
-pub const RemoteAddress = union(enum) {
-    ip: std.Io.net.IpAddress,
-    cmd: []const []const u8,
-
-    pub fn cmp(self: @This(), other: @This()) bool {
-        const s = std.meta.activeTag(self);
-        const o = std.meta.activeTag(other);
-        return s == o and
-            switch (s) {
-                .ip => self.ip.eql(&other.ip),
-                .cmd => self.cmd.len == other.cmd.len and
-                    for (self.cmd, other.cmd) |a, b| {
-                        if (!std.mem.eql(u8, a, b))
-                            break false;
-                    } else true,
-            };
-    }
-
-    pub fn parse(gpa: std.mem.Allocator, io: std.Io, addr_str: []const u8) !RemoteAddress {
-        if (addr_str.len > 0 and addr_str[0] == '!') {
-            const cmd = try parse_cmd(gpa, addr_str);
-            return .{ .cmd = cmd };
-        } else {
-            const host, const port = if (std.mem.lastIndexOfScalar(u8, addr_str, ':')) |colon|
-                .{ addr_str[0..colon], try std.fmt.parseInt(u16, addr_str[colon + 1 ..], 10) }
-            else
-                .{ addr_str, 9338 };
-
-            const ip = std.Io.net.IpAddress.parse(
-                host,
-                port,
-            ) catch blk: {
-                var results: [16]std.Io.net.HostName.LookupResult = undefined;
-                var queue: std.Io.Queue(std.Io.net.HostName.LookupResult) = .init(&results);
-                const host_name: std.Io.net.HostName = try .init(host);
-                try host_name.lookup(io, &queue, .{ .port = port });
-
-                break :blk result: while (queue.getOne(io)) |result|
-                    switch (result) {
-                        .address => |addr| break :result addr,
-                        .canonical_name => {},
-                    }
-                else |err| switch (err) {
-                    error.Closed => return error.UnknownHostName,
-                    else => |e| return e,
-                };
-            };
-            return .{ .ip = ip };
-        }
-    }
-    pub fn dupe(self: @This(), gpa: std.mem.Allocator) !@This() {
-        switch (self) {
-            .ip => return self,
-            .cmd => |cmd| {
-                var list: std.ArrayList([]const u8) = try .initCapacity(gpa, cmd.len);
-                defer list.deinit(gpa);
-                errdefer for (list.items) |c|
-                    gpa.free(c);
-                for (cmd) |c|
-                    list.appendAssumeCapacity(try gpa.dupe(u8, c));
-
-                return .{ .cmd = try list.toOwnedSlice(gpa) };
-            },
-        }
-    }
-    pub fn deinit(self: @This(), gpa: std.mem.Allocator) void {
-        switch (self) {
-            .cmd => |cmd| {
-                for (cmd) |c|
-                    gpa.free(c);
-                gpa.free(cmd);
-            },
-            .ip => {},
-        }
-    }
-    fn parse_cmd(gpa: std.mem.Allocator, raw: []const u8) ![]const []const u8 {
-        var str = raw;
-        if (str.len > 0 and str[0] == '!')
-            str = str[1..];
-        str = std.mem.trim(u8, str, " \t\r\n");
-
-        var list: std.ArrayList([]const u8) = .empty;
-        errdefer {
-            for (list.items) |item|
-                gpa.free(item);
-            list.deinit(gpa);
-        }
-
-        var i: usize = 0;
-        while (i < str.len) {
-            while (i < str.len and (str[i] == ' ' or str[i] == '\t')) : (i += 1) {}
-            if (i >= str.len)
-                break;
-
-            var token: std.ArrayList(u8) = .empty;
-            errdefer token.deinit(gpa);
-
-            while (i < str.len and str[i] != ' ' and str[i] != '\t') {
-                if (str[i] == '\'' or str[i] == '"') {
-                    const quote = str[i];
-                    i += 1;
-                    while (i < str.len and str[i] != quote) : (i += 1) {
-                        if (str[i] == '\\' and i + 1 < str.len)
-                            i += 1;
-                        try token.append(gpa, str[i]);
-                    }
-                    if (i < str.len and str[i] == quote)
-                        i += 1;
-                } else if (str[i] == '\\' and i + 1 < str.len) {
-                    i += 1;
-                    try token.append(gpa, str[i]);
-                    i += 1;
-                } else {
-                    try token.append(gpa, str[i]);
-                    i += 1;
-                }
-            }
-            try list.append(gpa, try token.toOwnedSlice(gpa));
-        }
-
-        return try list.toOwnedSlice(gpa);
-    }
-};
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
     return for (self.pipelines) |*pipeline| {
@@ -295,28 +155,14 @@ pub fn find_remote(self: @This(), name: []const u8) ?Remote {
     for (self.remotes) |r|
         if (std.mem.eql(u8, r.@"0", name))
             return r;
-    if (std.mem.eql(u8, name, "local"))
-        return remote_local;
     return null;
 }
 
-pub fn select_remote_for(self: @This(), pipeline: *const Pipeline, preferred_remote_name: ?[]const u8) ?[]const u8 {
-    if (preferred_remote_name) |pref_name|
-        if (self.find_remote(pref_name)) |pref|
-            if (pipeline.matches_remote(pref))
-                return pref_name;
-
-    const on_list = pipeline.on orelse return preferred_remote_name orelse "local";
-
-    for (on_list) |target| {
-        for (self.remotes) |r|
-            if (remote_has_group(r, target))
-                return r.@"0";
-
-        if (remote_has_group(remote_local, target))
-            return "local";
-    }
-
+pub fn select_remote_for(self: @This(), pipeline: *const Pipeline, group: []const u8) ?Remote {
+    for (self.remotes) |remote|
+        if (remote_has_group(remote, group))
+            if (pipeline.matches_remote(remote))
+                return remote;
     return null;
 }
 
@@ -352,12 +198,10 @@ pub const Env = struct {
     pkgs: []const []const u8 = &.{},
 };
 pub fn has_mode(self: @This(), mode: []const u8) bool {
-    return for (self.modes) |m|
+    return for (self.modes) |m| {
         if (std.mem.eql(u8, m, mode))
-            break true
-        else {}
-    else
-        false;
+            break true;
+    } else false;
 }
 
 pub fn strip_mode(mode: ?[]const u8, name: []const u8) ?[]const u8 {
@@ -375,10 +219,8 @@ pub fn strip_mode(mode: ?[]const u8, name: []const u8) ?[]const u8 {
 pub fn is_valid_artifact_name(name: []const u8) bool {
     return name.len > 0 and
         (std.ascii.isAlphanumeric(name[0]) or name[0] == '-') and
-        for (name[1..]) |c|
+        for (name[1..]) |c| {
             if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.')
-                break false
-            else {}
-        else
-            true;
+                break false;
+        } else true;
 }

@@ -8,6 +8,7 @@ pub const Connection = @import("../wire/Connection.zig");
 const Crypt = @import("../wire/Crypt.zig");
 const Identity = @import("../wire/Identity.zig");
 const Nonce = @import("../wire/Nonce.zig");
+const Remote = @import("Remote.zig");
 
 const Client = @This();
 
@@ -102,7 +103,7 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
     return self;
 }
 
-fn connect(gpa: std.mem.Allocator, io: std.Io, project: ?Project, addr: Weft.RemoteAddress, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
+fn connect(gpa: std.mem.Allocator, io: std.Io, project: ?Project, addr: Remote.Address, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
     const transport: Transport = transport: switch (addr) {
         .cmd => |cmd| if (project) |p| {
             if (cmd.len == 0)
@@ -163,7 +164,7 @@ pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
 
 pub const Managed = struct {
     bounded: bool,
-    address: Weft.RemoteAddress,
+    address: Remote.Address,
     inner: *Client,
     manager: *Manager,
     lock: std.Io.Mutex,
@@ -202,7 +203,7 @@ pub const Manager = struct {
         return self;
     }
 
-    pub fn connect(self: *@This(), io: std.Io, addr: Weft.RemoteAddress) !*Managed {
+    pub fn connect(self: *@This(), io: std.Io, addr: Remote.Address) !*Managed {
         try self.lock.lock(io);
         if (std.meta.activeTag(addr) == .cmd) {
             for (self.clients.items) |m|
@@ -246,11 +247,11 @@ pub const Manager = struct {
         } else return managed;
     }
 
-    pub fn connect_str(self: *@This(), io: std.Io, addr_str: []const u8) !*Managed {
-        const addr = try Weft.RemoteAddress.parse(self.gpa, io, addr_str);
-        defer addr.deinit(self.gpa);
-        return try self.connect(io, addr);
-    }
+    // pub fn connect_str(self: *@This(), io: std.Io, addr_str: []const u8) !*Managed {
+    //     const addr = try Weft.RemoteAddress.parse(self.gpa, io, addr_str);
+    //     defer addr.deinit(self.gpa);
+    //     return try self.connect(io, addr);
+    // }
 
     pub fn destroy(self: *@This(), io: std.Io) void {
         for (self.clients.items) |m| {

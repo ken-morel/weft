@@ -26,8 +26,9 @@ data_dir: std.Io.Dir,
 temp_dir: std.Io.Dir,
 identity: Identity,
 env: *const std.process.Environ.Map,
+config: Config,
 
-pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !@This() {
+pub fn init(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.Map) !@This() {
     const config_dir = try open_config_dir(gpa, io, env);
     const data_dir = try open_data_dir(gpa, io, env);
 
@@ -36,14 +37,20 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.
 
     const identity = try Identity.ensure(io, config_dir, key_file_name);
     try ensure_config(io, config_dir);
-
-    return .{
+    var self: @This() = .{
         .config_dir = config_dir,
         .data_dir = data_dir,
         .temp_dir = temp_dir,
         .identity = identity,
         .env = env,
+        .config = undefined,
     };
+
+    self.config = self.read_config_leaky(gpa, ara, io) catch |err| {
+        std.log.warn("failed to read config.zon: {any}", .{err});
+        return err;
+    };
+    return self;
 }
 
 pub fn ensure_config(io: std.Io, dir: std.Io.Dir) !void {

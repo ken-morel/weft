@@ -11,7 +11,7 @@ const zoto = @import("../util/zoto.zig");
 const mount = @import("mount.zig");
 
 const default_max_pids = 256;
-const max_freeze_depth = 32;
+const max_freeze_depth = 64;
 
 pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate: DaemonInstall.Isolate) !void {
     const exe_path = try std.process.executablePathAlloc(io, gpa);
@@ -20,8 +20,6 @@ pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate
     const isolate_arg = try gpa.print("{d}", .{@backingInt(isolate)});
     defer gpa.free(isolate_arg);
 
-    var depl_buf = id.deployment.to_string();
-
     try spawn_detach(io, .{
         .argv = &.{
             exe_path,
@@ -29,21 +27,27 @@ pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate
             "supervise",
             id.workspace,
             id.pipeline,
-            &depl_buf,
+            &id.deployment.to_string(),
             isolate_arg,
         },
     });
 }
 
 fn chown(parent: std.Io.Dir, sub_path: [:0]const u8, uid: u32, gid: u32) !void {
-    const rc = std.os.linux.fchownat(parent.handle, sub_path.ptr, uid, gid, 0);
-    if (std.os.linux.errno(rc) != .SUCCESS)
+    const log = std.log.scoped(.supervisor_chown);
+    const errno = std.os.linux.errno(std.os.linux.fchownat(parent.handle, sub_path.ptr, uid, gid, 0));
+    if (errno != .SUCCESS) {
+        log.err("Chown on {s} to {d}:{d} failed with errno {any}", .{ sub_path, uid, gid, errno });
         return error.ChownFailed;
+    }
 }
 
 fn freeze_dir(io: std.Io, dir: std.Io.Dir, depth: u8) !void {
-    if (depth > max_freeze_depth)
+    const log = std.log.scoped(.supervisor_freeze_dir);
+    if (depth > max_freeze_depth) {
+        log.err("Artifact directory too nested to freeze. Limit={d}", .{max_freeze_depth});
         return error.FreezeTooDeep;
+    }
 
     _ = std.os.linux.fchown(dir.handle, 0, 0);
     const dir_mode = (try dir.stat(io)).permissions.toMode();
@@ -78,7 +82,6 @@ fn first_active_sibling(gpa: std.mem.Allocator, io: std.Io, task: *const Task) !
 
 pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
     _ = std.os.linux.syscall3(.setpriority, 0, 0, 10);
-
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
@@ -90,13 +93,13 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     const cwd: std.Io.Dir = .cwd();
 
     const run_dir_path = try alloc.print(paths.task_run, task.id.wpd());
-    const root_path = try alloc.print(paths.task_run_root, task.id.wpd());
+    const run_root_path = try alloc.print(paths.task_run_root, task.id.wpd());
     const task_dir_path = try alloc.print(paths.task, task.id.wpd());
     const scratch_path = try alloc.print(paths.scratch, task.id.wpd());
-    const active_link = try alloc.printSentinel(paths.active_link, task.id.wpd(), 0);
+    const active_link_path = try alloc.printSentinel(paths.active_link, task.id.wpd(), 0);
     const in_fifo_path = try alloc.printSentinel(paths.task_run_in, task.id.wpd(), 0);
 
-    const l = l: {
+    const log = l: {
         const log_path = try balloc.print(paths.task_log, task.id.wpd());
         const log_file = try cwd.createFile(io, log_path, .{
             .truncate = false,
@@ -115,12 +118,12 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
 
     const cgroup_name = try task.cgroup_name(gpa);
     defer gpa.free(cgroup_name);
-    l.info("supervising task {s}", .{cgroup_name});
+    log.info("supervising task {s}", .{cgroup_name});
 
     const spec = try task.read_spec(gpa, alloc, io);
 
     if (spec.script == null) {
-        l.debug("Creating empty outputs for pipeline", .{}); //debug
+        log.debug("Creating empty outputs for pipeline", .{}); //debug
         try task.write_status(gpa, io, .done);
         for (spec.outputs) |output| {
             defer _ = barena.reset(.free_all);
@@ -138,13 +141,13 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     }
 
     ensure_dirs: {
-        try cwd.createDirPath(io, root_path);
+        try cwd.createDirPath(io, run_root_path);
         try cwd.createDirPath(io, run_dir_path);
         try cwd.createDirPath(io, scratch_path);
         try cwd.symLinkAtomic(
             io,
             task_dir_path,
-            active_link,
+            active_link_path,
             .{ .is_directory = true },
         );
         break :ensure_dirs;
@@ -152,9 +155,9 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     defer {
         cwd.deleteTree(io, run_dir_path) catch {};
         cwd.deleteTree(io, scratch_path) catch {};
-        cwd.deleteFile(io, active_link) catch {};
+        cwd.deleteFile(io, active_link_path) catch {};
     }
-    l.debug("task directories and active link ready", .{}); //debug
+    log.debug("task directories and active link ready", .{}); //debug
 
     const workspace = task.get_workspace();
     const uid = try workspace.uid(gpa, io);
@@ -174,7 +177,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     errdefer task.write_status(gpa, io, .failed) catch {};
 
     if (spec.pkgs.len > 0) {
-        l.info("preparing {d} nix package(s)...", .{spec.pkgs.len});
+        log.info("preparing {d} nix package(s)...", .{spec.pkgs.len});
         var client: std.http.Client = .{
             .io = io,
             .allocator = gpa,
@@ -182,11 +185,11 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         defer client.deinit();
 
         for (spec.pkgs) |pkg| {
-            l.debug("installing nix package {s}", .{pkg}); //debug
+            log.debug("installing nix package {s}", .{pkg}); //debug
             try nix.install_package(gpa, io, &client, pkg);
         }
 
-        l.info("all nix packages installed", .{});
+        log.info("all nix packages installed", .{});
     }
 
     prepare_files: {
@@ -212,14 +215,14 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         }
         break :prepare_files;
     }
-    l.debug("prepared home/cwd/outputs/keep directories", .{}); //debug
+    log.debug("prepared home/cwd/outputs/keep directories", .{}); //debug
 
     const skip = handle_siblings: {
-        l.info("resolving sibling policies...", .{});
+        log.info("resolving sibling policies...", .{});
 
         const do_sibling = spec.sibling;
         if (do_sibling.poll == 0) {
-            l.err("task has invalid sibling.poll of {d}", .{do_sibling.poll});
+            log.err("task has invalid sibling.poll of {d}", .{do_sibling.poll});
             return error.InvalidSiblingConfig;
         }
 
@@ -228,13 +231,13 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
             const sibling = try first_active_sibling(gpa, io, &task) orelse break;
             const sibling_cgroup_name = try sibling.cgroup_name(gpa);
             defer gpa.free(sibling_cgroup_name);
-            l.warn("waiting {d}s for active sibling {s}...", .{ do_sibling.wait - waited, sibling_cgroup_name });
+            log.warn("waiting {d}s for active sibling {s}...", .{ do_sibling.wait - waited, sibling_cgroup_name });
             try std.Io.sleep(io, .fromSeconds(do_sibling.poll), .awake);
         }
         if (waited == 0)
-            l.debug("no active siblings found", .{}); //debug
+            log.debug("no active siblings found", .{}); //debug
         if (waited > 0)
-            l.info("well, waited long enough", .{});
+            log.info("well, waited long enough", .{});
 
         switch (spec.sibling.then) {
             .ignore => {},
@@ -245,36 +248,36 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                     if (try sibling.is_active(gpa, io)) {
                         const name = try sibling.cgroup_name(gpa);
                         defer gpa.free(name);
-                        l.info("killing active sibling {s}", .{name});
+                        log.info("killing active sibling {s}", .{name});
                         try sibling.kill(gpa, io);
                     };
             },
             .fail => if (try first_active_sibling(gpa, io, &task)) |_| {
-                l.err("sibling is still active after timeout; failing task", .{});
+                log.err("sibling is still active after timeout; failing task", .{});
                 return error.SiblingRunning;
             },
             .skip => if (try first_active_sibling(gpa, io, &task)) |_| {
-                l.info("sibling is active; skipping task", .{});
+                log.info("sibling is active; skipping task", .{});
                 break :handle_siblings true;
             },
         }
         break :handle_siblings false;
     };
 
-    if (skip) {
-        l.info("task skipped", .{});
-    } else {
+    if (skip)
+        log.info("task skipped", .{})
+    else {
         if (isolate.pid) {
             if (std.os.linux.errno(std.os.linux.unshare(std.os.linux.CLONE.NEWPID)) != .SUCCESS)
                 return error.UnsharePidFailed;
-            l.debug("unshared pid namespace", .{}); //debug
+            log.debug("unshared pid namespace", .{}); //debug
         }
 
         const maybe_cgroup = if (isolate.cgroups) cg: {
             var cgroup = try task.cgroup(gpa);
             try cgroup.create(io);
-            l.debug("Configuring cgroup: {s}", .{cgroup.path});
-            l.debug("cgroup created", .{}); //debug
+            log.debug("Configuring cgroup: {s}", .{cgroup.path});
+            log.debug("cgroup created", .{}); //debug
 
             const tune = &spec.tune;
             if ((tune.cpu.quota orelse tune.cpu.max) != null)
@@ -288,7 +291,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
             if (tune.mem.swap.max) |s|
                 try cgroup.memory_swap_max_set(gpa, io, s);
             try cgroup.pids_max_set(gpa, io, tune.io.pids_max orelse default_max_pids);
-            l.debug("cgroup configured", .{}); //debug
+            log.debug("cgroup configured", .{}); //debug
             break :cg cgroup;
         } else null;
         var cgroup_mut = maybe_cgroup;
@@ -310,7 +313,6 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 &depl_buf,
                 isolate_arg,
             },
-            .start_suspended = false,
         });
         const child_pid: std.posix.pid_t = child.id orelse unreachable;
         defer if (!isolate.cgroups) {
@@ -320,7 +322,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         if (cgroup_mut) |*cgroup|
             try cgroup.procs_add(gpa, io, child_pid);
 
-        l.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
+        log.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
 
         try task.write_status(gpa, io, .running);
         var child_status: u32 = 0;
@@ -330,7 +332,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 if (std.os.linux.errno(res) == .INTR)
                     continue;
                 if (std.os.linux.errno(res) != .SUCCESS) {
-                    l.err("waitpid error: {s}", .{@tagName(std.os.linux.errno(res))});
+                    log.err("waitpid error: {s}", .{@tagName(std.os.linux.errno(res))});
                     return error.TaskFailed;
                 }
                 if (std.os.linux.W.IFEXITED(child_status))
@@ -344,20 +346,20 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
             }
         };
         switch (term) {
-            .exited => |code| l.info("task exited with code {d}", .{code}),
-            .signal => |sig| l.err("task terminated by signal {s}", .{@tagName(sig)}),
-            .stopped => |sig| l.err("task stopped by signal {s}", .{@tagName(sig)}),
-            .unknown => |code| l.err("task terminated with unknown status {d}", .{code}),
+            .exited => |code| log.info("task exited with code {d}", .{code}),
+            .signal => |sig| log.err("task terminated by signal {s}", .{@tagName(sig)}),
+            .stopped => |sig| log.err("task stopped by signal {s}", .{@tagName(sig)}),
+            .unknown => |code| log.err("task terminated with unknown status {d}", .{code}),
         }
         if (term != .exited or term.exited != 0)
             return error.TaskFailed;
     }
     try task.write_status(gpa, io, .harvesting);
-    l.info("harvesting {d} output(s)", .{spec.outputs.len});
+    log.info("harvesting {d} output(s)", .{spec.outputs.len});
 
     for (spec.outputs) |output| {
         defer _ = barena.reset(.free_all);
-        l.debug("harvesting output {s}", .{output}); //debug
+        log.debug("harvesting output {s}", .{output}); //debug
         const out_sub = try balloc.printSentinel(paths.scratch_output, task.id.wpd_(output), 0);
 
         {
@@ -385,10 +387,11 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     else
         try task.write_status(gpa, io, .done);
 
-    l.info("task completed and outputs harvested", .{});
+    log.info("task completed and outputs harvested", .{});
 }
 
 pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
+    _ = std.os.linux.syscall3(.setpriority, 0, 0, 0);
     const l = std.log.scoped(.supervisor_spawn);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -555,8 +558,8 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                 }) |cert_pair| {
                     if (cwd.openDir(io, cert_pair.@"0", .{})) |dir| {
                         dir.close(io);
-                        rootfs_dir.createDirPath(io, cert_pair.@"1") catch {};
-                        mount.bind(cert_pair.@"0", cert_pair.@"1", .{ .read_only = true }) catch {};
+                        try rootfs_dir.createDirPath(io, cert_pair.@"1");
+                        try mount.bind(cert_pair.@"0", cert_pair.@"1", .{ .read_only = true });
                     } else |_| {}
                 }
             }
@@ -647,7 +650,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                             rootfs_dir.createDirPath(io, target) catch {};
                         } else |_| {
                             if (std.fs.path.dirname(target)) |p|
-                                rootfs_dir.createDirPath(io, p) catch {};
+                                try rootfs_dir.createDirPath(io, p);
                             rootfs_dir.writeFile(io, .{ .data = "", .sub_path = target }) catch {};
                         }
                         try mount.bind(
@@ -683,9 +686,16 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                 return error.UnshareFailed;
         }
 
-        cwd.createDirPath(io, "/nix") catch {};
-        cwd.symLink(io, paths.weft_nix_store, "/nix/store", .{ .is_directory = true }) catch |e|
-            if (e != error.PathAlreadyExists) {};
+        try cwd.createDirPath(io, "/nix");
+
+        cwd.symLink(
+            io,
+            paths.weft_nix_store,
+            "/nix/store",
+            .{ .is_directory = true },
+        ) catch |e|
+            if (e != error.PathAlreadyExists)
+                return e;
 
         var rootfs_dir = try cwd.openDir(io, rootfs_path, .{});
         defer rootfs_dir.close(io);
@@ -806,12 +816,14 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
     else
         try alloc.print("{s}entry", .{rootfs_path});
 
-    _ = barena.reset(.free_all);
     const child = try std.process.spawn(io, .{
         .argv = &.{entry_path},
         .environ_map = &env_map,
     });
+    _ = barena.reset(.free_all);
     const child_pid = child.id orelse unreachable;
+
+    _ = std.os.linux.syscall3(.setpriority, 0, 0, @bitCast(@as(isize, -5)));
 
     var status: u32 = 0;
     while (true) {

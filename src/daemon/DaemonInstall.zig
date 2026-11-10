@@ -119,8 +119,7 @@ pub const InitSystem = enum {
                     &buf,
                 ) catch |e|
                     return if (e != error.FileNotFound)
-                        e
-                    else {};
+                        e;
                 const pid = std.fmt.parseInt(i32, std.mem.trim(u8, pid_content, " \n\r\t"), 10) catch return;
                 _ = std.os.linux.kill(pid, .TERM);
                 std.Io.Dir.cwd().deleteFile(io, paths.weft_pid) catch {};
@@ -369,7 +368,7 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
 
         cwd.hardLink(target, bin_dir, tool, io, .{ .follow_symlinks = true }) catch {
             cwd.copyFile(target, bin_dir, tool, io, .{}) catch continue;
-            bin_dir.setFilePermissions(io, tool, .executable_file, .{}) catch {};
+            try bin_dir.setFilePermissions(io, tool, .executable_file, .{});
         };
     }
 }

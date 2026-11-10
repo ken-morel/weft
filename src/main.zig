@@ -17,6 +17,7 @@ const cmd_task = @import("client/cmd_task.zig");
 const Deployment = @import("client/Deployment.zig");
 const cmd_do = @import("client/do.zig");
 const Project = @import("client/Project.zig");
+const Remote = @import("client/Remote.zig");
 const Step = @import("client/Step.zig");
 const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
@@ -354,7 +355,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{ .iterate = true });
             defer project_dir.close(io);
             const project = try Project.open_leaky(alloc, io, project_dir);
-            var inst = ClientInstall.init(gpa, io, &environ_map) catch null;
+            var inst = ClientInstall.init(gpa, alloc, io, &environ_map) catch null;
 
             try cmd_check.run(gpa, io, project, if (inst) |*i| i else null);
         },
@@ -367,19 +368,19 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 last_mode = tgt.mode;
             }
 
-            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
             defer project_dir.close(io);
             const project = try Project.open_leaky(alloc, io, project_dir);
 
-            return cmd_do.run(gpa, io, &term, project, &installation, .{
+            return cmd_do.run(gpa, io, &term, project, installation, .{
                 .start = .{
                     .targets = targets,
                 },
             }, &environ_map);
         },
         .@"resume" => |cmd| {
-            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
             defer project_dir.close(io);
             const project = try Project.open_leaky(alloc, io, project_dir);
@@ -395,10 +396,10 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     return error.NoDeployments;
                 };
 
-            return cmd_do.run(gpa, io, &term, project, &installation, .{ .retry = resume_id }, &environ_map);
+            return cmd_do.run(gpa, io, &term, project, installation, .{ .retry = resume_id }, &environ_map);
         },
         .artifact => |cmd| {
-            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
             defer project_dir.close(io);
             const project = try Project.open_leaky(alloc, io, project_dir);
@@ -409,7 +410,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     io,
                     &term,
                     project,
-                    &installation,
+                    installation,
                     .pull,
                     c.name,
                     c.remote,
@@ -421,7 +422,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     io,
                     &term,
                     project,
-                    &installation,
+                    installation,
                     .push,
                     c.name,
                     c.remote,
@@ -448,7 +449,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             };
         },
         .cache => |cmd| {
-            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
             const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
             defer project_dir.close(io);
             const project = try Project.open_leaky(alloc, io, project_dir);
@@ -462,7 +463,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     &term,
                     project,
                     config,
-                    &installation,
+                    installation,
                     c.source,
                     &environ_map,
                 ),
@@ -472,7 +473,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     &term,
                     project,
                     config,
-                    &installation,
+                    installation,
                     c.source,
                     c.dest,
                     &environ_map,
@@ -488,7 +489,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
         },
         .task => |cmd| switch (cmd) {
             .spawn => |s| {
-                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
                 const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
                 defer project_dir.close(io);
                 const project = try Project.open_leaky(alloc, io, project_dir);
@@ -503,7 +504,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     io,
                     &term,
                     project,
-                    &installation,
+                    installation,
                     target,
 
                     s.deployment,
@@ -511,7 +512,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 );
             },
             .kill => |k| {
-                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
                 const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
                 defer project_dir.close(io);
                 const project = try Project.open_leaky(alloc, io, project_dir);
@@ -521,10 +522,10 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     return e;
                 };
 
-                return cmd_kill.run(gpa, io, project, &installation, target, k.deployment, &environ_map);
+                return cmd_kill.run(gpa, io, project, installation, target, k.deployment, &environ_map);
             },
             .logs => |l| {
-                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
                 const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
                 defer project_dir.close(io);
                 const project = try Project.open_leaky(alloc, io, project_dir);
@@ -534,12 +535,12 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     return e;
                 };
 
-                return cmd_logs.run(gpa, io, project, &installation, target, l.deployment, &environ_map);
+                return cmd_logs.run(gpa, io, project, installation, target, l.deployment, &environ_map);
             },
         },
         .remote => |r| switch (r) {
             .register => |reg| {
-                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
                 return cmd_remote.register(
                     gpa,
                     io,
@@ -549,7 +550,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 );
             },
             .install => |inst_arg| {
-                const installation: ClientInstall = try .init(gpa, io, &environ_map);
+                const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
                 return cmd_remote.install(
                     gpa,
                     io,
@@ -560,39 +561,43 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             },
             .monitor => |cmd| {
                 const remote_name = cmd.remote;
-                const installation: ClientInstall = try .init(gpa, io, &environ_map);
-                const client_remote = @import("client/Remote.zig");
-                if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
-                    _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
-                        log.err("Invalid ip address: {any}", .{e});
-                        return error.InvalidIpAddress;
-                    };
-                    return cmd_monitor.run(gpa, io, &term, &installation, null, .{ .name = "remote", .address = remote_name, .groups = "" }, &environ_map);
-                } else {
-                    const project_dir = std.Io.Dir.cwd().openDir(io, ".", .{}) catch null;
-                    defer if (project_dir) |*d| d.close(io);
-                    const project = if (project_dir) |d| Project.open_leaky(alloc, io, d) catch null else null;
+                const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
 
-                    const remotes = if (project) |p| blk: {
-                        const config = try p.get_config_leaky(alloc, io);
-                        break :blk try client_remote.resolve_remotes_leaky(gpa, alloc, io, config, &installation, p);
-                    } else blk: {
-                        break :blk try client_remote.resolve_remotes_leaky(gpa, alloc, io, .{ .workspace = "" }, &installation, null);
+                const project = Project.open_leaky(alloc, io, .cwd()) catch null;
+
+                const config = if (project) |p|
+                    p.get_config_leaky(alloc, io) catch null
+                else
+                    null;
+
+                const remote = remote: {
+                    if (Step.is_valid_name(cmd.remote)) {
+                        const remotes = try Remote.resolve_remotes_leaky(gpa, alloc, io, config, installation, project);
+                        for (remotes) |remote|
+                            if (std.mem.eql(u8, remote.name, cmd.remote))
+                                break :remote remote;
+                    } else break :remote Remote{
+                        .name = "weft",
+                        .address = try Remote.Address.resolve(gpa, alloc, io, cmd.remote, installation, project),
+                        .groups = "",
                     };
 
-                    const remote = for (remotes) |rem| {
-                        if (std.mem.eql(u8, rem.name, remote_name))
-                            break rem;
-                    } else {
-                        log.err("Remote '{s}' not found", .{remote_name});
-                        return error.RemoteNotFound;
-                    };
-                    return cmd_monitor.run(gpa, io, &term, &installation, project, remote, &environ_map);
-                }
+                    log.err("Remote '{s}' not found", .{remote_name});
+                    return error.RemoteNotFound;
+                };
+                return cmd_monitor.run(
+                    gpa,
+                    io,
+                    &term,
+                    &installation,
+                    project,
+                    remote,
+                    &environ_map,
+                );
             },
         },
         .key => {
-            const installation: ClientInstall = try .init(gpa, io, &environ_map);
+            const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
 
             const hex = std.fmt.bytesToHex(installation.identity.public_key(), .upper);
             term.print("{s}", .{&hex});

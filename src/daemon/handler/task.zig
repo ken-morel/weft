@@ -141,14 +141,14 @@ pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res)
     try supervisor.spawn_supervisor(gpa, daemon.io, task.id, daemon.config.isolate);
     l.debug("supervisor spawned", .{}); //debug
 
-    var timeout: i16 = 30;
+    var timeout: i16 = 60;
     return while (timeout >= 0) : (timeout -= 1)
         if (task.read_status(gpa, daemon.io)) |_|
             break .{}
         else |e| if (e == error.Canceled)
-            return e
+            break e
         else
             try daemon.io.sleep(.fromSeconds(1), .awake)
     else
-        return error.SpawnTimedout;
+        error.SpawnTimedout;
 }

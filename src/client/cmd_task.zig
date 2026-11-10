@@ -12,7 +12,7 @@ pub fn spawn(
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     step: Step,
     deployment_spec: ?[]const u8,
     env: ?*std.process.Environ.Map,

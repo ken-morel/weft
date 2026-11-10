@@ -15,7 +15,7 @@ pub fn run(
     io: std.Io,
     term: *Term,
     project: Project,
-    inst: *const ClientInstall,
+    inst: ClientInstall,
     do: union(enum) {
         start: struct {
             targets: []const Step,
