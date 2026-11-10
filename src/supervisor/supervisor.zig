@@ -494,11 +494,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                 try rootfs_dir.writeFile(
                     io,
                     .{
-                        .data =
-                        \\127.0.0.1 localhost localhost.localdomain
-                        \\::1 localhost localhost.localdomain
-                        \\
-                        ,
+                        .data = spec.tune.net.hosts,
                         .sub_path = "etc/hosts",
                     },
                 );

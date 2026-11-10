@@ -111,9 +111,15 @@ pub fn set_task(self: *@This(), io: std.Io, remote: []const u8, pipeline: []cons
     const t = task.?;
 
     if (patch.status) |s| {
-        if (t.status == .preparing and s == .running)
-            t.started = .now(io, .real);
-        t.status = s;
+        const can_update = switch (t.status) {
+            .done, .failed, .killed, .skipped => false,
+            else => true,
+        };
+        if (can_update) {
+            if (t.status == .preparing and s == .running)
+                t.started = .now(io, .real);
+            t.status = s;
+        }
     }
 
     if (patch.err) |e| {

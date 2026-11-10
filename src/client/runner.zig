@@ -385,6 +385,23 @@ pub fn run_task(
         return error.InvalidRemote;
     }
 
+    switch (try deployment.resolve_pipeline(term, step.pipeline, 0)) {
+        .needs => |needed| {
+            l.err("pipeline '{s}' requires pipeline '{s}' to be run first", .{ step.pipeline, needed });
+            return error.MissingDependency;
+        },
+        .needs_failed => |needed| {
+            l.err("pipeline '{s}' dependency '{s}' failed", .{ step.pipeline, needed });
+            return error.DependencyFailed;
+        },
+        .waits => |w| {
+            l.err("pipeline '{s}' dependency '{s}' is still running", .{ step.pipeline, w });
+            return error.DependencyRunning;
+        },
+        .failed => {},
+        .runnable, .done, .running => {},
+    }
+
     var depl_buf = deployment.id.to_string();
     var view: View = .init(gpa, term, &depl_buf);
     defer view.deinit();
@@ -478,14 +495,17 @@ pub fn run_task(
     };
 
     switch (final_task.status) {
-        .done => term.success("Task {s} completed", .{step.pipeline}),
+        .done => {
+            try deployment.save(io, project);
+            term.success("Task {s} completed", .{step.pipeline});
+        },
         .skipped => term.success("Task {s} skipped", .{step.pipeline}),
         .killed => {
             l.err("Task {s} stopped", .{step.pipeline});
             return error.DeploymentFailed;
         },
         else => {
-            l.err("Task {s} failed", .{step.pipeline});
+            l.err("Task {s} failed (status: {s})", .{ step.pipeline, @tagName(final_task.status) });
             return error.DeploymentFailed;
         },
     }
@@ -518,22 +538,16 @@ pub fn spawn_step(
     }
 
     const script_content = switch (pipeline.run orelse @as(Weft.Pipeline.Run, .{ .file = pipeline.name })) {
-        .script => |lines| inline_script: {
-            if (lines.len == 0) {
+        .script => |script_str| inline_script: {
+            if (script_str.len == 0) {
                 l.err("pipeline '{s}': .run.script cannot be empty", .{pipeline.name});
                 return error.EmptyScript;
             }
-            if (!std.mem.startsWith(u8, lines[0], "#!")) {
-                l.err("pipeline '{s}': first line of .run.script must be a '#!' shebang", .{pipeline.name});
+            if (!std.mem.startsWith(u8, script_str, "#!")) {
+                l.err("pipeline '{s}': .run.script must start with a '#!' shebang", .{pipeline.name});
                 return error.MissingShebang;
             }
-            var script_buf: std.ArrayList(u8) = .empty;
-            errdefer script_buf.deinit(gpa);
-            for (lines) |line| {
-                try script_buf.appendSlice(gpa, line);
-                try script_buf.append(gpa, '\n');
-            }
-            break :inline_script try script_buf.toOwnedSlice(gpa);
+            break :inline_script script_str;
         },
         .file => |script_name| file_script: {
             const script_path = try project.locate_script(gpa, io, script_name) orelse {

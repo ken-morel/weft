@@ -26,7 +26,7 @@ pub const Pipeline = struct {
         poll: u32 = 5,
     };
     pub const Run = union(enum) {
-        script: []const []const u8,
+        script: []const u8,
         file: []const u8,
         nothing,
     };
@@ -46,6 +46,11 @@ pub const Pipeline = struct {
         };
         const Net = struct {
             private: bool = false,
+            hosts: []const u8 =
+                \\127.0.0.1 localhost localhost.localdomain
+                \\::1 localhost localhost.localdomain
+                \\
+            ,
         };
         const Io = struct {
             io_weight: ?u32 = null,

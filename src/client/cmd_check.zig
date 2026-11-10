@@ -245,12 +245,14 @@ pub fn run(
     for (config.pipelines) |*pipeline|
         if (pipeline.run) |p_run|
             switch (p_run) {
-                .script => |lines| {
-                    if (lines.len == 0) {
+                .script => |script_str| {
+                    if (script_str.len == 0) {
                         l.err("pipeline '{s}': .run.script cannot be empty", .{pipeline.name});
                         errors += 1;
-                    } else if (!std.mem.startsWith(u8, lines[0], "#!"))
-                        l.err("pipeline '{s}': first line of .run.script must be a '#!' shebang", .{pipeline.name});
+                    } else if (!std.mem.startsWith(u8, script_str, "#!")) {
+                        l.err("pipeline '{s}': .run.script must start with a '#!' shebang", .{pipeline.name});
+                        errors += 1;
+                    }
                 },
                 .nothing => {},
                 .file => |custom| {
