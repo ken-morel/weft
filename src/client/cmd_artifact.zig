@@ -4,11 +4,12 @@ const log = std.log.scoped;
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const Remote = Weft.Remote;
 const Client = @import("Client.zig");
+const client_remote = @import("Remote.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
+const Remote = @import("Remote.zig");
 const transfer = @import("transfer.zig");
 const View = @import("View.zig");
 
@@ -34,9 +35,9 @@ pub fn run(
     const dep_id = try project.resolve_deployment_id(io, deployment_spec);
 
     const config = try project.get_config_leaky(alloc, io);
-    const remotes = try config.remotes_with_local_leaky(alloc);
+    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, config, inst, project);
     const remote: *const Remote = for (remotes) |*rem| {
-        if (std.mem.eql(u8, rem.@"0", remote_name))
+        if (std.mem.eql(u8, rem.name, remote_name))
             break rem;
     } else {
         l.err("remote '{s}' not found", .{remote_name});
@@ -63,7 +64,7 @@ pub fn run(
 
     var managed = clients.connect_str(
         io,
-        remote.@"1",
+        remote.address,
     ) catch |err| {
         l.err("connection to remote '{s}' failed: {any}", .{ remote_name, err });
         return err;

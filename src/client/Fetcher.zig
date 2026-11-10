@@ -5,13 +5,13 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const Remote = Weft.Remote;
 const Connection = @import("../wire/Connection.zig");
 const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
+const Remote = @import("Remote.zig");
 const transfer = @import("transfer.zig");
 const View = @import("View.zig");
 
@@ -48,7 +48,7 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
-    const managed_client = try self.clients.connect_str(io, remote.@"1");
+    const managed_client = try self.clients.connect_str(io, remote.address);
     defer managed_client.release(io);
     const client = managed_client.inner;
 
@@ -114,13 +114,13 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
 
 pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
     if (try self.has_artifact(io, remote, artifact)) {
-        self.view.set_transfer(io, artifact, remote.@"0", .ready, 1.0) catch {};
+        self.view.set_transfer(io, artifact, remote.name, .ready, 1.0) catch {};
         return;
     }
 
     try self.fetch(io, artifact);
 
-    const push_id = try std.mem.join(self.gpa, ".", &.{ remote.@"0", artifact });
+    const push_id = try std.mem.join(self.gpa, ".", &.{ remote.name, artifact });
     defer self.gpa.free(push_id);
 
     const m = try self.get_mutex(io, &self.pushing, push_id);
@@ -133,13 +133,13 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
 }
 
 pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
-    try self.view.set_transfer(io, artifact, remote.@"0", .pushing, 0.0);
-    defer self.view.set_transfer(io, artifact, remote.@"0", .ready, 1.0) catch {};
+    try self.view.set_transfer(io, artifact, remote.name, .pushing, 0.0);
+    defer self.view.set_transfer(io, artifact, remote.name, .ready, 1.0) catch {};
 
     const artifact_dir_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_dir_path);
 
-    const managed = try self.clients.connect_str(io, remote.@"1");
+    const managed = try self.clients.connect_str(io, remote.address);
     defer managed.release(io);
     const client = managed.inner;
 
@@ -156,7 +156,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
         task_id,
         artifact_dir_path,
         self.view,
-        remote.@"0",
+        remote.name,
         artifact,
     );
 }
@@ -168,18 +168,18 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         for (self.dep.artifacts) |*art| {
             if (std.mem.eql(u8, art.name, artifact))
                 for (self.remotes) |*rem|
-                    if (std.mem.eql(u8, rem.@"0", art.remote))
+                    if (std.mem.eql(u8, rem.name, art.remote))
                         break :remote rem;
         } else return error.ArtifactNotFound;
     };
 
-    try self.view.set_transfer(io, artifact, remote.@"0", .pulling, 0.0);
-    defer self.view.set_transfer(io, artifact, remote.@"0", .ready, 1.0) catch {};
+    try self.view.set_transfer(io, artifact, remote.name, .pulling, 0.0);
+    defer self.view.set_transfer(io, artifact, remote.name, .ready, 1.0) catch {};
 
     const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_path);
 
-    const managed = try self.clients.connect_str(io, remote.@"1");
+    const managed = try self.clients.connect_str(io, remote.address);
     defer managed.release(io);
     const client = managed.inner;
 
@@ -196,7 +196,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         task_id,
         artifact_path,
         self.view,
-        remote.@"0",
+        remote.name,
         artifact,
     );
 }

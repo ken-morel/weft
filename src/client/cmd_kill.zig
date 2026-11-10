@@ -4,9 +4,11 @@ const log = std.log.scoped;
 const proto = @import("../domain/proto.zig");
 const Weft = @import("../domain/Weft.zig");
 const Client = @import("Client.zig");
+const client_remote = @import("Remote.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
+const Remote = @import("Remote.zig");
 const Step = @import("Step.zig");
 
 pub fn run(
@@ -30,7 +32,7 @@ pub fn run(
         return err;
     };
 
-    const remotes = try deployment.config.remotes_with_local_leaky(alloc);
+    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
 
     const pipeline_name = step.pipeline;
     const pipeline = deployment.config.get_pipeline(pipeline_name) orelse {
@@ -50,7 +52,7 @@ pub fn run(
         step.remote;
 
     const remote = for (remotes) |*r| {
-        if (std.mem.eql(u8, r.@"0", remote_name))
+        if (std.mem.eql(u8, r.name, remote_name))
             break r;
     } else {
         l.err("remote '{s}' not configured", .{remote_name});
@@ -60,7 +62,7 @@ pub fn run(
     var clients: *Client.Manager = try .create(alloc, project, inst.identity, env);
     defer clients.destroy(io);
 
-    const managed = clients.connect_str(io, remote.@"1") catch |err| {
+    const managed = clients.connect_str(io, remote.address) catch |err| {
         l.err("could not reach remote '{s}': {any}", .{ remote_name, err });
         return err;
     };

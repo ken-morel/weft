@@ -103,7 +103,7 @@ pub const Pipeline = struct {
         else
             std.mem.eql(u8, self.name, artifact);
     }
-    pub fn matches_remote(self: @This(), remote: Remote) bool {
+    pub fn matches_remote(self: @This(), remote: anytype) bool {
         return if (self.on) |on_list|
             for (on_list) |target| {
                 if (remote_matches(remote, target))
@@ -116,26 +116,27 @@ pub const Pipeline = struct {
 pub const Remote = struct {
     /// The remote name
     []const u8,
-    /// The weft host:port
-    []const u8,
+    /// The weft host:port or !script, or null if loaded from client config
+    ?[]const u8,
     /// The remote tags seperated by spaces
     []const u8,
 };
-pub const remote_local: Remote = .{ "local", "127.0.0.1:9338", "local" };
+pub const remote_local: Remote = .{ "local", null, "local" };
 
-pub fn remote_has_group(remote: Remote, group: []const u8) bool {
-    var iter = std.mem.splitScalar(u8, remote.@"2", ' ');
+pub fn remote_has_group(remote: anytype, group: []const u8) bool {
+    const raw_groups = if (@hasField(@TypeOf(remote), "groups"))
+        remote.groups
+    else
+        remote.@"2";
+    var iter = std.mem.splitScalar(u8, raw_groups, ' ');
     return while (iter.next()) |item| {
         if (item.len > 0 and std.mem.eql(u8, item, group))
             break true;
     } else false;
 }
 
-pub fn remote_matches(remote: Remote, name_or_group: []const u8) bool {
-    return if (std.mem.eql(u8, remote.@"0", name_or_group))
-        true
-    else
-        remote_has_group(remote, name_or_group);
+pub fn remote_matches(remote: anytype, group: []const u8) bool {
+    return remote_has_group(remote, group);
 }
 
 pub fn remotes_with_local_leaky(self: @This(), ara: std.mem.Allocator) ![]const Remote {
@@ -308,9 +309,6 @@ pub fn select_remote_for(self: @This(), pipeline: *const Pipeline, preferred_rem
     const on_list = pipeline.on orelse return preferred_remote_name orelse "local";
 
     for (on_list) |target| {
-        if (self.find_remote(target)) |r|
-            return r.@"0";
-
         for (self.remotes) |r|
             if (remote_has_group(r, target))
                 return r.@"0";

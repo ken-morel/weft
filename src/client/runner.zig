@@ -6,14 +6,15 @@ const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const Remote = Weft.Remote;
 const Connection = @import("../wire/Connection.zig");
 const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
+const client_remote = @import("Remote.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Fetcher = @import("Fetcher.zig");
 const Project = @import("Project.zig");
+const Remote = @import("Remote.zig");
 const src = @import("src.zig");
 const View = @import("View.zig");
 
@@ -32,7 +33,7 @@ pub fn run_deployment(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const remotes = try deployment.config.remotes_with_local_leaky(alloc);
+    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
     const identity = inst.identity;
 
     var depl_buf = deployment.id.to_string();
@@ -85,7 +86,7 @@ pub fn run_deployment(
 
         while (try deployment.next_step(term)) |step| {
             const remote = for (remotes) |*remote| {
-                if (std.mem.eql(u8, remote.@"0", step.remote))
+                if (std.mem.eql(u8, remote.name, step.remote))
                     break remote;
             } else return error.InvalidRemote;
 
@@ -93,11 +94,11 @@ pub fn run_deployment(
                 return error.InvalidPipeline;
 
             if (!pipeline.matches_remote(remote.*)) {
-                l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.@"0" });
+                l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.name });
                 return error.InvalidRemote;
             }
 
-            try view.set_task(io, remote.@"0", pipeline.name, .{ .status = .preparing });
+            try view.set_task(io, remote.name, pipeline.name, .{ .status = .preparing });
             try deployment.add_running(gpa, step);
             _ = try spawn(
                 io,
@@ -108,7 +109,7 @@ pub fn run_deployment(
         }
 
         for (remotes) |*remote| {
-            const remote_name = remote.@"0";
+            const remote_name = remote.name;
             var batch_tasks: std.ArrayList(proto.task.poll.Req) = .empty;
             defer batch_tasks.deinit(poll_arena.allocator());
 
@@ -176,7 +177,7 @@ fn poll_remote(
     fetcher: ?*Fetcher,
 ) void {
     const alloc = poll_arena.allocator();
-    const managed = clients.connect_str(io, remote.@"1") catch return;
+    const managed = clients.connect_str(io, remote.address) catch return;
     defer managed.release(io);
     const client = managed.inner;
 
@@ -373,11 +374,11 @@ pub fn run_task(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const remotes = try deployment.config.remotes_with_local_leaky(alloc);
+    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
     const identity = inst.identity;
 
     const remote = for (remotes) |*remote| {
-        if (std.mem.eql(u8, remote.@"0", step.remote))
+        if (std.mem.eql(u8, remote.name, step.remote))
             break remote;
     } else return error.InvalidRemote;
 
@@ -385,7 +386,7 @@ pub fn run_task(
         return error.InvalidPipeline;
 
     if (!pipeline.matches_remote(remote.*)) {
-        l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.@"0" });
+        l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.name });
         return error.InvalidRemote;
     }
 
@@ -487,7 +488,7 @@ pub fn run_task(
 
     try src.create_sources(alloc, io, term, inst, project, deployment);
 
-    try view.set_task(io, remote.@"0", pipeline.name, .{ .status = .preparing });
+    try view.set_task(io, remote.name, pipeline.name, .{ .status = .preparing });
     try deployment.add_running(gpa, step);
     _ = try spawn(
         io,
@@ -594,7 +595,7 @@ pub fn spawn_step(
         return error.InvalidMode;
 
     if (!pipeline.matches_remote(remote.*)) {
-        l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.@"0" });
+        l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ pipeline.name, remote.name });
         return error.InvalidRemote;
     }
 
@@ -651,7 +652,7 @@ pub fn spawn_step(
     try view.set_task(io, step.remote, step.pipeline, .{ .status = .preparing });
 
     spawn_task: {
-        const managed = try fetcher.clients.connect_str(io, remote.@"1");
+        const managed = try fetcher.clients.connect_str(io, remote.address);
         defer managed.release(io);
         const client = managed.inner;
 

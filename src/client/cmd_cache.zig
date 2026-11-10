@@ -4,7 +4,8 @@ const log = std.log.scoped;
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const Remote = Weft.Remote;
+const Remote = @import("Remote.zig").Remote;
+const client_remote = @import("Remote.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Project = @import("Project.zig");
@@ -39,7 +40,7 @@ fn parse_target(spec: []const u8) !Target {
 
 fn find_remote(remotes: []const Remote, name: []const u8) ?*const Remote {
     for (remotes) |*rem| {
-        if (std.mem.eql(u8, rem.@"0", name))
+        if (std.mem.eql(u8, rem.name, name))
             return rem;
     }
     return null;
@@ -138,7 +139,7 @@ pub fn pull(
         return err;
     };
 
-    const remotes = try config.remotes_with_local_leaky(alloc);
+    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, config, inst, project);
     const remote = find_remote(remotes, target.remote) orelse {
         l.err("remote '{s}' not found", .{target.remote});
         return error.InvalidRemote;
@@ -162,7 +163,7 @@ pub fn pull(
     view.auto_update = true;
     defer view.deinit();
 
-    const managed = try clients.connect_str(io, remote.@"1");
+    const managed = try clients.connect_str(io, remote.address);
     defer managed.release(io);
     const client = managed.inner;
 
@@ -226,7 +227,7 @@ pub fn push(
             .cache = src.cache,
         };
 
-    const remotes = try config.remotes_with_local_leaky(alloc);
+    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, config, inst, project);
     const dst_remote = find_remote(remotes, dst.remote) orelse {
         l.err("destination remote '{s}' not found", .{dst.remote});
         return error.InvalidRemote;
@@ -255,7 +256,7 @@ pub fn push(
         view.auto_update = true;
         defer view.deinit();
 
-        const managed = try clients.connect_str(io, dst_remote.@"1");
+        const managed = try clients.connect_str(io, dst_remote.address);
         defer managed.release(io);
         const client = managed.inner;
 
@@ -291,7 +292,7 @@ pub fn push(
         view.auto_update = true;
         defer view.deinit();
 
-        const managed = try clients.connect_str(io, dst_remote.@"1");
+        const managed = try clients.connect_str(io, dst_remote.address);
         defer managed.release(io);
         const client = managed.inner;
 

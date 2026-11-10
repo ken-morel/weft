@@ -354,8 +354,9 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{ .iterate = true });
             defer project_dir.close(io);
             const project = try Project.open_leaky(alloc, io, project_dir);
+            var inst = ClientInstall.init(gpa, io, &environ_map) catch null;
 
-            try cmd_check.run(gpa, io, project);
+            try cmd_check.run(gpa, io, project, if (inst) |*i| i else null);
         },
         .do => |cmd| {
             const targets: []Step = try gpa.alloc(Step, cmd.targets.len);
@@ -560,21 +561,27 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             .monitor => |cmd| {
                 const remote_name = cmd.remote;
                 const installation: ClientInstall = try .init(gpa, io, &environ_map);
-                if (std.mem.eql(u8, remote_name, "local")) {
-                    return cmd_monitor.run(gpa, io, &term, &installation, null, Weft.remote_local, &environ_map);
-                } else if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
+                const client_remote = @import("client/Remote.zig");
+                if (std.mem.containsAtLeastScalar(u8, cmd.remote, ':', 1)) {
                     _ = argz.SocketAddr.argz_parse(gpa, null, cmd.remote) catch |e| {
                         log.err("Invalid ip address: {any}", .{e});
                         return error.InvalidIpAddress;
                     };
-                    return cmd_monitor.run(gpa, io, &term, &installation, null, .{ "remote", remote_name, "" }, &environ_map);
+                    return cmd_monitor.run(gpa, io, &term, &installation, null, .{ .name = "remote", .address = remote_name, .groups = "" }, &environ_map);
                 } else {
-                    const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
-                    defer project_dir.close(io);
-                    const project = try Project.open_leaky(alloc, io, project_dir);
-                    const config = try project.get_config_leaky(alloc, io);
-                    const remote: Weft.Remote = for (config.remotes) |rem| {
-                        if (std.mem.eql(u8, rem.@"0", remote_name))
+                    const project_dir = std.Io.Dir.cwd().openDir(io, ".", .{}) catch null;
+                    defer if (project_dir) |*d| d.close(io);
+                    const project = if (project_dir) |d| Project.open_leaky(alloc, io, d) catch null else null;
+
+                    const remotes = if (project) |p| blk: {
+                        const config = try p.get_config_leaky(alloc, io);
+                        break :blk try client_remote.resolve_remotes_leaky(gpa, alloc, io, config, &installation, p);
+                    } else blk: {
+                        break :blk try client_remote.resolve_remotes_leaky(gpa, alloc, io, .{ .workspace = "" }, &installation, null);
+                    };
+
+                    const remote = for (remotes) |rem| {
+                        if (std.mem.eql(u8, rem.name, remote_name))
                             break rem;
                     } else {
                         log.err("Remote '{s}' not found", .{remote_name});

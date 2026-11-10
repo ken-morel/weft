@@ -400,12 +400,16 @@ pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
     );
 
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
-    return try std.zon.parse.fromSlice(Config, .{
+    return std.zon.parse.fromSlice(Config, .{
         .arena = ara,
         .gpa = ara,
         .source = content,
         .diagnostics = &diag,
-    });
+    }) catch |err| err: {
+        if (err == error.ParseZon)
+            diag.log(paths.weft_config_file);
+        break :err err;
+    };
 }
 
 pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {

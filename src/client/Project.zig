@@ -175,10 +175,21 @@ pub fn load_deployment_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem
     return try std.zon.parse.fromSlice(Deployment, .{ .gpa = gpa, .arena = ara, .source = content, .diagnostics = &diag });
 }
 
-pub fn locate_script(self: @This(), gpa: std.mem.Allocator, io: std.Io, name: []const u8) !?[:0]const u8 {
+pub fn locate_script_in_dir(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, name: []const u8) !?[:0]const u8 {
     const script_with_dot = try std.mem.join(gpa, "", &.{ name, "." });
     defer gpa.free(script_with_dot);
-    const script_dir = self.dir.openDir(
+    var iter = dir.iterate();
+    while (try iter.next(io)) |entry| {
+        if (entry.kind == .file and
+            ((std.mem.startsWith(u8, entry.name, script_with_dot) and
+                std.mem.countScalar(u8, entry.name[script_with_dot.len..], '.') == 0) or
+                std.mem.eql(u8, entry.name, name)))
+            return try dir.realPathFileAlloc(io, entry.name, gpa);
+    } else return null;
+}
+
+pub fn locate_script(self: @This(), gpa: std.mem.Allocator, io: std.Io, name: []const u8) !?[:0]const u8 {
+    var script_dir = self.dir.openDir(
         io,
         "weft",
         .{ .iterate = true },
@@ -188,12 +199,5 @@ pub fn locate_script(self: @This(), gpa: std.mem.Allocator, io: std.Io, name: []
         else
             err;
     defer script_dir.close(io);
-    var iter = script_dir.iterate();
-    while (try iter.next(io)) |entry| {
-        if (entry.kind == .file and
-            ((std.mem.startsWith(u8, entry.name, script_with_dot) and
-                std.mem.countScalar(u8, entry.name[script_with_dot.len..], '.') == 0) or
-                std.mem.eql(u8, entry.name, name)))
-            return try script_dir.realPathFileAlloc(io, entry.name, gpa);
-    } else return null;
+    return locate_script_in_dir(io, script_dir, gpa, name);
 }

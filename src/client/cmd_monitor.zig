@@ -4,7 +4,6 @@ const log = std.log.scoped;
 const proto = @import("../domain/proto.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-const Remote = Weft.Remote;
 const Monitor = @import("../util/Monitor.zig");
 const format_bytes = @import("../util/sizes.zig").format_bytes;
 const zoto = @import("../util/zoto.zig");
@@ -12,6 +11,7 @@ const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Project = @import("Project.zig");
+const Remote = @import("Remote.zig");
 
 fn format_time_only(buf: *[8]u8, ns: i128) []const u8 {
     const epoch_seconds: u64 = if (ns > 0) @intCast(@divTrunc(ns, std.time.ns_per_s)) else 0;
@@ -110,9 +110,9 @@ fn connect(
     const l = log(.monitor_connect);
     var managed = clients.connect_str(
         io,
-        remote.@"1",
+        remote.address,
     ) catch |err| {
-        l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.@"0", err });
+        l.err("failed to connect to daemon on remote '{s}': {any}", .{ remote.name, err });
         return err;
     };
     errdefer managed.release(io);
@@ -251,7 +251,7 @@ pub fn run(
 
                 if (term.is_tty) term.clear_line();
                 term.styled(.bold, "remote: ", .{});
-                term.styled(.cyan, "{s}", .{remote.@"0"});
+                term.styled(.cyan, "{s}", .{remote.name});
                 term.styled(.dim, "   cpu: ", .{});
                 term.print("{s} ({d}@{d}MHz)", .{ stats.cpu.model, stats.cpu.cores, stats.cpu.freq });
                 term.styled(.dim, "   ram: ", .{});
@@ -556,7 +556,7 @@ pub fn run(
 
                 if (stats.services.len == 0) {
                     term.clear_line();
-                    term.styled_ln(.dim, "  (no active tasks on {s})", .{remote.@"0"});
+                    term.styled_ln(.dim, "  (no active tasks on {s})", .{remote.name});
                     lines_count += 1;
                 } else {
                     for (stats.services) |svc| {

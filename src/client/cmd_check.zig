@@ -69,6 +69,7 @@ pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
     project: Project,
+    inst: ?*const ClientInstall,
 ) !void {
     const l = log(.check);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -115,20 +116,45 @@ pub fn run(
                 errors += 1;
             };
 
+    const client_cfg = if (inst) |i|
+        i.read_config_leaky(gpa, alloc, io) catch null
+    else
+        null;
+
     for (config.remotes) |r| {
-        if (r.@"1".len > 0 and r.@"1"[0] == '!') {
-            const cmd_str = std.mem.trim(u8, r.@"1"[1..], " \t");
-            var iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
-            if (iter.next()) |script_name| {
-                if (try project.locate_script(alloc, io, script_name)) |sp| {
-                    alloc.free(sp);
-                } else if (project.dir.access(io, script_name, .{})) |_| {} else |_| {
-                    l.err("remote '{s}': connection script '{s}' not found in weft/ or project directory", .{ r.@"0", script_name });
+        const raw_addr = if (r.@"1") |addr| addr else blk: {
+            if (client_cfg) |cfg| {
+                for (cfg.remotes) |cr|
+                    if (std.mem.eql(u8, cr.@"0", r.@"0"))
+                        break :blk cr.@"1";
+            }
+            if (std.mem.eql(u8, r.@"0", "local"))
+                break :blk "127.0.0.1:9338";
+            l.warn("remote '{s}': address is not specified in weft.zon and not configured in client.zon", .{r.@"0"});
+            break :blk null;
+        };
+
+        if (raw_addr) |addr| {
+            if (addr.len > 0 and addr[0] == '!') {
+                const cmd_str = std.mem.trim(u8, addr[1..], " \t");
+                var iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
+                if (iter.next()) |script_name| {
+                    const located = if (inst) |i|
+                        (try i.locate_script(alloc, io, script_name)) != null
+                    else
+                        false;
+                    if (!located) {
+                        if (try project.locate_script(alloc, io, script_name)) |sp| {
+                            alloc.free(sp);
+                        } else if (project.dir.access(io, script_name, .{})) |_| {} else |_| {
+                            l.err("remote '{s}': connection script '{s}' not found in client config, weft/, or project directory", .{ r.@"0", script_name });
+                            errors += 1;
+                        }
+                    }
+                } else {
+                    l.err("remote '{s}': command is empty after '!'", .{r.@"0"});
                     errors += 1;
                 }
-            } else {
-                l.err("remote '{s}': command is empty after '!'", .{r.@"0"});
-                errors += 1;
             }
         }
     }
@@ -200,13 +226,13 @@ pub fn run(
                 const found = for (config.remotes) |r| {
                     if (Weft.remote_matches(r, target))
                         break true;
-                } else if (std.mem.eql(u8, target, "local") or Weft.remote_has_group(Weft.remote_local, target))
+                } else if (Weft.remote_matches(Weft.remote_local, target))
                     true
                 else
                     false;
 
                 if (!found) {
-                    l.err("pipeline '{s}': .on target '{s}' does not match any remote name or group", .{ pipeline.name, target });
+                    l.err("pipeline '{s}': .on group '{s}' does not match any remote group", .{ pipeline.name, target });
                     errors += 1;
                 }
             }
