@@ -13,7 +13,7 @@ The primary goal of Weft is to make reproducible, multi-stage deployments practi
 
 ## 1. Installation and CLI Reference
 
-All CLI commands accept arguments either positionally (in the order shown below) or as named flags (`--<field> <value>`).
+All CLI commands accept arguments either positionally (in the order shown below) or as named flags (`--<field> <value>`). Commands that render live terminal UIs (`do`, `resume`, `task spawn`, `remote monitor`, `artifact pull/push`, `cache pull/push`) automatically detect when `stdout` is redirected to a file or piped into another process, stripping ANSI escape sequences and redrawing footers to emit clean, append-only plain text streams.
 
 ### Installation
 
@@ -58,8 +58,9 @@ The compiled binary is output to `zig-out/bin/weft`.
   - If `pubkey` (a 64-character hex Ed25519 public key) is omitted, the local client's public key is used.
 
 - `weft remote monitor [{remote_name|domain:port|ip:port|local}]`  
-  Connects to a daemon and opens the interactive terminal monitor showing live CPU usage, RAM, swap, disk usage, disk I/O throughput, network RX/TX rates, and active tasks.
+  Connects to a daemon and streams live host CPU usage, RAM, swap, disk usage, disk I/O throughput, network RX/TX rates, and active tasks.
   - The target can be a remote name declared in `weft/weft.zon`, an explicit `host:port` address (which works outside of a project directory), or `local` by default.
+  - In an interactive terminal, it renders color-coded progress cells and a redrawing bottom status pane showing load averages, thread counts, TCP connections, and active task PID/RAM/CPU telemetry. When piped or redirected to a file (such as `weft remote monitor prod > metrics.log`), cursor movement and the bottom status pane are omitted, producing a continuous, fixed-width plain-text table of timestamped metric rows suitable for logging or post-processing.
 
 #### `weft daemon`
 
@@ -76,26 +77,28 @@ The compiled binary is output to `zig-out/bin/weft`.
 #### `weft do`
 
 - `weft do {[mode:][remote.]pipeline ...}`  
-  Resolves the dependency graph for one or more targets, packages required local sources, transfers missing artifacts between remotes, and executes the pipelines across the target remotes while displaying live status in the terminal UI.
+  Resolves the dependency graph for one or more targets, packages required local sources, transfers missing artifacts between remotes, and executes the pipelines across the target remotes.
   - Omitting `<remote>.` defaults the target remote to `local`.
   - Omitting `<mode>:` on the first target defaults to `default`. When multiple targets are given on the command line, any target without an explicit `<mode>:` prefix inherits the mode of the preceding target (for example, `weft do prod:ds.migrate ds.server` executes both steps under mode `prod`).
+  - When redirected to a file or pipe (such as `weft do prod.server > deploy.log`), the live active-task footer is suppressed and `stdout` receives an append-only log of task lifecycle events (`{ remote.pipeline`, `} remote.pipeline (duration, CPU)`, `#.err`, `#.skipped`, `#.killed`), transfer events (`< artifact@remote`, `> artifact@remote`), and prefixed task output lines (`remote.pipeline │ ...`).
 
 #### `weft resume`
 
 - `weft resume [deployment]`  
   Resumes an interrupted or failed deployment using its recorded state in `.weft/`, skipping steps whose outputs are already present and retrying incomplete or failed steps.
   - `deployment` accepts either a full deployment ID or a unique trailing character suffix, and defaults to the latest deployment in `.weft/`.
+  - Supports the same plain-text piped output format as `weft do`.
 
 #### `weft task`
 
 - `weft task spawn {[mode:][remote.]pipeline} [deployment]`  
-  Spawns a single pipeline step in a deployment without resolving or running its upstream dependencies. All input artifacts required by the pipeline must already be registered in the specified deployment (defaults to latest).
+  Spawns a single pipeline step in a deployment without resolving or running its upstream dependencies. All input artifacts required by the pipeline must already be registered in the specified deployment (defaults to latest). Can be piped or redirected to a file just like `weft do`.
 
 - `weft task kill {[mode:][remote.]pipeline} [deployment]`  
   Terminates the running task for the specified pipeline step in the given deployment (defaults to latest).
 
 - `weft task logs {[mode:][remote.]pipeline} [deployment]`  
-  Streams or prints the combined stdout/stderr logs for a running or completed pipeline step in the given deployment (defaults to latest).
+  Streams the combined stdout/stderr logs for a running or completed pipeline step in the given deployment (defaults to latest), polling until the task finishes. Writes raw log chunks directly to `stdout` (bracketed by `{ remote.pipeline` and `} remote.pipeline` or `#.failed`/`#.killed` markers) so it can be redirected directly into a log file (`weft task logs prod.server > server.log`).
 
 #### `weft artifact`
 
@@ -106,14 +109,14 @@ The compiled binary is output to `zig-out/bin/weft`.
   Uploads artifact or source `<name>` from the local deployment directory to `<remote>` (defaults to `local`) in `<deployment>` (defaults to latest) and records `<remote>` as holding the artifact.
 
 - `weft artifact register <name> [remote] [deployment]`  
-  Records `<remote>` (defaults to `local`) as holding artifact `<name>` in `<deployment>` (defaults to latest) without transferring data over the network, and prints the local expected path for that artifact.
+  Records `<remote>` (defaults to `local`) as holding artifact `<name>` in `<deployment>` (defaults to latest) without transferring data over the network, and prints only the local expected path to `stdout` so it can be used directly in command substitutions (for example, `cp app "$(weft artifact register app)"`).
 
 - `weft artifact path <name> [deployment]`  
-  Prints the local filesystem path where artifact `<name>` is stored for `<deployment>` (defaults to latest).
+  Prints the local filesystem path where artifact `<name>` is stored for `<deployment>` (defaults to latest) directly to `stdout` for scripting and piping.
 
 #### `weft cache`
 
-`pull` transfers workspace caches strictly from a remote to `.weft/caches/<remote>/<cache>` on the local machine. `push` transfers strictly from `.weft/caches/` on the local machine to a remote, verifying that the local cache exists on disk before connecting and failing immediately with `error.CacheNotFound` if it is missing.
+`pull` transfers workspace caches strictly from a remote to `.weft/caches/<remote>/<cache>` on the local machine. `push` transfers strictly from `.weft/caches/` on the local machine to a remote.
 
 - `weft cache pull {remote[.cache]}`  
   Pulls a specific cache when given `remote.cache`, or pulls all caches declared in `keep` across all pipelines in `weft/weft.zon` when given `remote`.
@@ -127,7 +130,7 @@ The compiled binary is output to `zig-out/bin/weft`.
   - Passing `a b` pushes all caches currently present under `.weft/caches/a/` to remote `b` under their respective names.
 
 - `weft cache path {remote[.cache]}`  
-  Prints the local filesystem path `.weft/caches/<remote>[/<cache>]` without creating directories on disk.
+  Prints the local filesystem path `.weft/caches/<remote>[/<cache>]`.
 
 #### `weft nix`
 
@@ -140,13 +143,13 @@ The compiled binary is output to `zig-out/bin/weft`.
 #### `weft check`, `weft key`, `weft decode`, `weft version`
 
 - `weft check`  
-  Validates `weft/weft.zon`, checking identifier syntax, environment and source references, pipeline dependency cycles, script files and shebangs, and remote placement rules.
+  Validates `weft/weft.zon`.
 
 - `weft key`  
-  Prints the local client's 64-character hex Ed25519 public key to stdout.
+  Prints the local client's 64-character hex Ed25519 public key to `stdout` without a trailing newline, suitable for piping or command substitution.
 
 - `weft decode [file]`  
-  Decodes a `zoto`-serialized binary file (or `stdin` when omitted or `-`) and prints it as formatted Zig struct literals.
+  Decodes a `zoto`-serialized binary file (or `stdin` when omitted or `-`) and prints it as formatted Zig struct literals to `stdout` (allowing both `weft decode < status > status.zig` and `weft decode status`).
 
 - `weft version`  
   Prints the build version, wire protocol hash, and optimization mode.
@@ -231,10 +234,10 @@ pub const Run = union(enum) {
 
 #### `.on`
 
-An optional list of remote names or remote group tags (`?[]const []const u8`) restricting where the pipeline is allowed to run.
+An optional list of remote group tags (`?[]const []const u8`) restricting where the pipeline is allowed to run.
 
 - When `.on` is `null`, the pipeline can run on any remote.
-- When `.on` is set (for example `.on = .{ "local", "build-nodes" }`), the pipeline only executes on remotes matching one of the listed names or tags. If a pipeline on another remote depends on this pipeline's output, Weft automatically schedules this pipeline on a matching remote from `.on` and transfers the resulting artifact to the downstream remote.
+- When `.on` is set (for example `.on = .{ "local", "build-nodes" }`), the pipeline only executes on remotes matching one of the listed group tags. Note that `.on` matches strictly against remote group tags (not remote names), decoupling pipeline requirements from specific host definitions. If a pipeline on another remote depends on this pipeline's output, Weft automatically schedules this pipeline on a matching remote from `.on` and transfers the resulting artifact to the downstream remote.
 
 #### `.keep`
 
@@ -349,21 +352,42 @@ pub const Tune = struct {
 pub const Remote = struct {
     /// The remote name
     []const u8,
-    /// The weft host:port
-    []const u8,
-    /// The remote tags seperated by spaces
+    /// The weft host:port or !script, or null if loaded from client config
+    ?[]const u8,
+    /// The remote tags separated by spaces
     []const u8,
 };
-pub const remote_local: Remote = .{ "local", "127.0.0.1:9338", "local" };
+pub const remote_local: Remote = .{ "local", null, "local" };
 ```
 
-Each entry in `remotes` is a 3-tuple `.{ "<name>", "<address>", "<tags>" }` representing a host running the Weft daemon:
+Each entry in `remotes` is a 3-tuple `.{ "<name>", <address>, "<tags>" }` representing a host running the Weft daemon:
 
-- The first element is the remote name referenced in CLI targets and `.on` constraints. A `"local"` remote (`127.0.0.1:9338`, tag `"local"`) is always implicitly present unless overridden.
-- The second element is the remote address (`Weft.RemoteAddress`), which supports two forms:
-  - A network address `{domain|ip}[:port]` (defaulting to port `9338`), connected over TCP.
-  - A command transport `!<script> [args...]` (such as `"!remote colab"`), which resolves `weft/<script>` or `weft/<script>.sh` in the project directory, spawns it as a child process, and runs the encrypted wire protocol over the child's `stdin` and `stdout` pipes.
-- The third element is a space-separated string of group tags that pipelines can target in `.on`.
+- The first element is the remote name referenced in CLI targets (such as `weft do my_remote.build`).
+- The second element is the remote address (`?[]const u8`), which supports three forms:
+  - An inline network address `"{domain|ip}[:port]"` (defaulting to port `9338`), connected over TCP.
+  - A command transport `"!<script> [args...]"` (such as `"!remote colab"`), which resolves `<script>` or `<script>.sh` from `~/.config/weft/`, `weft/`, or the project root, spawns it as a child process, and runs the encrypted wire protocol over the child's `stdin` and `stdout` pipes.
+  - `null`, designating an external remote. The address or connection script is not stored in the project's version-controlled `weft.zon`, but is instead resolved from the local developer's client configuration at `~/.config/weft/client.zon` (or `config.zon`).
+- The third element is a space-separated string of group tags (such as `"arm64 gpu prod"`) that pipelines match against via `.on`.
+
+A `"local"` remote (`.{ "local", null, "local" }`) is always implicitly present with group tag `"local"`. If unconfigured, its address defaults to `127.0.0.1:9338`. It can be overridden in `weft.zon` or configured in `client.zon` like any other remote.
+
+---
+
+### Client Configuration (`client.zon`)
+
+Client-specific configuration and external remote endpoints reside in `~/.config/weft/client.zon` (or fallback `config.zon`). This keeps personal hostnames, dynamic IP addresses, bastions, or confidential connection scripts out of project repositories:
+
+```zig
+.{
+    .remotes = .{
+        .{ "hetzner", "195.201.10.42:9338" },
+        .{ "colab", "!remote colab" },
+        .{ "local", "127.0.0.1:9338" },
+    },
+}
+```
+
+Connection scripts referenced by `!<script>` in `client.zon` or `weft.zon` can be placed globally in `~/.config/weft/` (e.g. `~/.config/weft/remote`) or locally in `weft/` or the project root.
 
 ---
 
