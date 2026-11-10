@@ -49,39 +49,31 @@ Instead of container engines, Weft uses native Linux kernel primitives (`namespa
 
 ## Architecture
 
-```
-               +-------------------------------------------------------+
-               |                       Developer                       |
-               |         weft do / weft cache / weft monitor           |
-               +---------------------------+---------------------------+
-                                           |
-                                           |  Encrypted Wire Protocol
-                                           |  (Ed25519 + XChaCha20-Poly1305 + zoto)
-                                           v
-+--------------------------------------------------------------------------------------+
-| Remote Host (VPS / Bare Metal)                                                       |
-|                                                                                      |
-|  +--------------------------------------------------------------------------------+  |
-|  | weft daemon                                                                    |  |
-|  |   - Auth & Session Manager (Client keys)                                       |  |
-|  |   - Worker Pool (Parallel execution)                                           |  |
-|  |   - Telemetry Engine (StatsServer: CPU, RAM, Disk, Net)                         |  |
-|  |   - Package Provisioner (Devbox / Nix Binary Cache -> /var/lib/weft/store)     |  |
-|  +---------------------------------------+----------------------------------------+  |
-|                                          | Spawns & Supervises                           |
-|                                          v                                           |
-|  +--------------------------------------------------------------------------------+  |
-|  | weft supervisor (Native Linux Sandboxing)                                      |  |
-|  |   +-------------------------------------------------------------------------+  |  |
-|  |   | Task Sandbox (Namespaces: MNT, PID, NET, IPC, CGROUP, UTS)              |  |  |
-|  |   |   - cgroups v2: CPU quota, Memory max/swap, IO weight, PIDs max         |  |  |
-|  |   |   - Rootfs: tmpfs root, pivot_root, read-only Nix store mounts          |  |  |
-|  |   |   - Workspace: Persistent 'keep' directories (caches, database data)    |  |  |
-|  |   |   - Task Process: Executes pipeline script                              |  |  |
-|  |   +-------------------------------------------------------------------------+  |  |
-|  +--------------------------------------------------------------------------------+  |
-+--------------------------------------------------------------------------------------+
-```
+Weft is architected around four cohesive layers designed for minimal overhead, strict isolation, and zero external dependencies:
+
+- **Client & CLI Runner (`weft do`, `weft cache`, `weft remote monitor`)**
+  - Parses project configurations (`weft/weft.zon`) and resolves task dependency DAGs across local and remote targets.
+  - Manages client cryptographic identity using local Ed25519 keypairs (`~/.config/weft/identity`).
+  - Provides a real-time interactive terminal UI for live pipeline execution, streaming logs, and host telemetry.
+  - Manages compressed streaming transfers for build caches and versioned artifacts.
+
+- **Wire Protocol & Security Layer**
+  - **Zero-Trust Authentication**: SSH-like key trust model where remote daemons authenticate clients against an authorized Ed25519 public key registry.
+  - **Authenticated Encryption**: Full end-to-end transport encryption using XChaCha20-Poly1305 AEAD.
+  - **Binary Framing (`zoto`)**: Custom zero-copy binary serialization format for fast, type-safe payload framing with minimal CPU overhead.
+
+- **Remote Daemon (`weft daemon`)**
+  - **Worker Pool**: Dispatches and manages pipeline tasks concurrently based on host scaling profiles (`tiny`, `small`, `large`).
+  - **Package Provisioner**: Queries upstream Nix binary caches via Devbox API and uses a built-in streaming NAR unpacker (`/var/lib/weft/store`) with atomic locking.
+  - **Telemetry Engine (`StatsServer`)**: Streams live host statistics (CPU, memory, swap, disk I/O, network bandwidth, running tasks) to connected clients.
+  - **Init System Agnostic**: Detects and integrates seamlessly into `systemd`, `openrc` (Alpine), `runit`, or standalone background processes.
+
+- **Native Linux Task Supervisor (`weft supervisor`)**
+  - **Kernel Namespace Sandboxing**: Spawns tasks inside dedicated Linux namespaces (`CLONE_NEWNS`, `NEWPID`, `NEWNET`, `NEWCGROUP`, `NEWUTS`, `NEWIPC`) without container engines.
+  - **cgroups v2 Enforcement**: Enforces hard and soft memory ceilings, swap limits, CPU bandwidth quotas, OOM score adjustments, and I/O weights per pipeline.
+  - **Filesystem Isolation**: Constructs an isolated rootfs with tmpfs mounts, performs `pivot_root`, and mounts requested Nix store paths as read-only layers.
+  - **Persistent State (`keep`)**: Mounts persistent workspace folders across runs (e.g. database data, compilation caches) into the sandboxed task.
+  - **Process Lifecycle Management**: Enforces sibling policies (`kill`, `wait`, `fail`, `skip`), maintains process groups via `setsid`, and ensures clean signal propagation.
 
 ---
 
