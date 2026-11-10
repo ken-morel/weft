@@ -369,7 +369,10 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     l.info("task completed and outputs harvested", .{});
 }
 
-const no_run_script = "#!/bin/env -S weft nop";
+const no_run_script =
+    \\#!/bin/sh
+    \\exec weft nop
+;
 
 pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
     const l = std.log.scoped(.supervisor_spawn);
@@ -420,9 +423,39 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             }) |dir|
                 try rootfs_dir.createDirPath(io, dir);
 
+            const host_lib_stat = cwd.statFile(
+                io,
+                "/lib",
+                .{ .follow_symlinks = false },
+            ) catch null;
+            const host_lib_is_dir = if (host_lib_stat) |st|
+                st.kind == .directory
+            else
+                false;
+
+            const host_lib64_stat = cwd.statFile(
+                io,
+                "/lib64",
+                .{ .follow_symlinks = false },
+            ) catch null;
+            const host_lib64_is_dir = if (host_lib64_stat) |st|
+                st.kind == .directory
+            else
+                false;
+
             _ = std.os.linux.symlinkat("/bin", rootfs_dir.handle, "usr/bin");
-            _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib");
-            _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib64");
+            if (host_lib_is_dir)
+                try rootfs_dir.createDirPath(io, "lib")
+            else
+                _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib");
+
+            if (host_lib64_is_dir)
+                try rootfs_dir.createDirPath(io, "lib64")
+            else if (host_lib_is_dir)
+                _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "lib64")
+            else
+                _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib64");
+
             _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "usr/lib64");
 
             const script = spec.script orelse no_run_script;
@@ -457,6 +490,18 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                     io,
                     .{ .data = group, .sub_path = "etc/group" },
                 );
+
+                try rootfs_dir.writeFile(
+                    io,
+                    .{
+                        .data =
+                        \\127.0.0.1 localhost localhost.localdomain
+                        \\::1 localhost localhost.localdomain
+                        \\
+                        ,
+                        .sub_path = "etc/hosts",
+                    },
+                );
             }
             if (std.os.linux.errno(std.os.linux.chdir(rootfs_path.ptr)) != .SUCCESS)
                 return error.ChdirFailed;
@@ -476,6 +521,18 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                 "usr/lib",
                 .{ .read_only = true, .allow_exec = true },
             );
+            if (host_lib_is_dir)
+                try mount.bind(
+                    "/lib",
+                    "lib",
+                    .{ .read_only = true, .allow_exec = true },
+                );
+            if (host_lib64_is_dir)
+                try mount.bind(
+                    "/lib64",
+                    "lib64",
+                    .{ .read_only = true, .allow_exec = true },
+                );
 
             if (!spec.tune.net.private) {
                 try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/resolv.conf" });
