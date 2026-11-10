@@ -127,6 +127,14 @@ pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res)
     try std.Io.Dir.cwd().createDirPath(daemon.io, task_dir);
     l.debug("created task dir {s}", .{task_dir}); //debug
 
+    const status_path = try gpa.print(paths.task_status, task.id.wpd());
+    defer gpa.free(status_path);
+    std.Io.Dir.cwd().deleteFile(daemon.io, status_path) catch {};
+
+    const log_path = try gpa.print(paths.task_log, task.id.wpd());
+    defer gpa.free(log_path);
+    std.Io.Dir.cwd().deleteFile(daemon.io, log_path) catch {};
+
     try task.write_spec(gpa, daemon.io, spec);
     l.debug("spec written", .{}); //debug
 
