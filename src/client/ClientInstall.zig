@@ -10,6 +10,7 @@ const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
 
 pub const key_file_name = "key";
+pub const config_file_name = "config.zon";
 
 pub const Remote = struct {
     []const u8,
@@ -34,6 +35,7 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.
     const temp_dir = try data_dir.openDir(io, "temp", .{ .iterate = true });
 
     const identity = try Identity.ensure(io, config_dir, key_file_name);
+    try ensure_config(io, config_dir);
 
     return .{
         .config_dir = config_dir,
@@ -44,16 +46,45 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, env: *const std.process.Environ.
     };
 }
 
+pub fn ensure_config(io: std.Io, dir: std.Io.Dir) !void {
+    if (dir.access(io, "client.zon", .{})) |_|
+        return
+    else |_| {}
+    if (dir.access(io, config_file_name, .{})) |_|
+        return
+    else |_| {}
+
+    var file = dir.createFile(io, config_file_name, .{
+        .exclusive = true,
+    }) catch |err|
+        if (err == error.PathAlreadyExists)
+            return
+        else
+            return err;
+    defer file.close(io);
+
+    const default_content =
+        \\.{
+        \\    .remotes = .{
+        \\        .{ "local", "127.0.0.1:9338" },
+        \\    },
+        \\}
+        \\
+    ;
+    try file.writePositionalAll(io, default_content, 0);
+}
+
 pub fn read_config_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Config {
-    const content = self.config_dir.readFileAllocOptions(io, "client.zon", ara, .unlimited, .of(u8), 0) catch |e| blk: {
+    var filename: []const u8 = "client.zon";
+    const content = self.config_dir.readFileAllocOptions(io, filename, ara, .unlimited, .of(u8), 0) catch |e| blk: {
         if (e == error.FileNotFound) {
-            break :blk self.config_dir.readFileAllocOptions(io, "config.zon", ara, .unlimited, .of(u8), 0) catch |err| {
+            filename = config_file_name;
+            break :blk self.config_dir.readFileAllocOptions(io, filename, ara, .unlimited, .of(u8), 0) catch |err|
                 if (err == error.FileNotFound)
-                    return .{};
-                return err;
-            };
-        }
-        return e;
+                    return .{}
+                else
+                    return err;
+        } else return e;
     };
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
     return std.zon.parse.fromSlice(Config, .{
@@ -63,7 +94,7 @@ pub fn read_config_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.All
         .diagnostics = &diag,
     }) catch |err| {
         if (err == error.ParseZon)
-            diag.log("client.zon");
+            diag.log(filename);
         return err;
     };
 }
