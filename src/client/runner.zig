@@ -148,6 +148,7 @@ pub fn run_deployment(
                 log_buffer,
                 batch_tasks.items,
                 clients,
+                &fetcher,
             );
         }
 
@@ -172,6 +173,7 @@ fn poll_remote(
     log_buffer: []u8,
     batch: []const proto.task.poll.Req,
     clients: *Client.Manager,
+    fetcher: ?*Fetcher,
 ) void {
     const alloc = poll_arena.allocator();
     const managed = clients.connect_str(io, remote.@"1") catch return;
@@ -191,6 +193,7 @@ fn poll_remote(
         log_buffer,
         batch,
         client,
+        fetcher,
     ) catch return;
 }
 
@@ -205,6 +208,7 @@ fn poll_batch(
     log_buffer: []u8,
     batch: []const proto.task.poll.Req,
     client: *Client,
+    fetcher: ?*Fetcher,
 ) !void {
     for (batch) |task|
         try client.conn.send_object(log_buffer, proto.task.poll.Req, task);
@@ -238,7 +242,7 @@ fn poll_batch(
             project,
             deployment,
             view,
-            null,
+            fetcher,
             remote_name,
             pipeline_name,
             poll_res.status,
@@ -299,7 +303,7 @@ fn poll_item(
                     });
 
                     if (fetcher) |f|
-                        if (is_target)
+                        if (is_target and !std.mem.eql(u8, remote_name, "local"))
                             try f.spawn_fetch(io, output);
                 }
             }
@@ -385,21 +389,75 @@ pub fn run_task(
         return error.InvalidRemote;
     }
 
-    switch (try deployment.resolve_pipeline(term, step.pipeline, 0)) {
-        .needs => |needed| {
-            l.err("pipeline '{s}' requires pipeline '{s}' to be run first", .{ step.pipeline, needed });
-            return error.MissingDependency;
-        },
-        .needs_failed => |needed| {
-            l.err("pipeline '{s}' dependency '{s}' failed", .{ step.pipeline, needed });
-            return error.DependencyFailed;
-        },
-        .waits => |w| {
-            l.err("pipeline '{s}' dependency '{s}' is still running", .{ step.pipeline, w });
-            return error.DependencyRunning;
-        },
-        .failed => {},
-        .runnable, .done, .running => {},
+    const res_status = try deployment.resolve_pipeline(term, step.pipeline, 0);
+    const reports_need = switch (res_status) {
+        .needs, .needs_failed, .waits => true,
+        else => false,
+    };
+
+    if (reports_need) {
+        var missing_artifact: ?[]const u8 = null;
+        for (pipeline.in) |in| {
+            if (Weft.is_source_artifact(in))
+                continue
+            else if (deployment.get_artifact(in) != null)
+                continue
+            else {
+                const art_dir = project.artifact_dir_path(alloc, io, deployment.id, in) catch null;
+                const on_disk = if (art_dir) |dir_path| disk_check: {
+                    defer alloc.free(dir_path);
+                    if (std.Io.Dir.cwd().access(io, dir_path, .{})) |_|
+                        break :disk_check true
+                    else |_|
+                        break :disk_check false;
+                } else false;
+
+                if (on_disk) {
+                    const prod = deployment.config.get_producer(in);
+                    try deployment.add_artifact(alloc, .{
+                        .remote = "local",
+                        .pipeline = if (prod) |p|
+                            p.name
+                        else
+                            in,
+                        .name = in,
+                    });
+                } else {
+                    missing_artifact = in;
+                    break;
+                }
+            }
+        }
+
+        if (missing_artifact) |missing| {
+            switch (res_status) {
+                .needs => |needed| {
+                    l.err("artifact '{s}' is missing; pipeline '{s}' requires pipeline '{s}' to be run first", .{ missing, step.pipeline, needed });
+                    return error.MissingDependency;
+                },
+                .needs_failed => |needed| {
+                    l.err("artifact '{s}' is missing; dependency pipeline '{s}' failed", .{ missing, needed });
+                    return error.DependencyFailed;
+                },
+                .waits => |w| {
+                    l.err("artifact '{s}' is missing; dependency pipeline '{s}' is still running", .{ missing, w });
+                    return error.DependencyRunning;
+                },
+                else => {
+                    l.err("required artifact '{s}' is missing for pipeline '{s}'", .{ missing, step.pipeline });
+                    return error.MissingDependency;
+                },
+            }
+        }
+    }
+
+    const is_in_targets = for (deployment.targets) |target| {
+        if (std.mem.eql(u8, target.pipeline, step.pipeline))
+            break true;
+    } else false;
+    if (!is_in_targets) {
+        deployment.targets = try alloc.realloc(deployment.targets, deployment.targets.len + 1);
+        deployment.targets[deployment.targets.len - 1] = step;
     }
 
     var depl_buf = deployment.id.to_string();
@@ -481,12 +539,15 @@ pub fn run_task(
             log_buffer,
             &batch,
             clients,
+            &fetcher,
         );
 
         _ = poll_arena.reset(.retain_capacity);
         try view.update(io);
     }
     try group.await(io);
+    fetcher.await_all(io) catch |err|
+        l.warn("error waiting for artifact transfers: {any}", .{err});
     try view.update(io);
 
     const final_task = view.get_task(io, step.remote, step.pipeline) orelse {

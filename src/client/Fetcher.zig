@@ -231,3 +231,7 @@ fn fetch_wrapper(self: *@This(), io: std.Io, key: []const u8) !void {
 pub fn is_idle(self: *@This(), io: std.Io) bool {
     return self.view.is_transfers_idle(io);
 }
+
+pub fn await_all(self: *@This(), io: std.Io) !void {
+    try self.group.await(io);
+}

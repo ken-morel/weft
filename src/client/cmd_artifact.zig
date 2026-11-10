@@ -89,6 +89,23 @@ pub fn run(
     }
 
     try view.set_transfer(io, name, remote_name, .ready, 1.0);
+
+    var deployment = try project.load_deployment_leaky(gpa, alloc, io, dep_id);
+    deployment.config = config;
+    const prod = config.get_producer(name);
+    try deployment.add_artifact(alloc, .{
+        .remote = if (direction == .push)
+            remote_name
+        else
+            "local",
+        .pipeline = if (prod) |p|
+            p.name
+        else
+            name,
+        .name = name,
+    });
+    try deployment.save(io, project);
+
     term.success("Transferred {s}@{s}", .{ name, remote_name });
 }
 
