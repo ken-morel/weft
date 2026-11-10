@@ -83,19 +83,21 @@ pub fn artifact_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, depl
     );
 }
 pub fn cache_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, remote: []const u8, cache: ?[]const u8) ![:0]const u8 {
-    const rel_path = try std.fs.path.join(gpa, if (cache) |c| &.{
+    const project_path = try self.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(project_path);
+
+    return try std.fs.path.joinZ(gpa, if (cache) |c| &.{
+        project_path,
         ".weft",
         "caches",
         remote,
         c,
     } else &.{
+        project_path,
         ".weft",
         "caches",
         remote,
     });
-    defer gpa.free(rel_path);
-    try self.dir.createDirPath(io, rel_path);
-    return try self.dir.realPathFileAlloc(io, rel_path, gpa);
 }
 
 pub fn latest_deployment_id(self: @This(), io: std.Io) !?Deployment.Id {

@@ -67,19 +67,14 @@ fn local_cache_exists(io: std.Io, project: Project, alloc: std.mem.Allocator, re
     const rel_path = try std.fs.path.join(alloc, &.{ ".weft", "caches", remote, cache });
     defer alloc.free(rel_path);
 
-    var dir = project.dir.openDir(io, rel_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound)
+    var dir = project.dir.openDir(io, rel_path, .{}) catch |err| {
+        if (err == error.FileNotFound or err == error.NotDir)
             return false
         else
             return err;
     };
-    defer dir.close(io);
-
-    var iter = dir.iterate();
-    if (try iter.next(io)) |_|
-        return true
-    else
-        return false;
+    dir.close(io);
+    return true;
 }
 
 fn get_local_caches(alloc: std.mem.Allocator, io: std.Io, project: Project, remote: []const u8) ![]const []const u8 {
@@ -90,7 +85,7 @@ fn get_local_caches(alloc: std.mem.Allocator, io: std.Io, project: Project, remo
     defer alloc.free(rel_path);
 
     var dir = project.dir.openDir(io, rel_path, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound)
+        if (err == error.FileNotFound or err == error.NotDir)
             return &.{}
         else
             return err;
@@ -100,8 +95,7 @@ fn get_local_caches(alloc: std.mem.Allocator, io: std.Io, project: Project, remo
     var iter = dir.iterate();
     while (try iter.next(io)) |entry|
         if (entry.kind == .directory)
-            if (try local_cache_exists(io, project, alloc, remote, entry.name))
-                try list.append(alloc, try alloc.dupe(u8, entry.name));
+            try list.append(alloc, try alloc.dupe(u8, entry.name));
     return try list.toOwnedSlice(alloc);
 }
 
@@ -238,6 +232,11 @@ pub fn push(
         return error.InvalidRemote;
     };
 
+    if (src.cache == null and dst.cache != null) {
+        l.err("cannot push all caches from '{s}' to a single cache name '{s}'", .{ src.remote, dst.cache orelse unreachable });
+        return error.InvalidTarget;
+    }
+
     if (src.cache) |src_cache_name| {
         const dst_cache_name = if (dst.cache) |dc|
             dc
@@ -279,19 +278,10 @@ pub fn push(
         try view.set_transfer(io, dst_cache_name, dst.remote, .ready, 1.0);
         term.success("Pushed {s}.{s} -> {s}.{s}", .{ src.remote, src_cache_name, dst.remote, dst_cache_name });
     } else {
-        var local_caches = try get_local_caches(alloc, io, project, src.remote);
+        const local_caches = try get_local_caches(alloc, io, project, src.remote);
         if (local_caches.len == 0) {
-            const cfg_caches = try get_config_caches(alloc, config);
-            var found_any = false;
-            for (cfg_caches) |c_name| {
-                if (try local_cache_exists(io, project, alloc, src.remote, c_name))
-                    found_any = true;
-            }
-            if (!found_any) {
-                l.warn("no local caches found for remote '{s}'", .{src.remote});
-                return;
-            }
-            local_caches = cfg_caches;
+            l.err("no local caches found for remote '{s}'", .{src.remote});
+            return error.CacheNotFound;
         }
 
         var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
@@ -305,38 +295,25 @@ pub fn push(
         defer managed.release(io);
         const client = managed.inner;
 
-        var pushed_any = false;
         for (local_caches) |c_name| {
-            if (!try local_cache_exists(io, project, alloc, src.remote, c_name))
-                continue;
-
             const local_path = try project.cache_dir_path(alloc, io, src.remote, c_name);
             defer alloc.free(local_path);
 
-            const dst_cache_name = if (dst.cache) |dc|
-                dc
-            else
-                c_name;
-
-            try view.set_transfer(io, dst_cache_name, dst.remote, .pushing, 0.0);
+            try view.set_transfer(io, c_name, dst.remote, .pushing, 0.0);
 
             try transfer.push_cache(
                 gpa,
                 io,
                 &client.conn,
-                .{ .workspace = config.workspace, .name = dst_cache_name },
+                .{ .workspace = config.workspace, .name = c_name },
                 local_path,
                 &view,
                 dst.remote,
-                dst_cache_name,
+                c_name,
             );
 
-            try view.set_transfer(io, dst_cache_name, dst.remote, .ready, 1.0);
-            term.success("Pushed {s}.{s} -> {s}.{s}", .{ src.remote, c_name, dst.remote, dst_cache_name });
-            pushed_any = true;
+            try view.set_transfer(io, c_name, dst.remote, .ready, 1.0);
+            term.success("Pushed {s}.{s} -> {s}.{s}", .{ src.remote, c_name, dst.remote, c_name });
         }
-
-        if (!pushed_any)
-            l.warn("no caches uploaded for remote '{s}'", .{src.remote});
     }
 }
