@@ -117,6 +117,26 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     defer gpa.free(cgroup_name);
     l.info("supervising task {s}", .{cgroup_name});
 
+    const spec = try task.read_spec(gpa, alloc, io);
+
+    if (spec.script == null) {
+        l.debug("Creating empty outputs for pipeline", .{}); //debug
+        try task.write_status(gpa, io, .done);
+        for (spec.outputs) |output| {
+            defer _ = barena.reset(.free_all);
+
+            const artifact_path = try balloc.print(paths.artifact, task.id.w_d(output));
+
+            cwd.deleteTree(
+                io,
+                artifact_path,
+            ) catch |e| if (e != error.FileNotFound)
+                return e;
+            try cwd.createDirPath(io, artifact_path);
+        }
+        return;
+    }
+
     ensure_dirs: {
         try cwd.createDirPath(io, root_path);
         try cwd.createDirPath(io, run_dir_path);
@@ -136,7 +156,6 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     }
     l.debug("task directories and active link ready", .{}); //debug
 
-    const spec = try task.read_spec(gpa, alloc, io);
     const workspace = task.get_workspace();
     const uid = try workspace.uid(gpa, io);
 
@@ -369,11 +388,6 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     l.info("task completed and outputs harvested", .{});
 }
 
-const no_run_script =
-    \\#!/bin/sh
-    \\exec weft nop
-;
-
 pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
     const l = std.log.scoped(.supervisor_spawn);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -458,7 +472,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
 
             _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "usr/lib64");
 
-            const script = spec.script orelse no_run_script;
+            const script = spec.script orelse unreachable;
             try rootfs_dir.writeFile(io, .{
                 .data = script,
                 .sub_path = "entry",
