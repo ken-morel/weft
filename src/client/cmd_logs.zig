@@ -74,7 +74,7 @@ pub fn run(
 
     const buffer = try alloc.alloc(u8, Connection.max_packet_size);
 
-    var clients: *Client.Manager = try .create(alloc, project, inst.identity, env);
+    var clients: *Client.Manager = try .create(alloc, inst.identity, env);
     defer clients.destroy(io);
 
     var managed = clients.connect(

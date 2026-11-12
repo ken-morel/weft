@@ -33,15 +33,13 @@ pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate
     });
 }
 
-fn chown(parent: std.Io.Dir, sub_path: [:0]const u8, uid: u32, gid: u32) !void {
-    const log = std.log.scoped(.supervisor_chown);
-    const errno = std.os.linux.errno(std.os.linux.fchownat(parent.handle, sub_path.ptr, uid, gid, 0));
-    if (errno != .SUCCESS) {
-        log.err("Chown on {s} to {d}:{d} failed with errno {any}", .{ sub_path, uid, gid, errno });
-        return error.ChownFailed;
-    }
+const chown = domain.chown;
+fn chown_tree(gpa: std.mem.Allocator, io: std.Io, parent: std.Io.Dir, uid: u32, gid: u32) !void {
+    try chown(parent, ".", uid, gid);
+    var walker = try parent.walk(gpa);
+    while (try walker.next(io)) |entr|
+        try chown(entr.dir, io, entr.path, uid, gid);
 }
-
 fn freeze_dir(io: std.Io, dir: std.Io.Dir, depth: u8) !void {
     const log = std.log.scoped(.supervisor_freeze_dir);
     if (depth > max_freeze_depth) {
@@ -49,7 +47,7 @@ fn freeze_dir(io: std.Io, dir: std.Io.Dir, depth: u8) !void {
         return error.FreezeTooDeep;
     }
 
-    _ = std.os.linux.fchown(dir.handle, 0, 0);
+    try chown(dir, ".", 0, 0);
     const dir_mode = (try dir.stat(io)).permissions.toMode();
     _ = std.os.linux.fchmod(dir.handle, 0o444 | (dir_mode & 0o111));
 
@@ -621,12 +619,8 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
 
             for (spec.keep) |k| {
                 defer _ = barena.reset(.retain_capacity);
-                const target_keep = try balloc.printSentinel(
-                    "work/{s}",
-                    .{k.@"1"},
-                    0,
-                );
-                try rootfs_dir.createDirPath(io, target_keep);
+                const target_keep = try std.fs.path.joinZ(balloc, &.{ "work", k.@"1" });
+                try domain.create_dir_path_owned(io, rootfs_dir, target_keep, uid);
                 const host_keep = try balloc.printSentinel(
                     paths.keep,
                     task.id.w_(k.@"0"),
@@ -731,6 +725,8 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             defer _ = barena.reset(.retain_capacity);
             const host_keep = try balloc.printSentinel(paths.keep, task.id.w_(k.@"0"), 0);
             const target_keep = try balloc.printSentinel("{s}", .{k.@"1"}, 0);
+            if (std.fs.path.dirname(k.@"1")) |p|
+                try domain.create_dir_path_owned(io, cwd_dir, p, uid);
             _ = std.os.linux.symlinkat(host_keep.ptr, cwd_dir.handle, target_keep.ptr);
         }
         for (spec.tune.io.mount) |m| {

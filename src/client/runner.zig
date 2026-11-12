@@ -41,7 +41,7 @@ pub fn run_deployment(
 
     var depl: std.Io.Mutex = .init;
 
-    const clients: *Client.Manager = try .create(gpa, project, identity, env);
+    const clients: *Client.Manager = try .create(gpa, identity, env);
     defer clients.destroy(io);
 
     var fetcher: Fetcher = .{
@@ -466,7 +466,7 @@ pub fn run_task(
 
     var depl: std.Io.Mutex = .init;
 
-    const clients: *Client.Manager = try .create(gpa, project, identity, env);
+    const clients: *Client.Manager = try .create(gpa, identity, env);
     defer clients.destroy(io);
 
     var fetcher: Fetcher = .{

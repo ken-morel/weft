@@ -8,6 +8,7 @@ pub const Connection = @import("../wire/Connection.zig");
 const Crypt = @import("../wire/Crypt.zig");
 const Identity = @import("../wire/Identity.zig");
 const Nonce = @import("../wire/Nonce.zig");
+const ClientInstall = @import("ClientInstall.zig");
 const Remote = @import("Remote.zig");
 
 const Client = @This();
@@ -103,19 +104,15 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
     return self;
 }
 
-fn connect(gpa: std.mem.Allocator, io: std.Io, project: ?Project, addr: Remote.Address, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
+fn connect(gpa: std.mem.Allocator, io: std.Io, addr: Remote.Address, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
     const transport: Transport = transport: switch (addr) {
-        .cmd => |cmd| if (project) |p| {
+        .cmd => |cmd| {
+            // const l = std.log.scoped(.client_connect_cmd);
             if (cmd.len == 0)
                 return error.EmptyCommand;
-            var argv = try gpa.dupe([]const u8, cmd);
-            defer gpa.free(argv);
-            const script = try p.locate_script(gpa, io, cmd[0]) orelse return error.ScriptNotFound;
-            defer gpa.free(script);
-            argv[0] = script;
 
             const child = try std.process.spawn(io, .{
-                .argv = argv,
+                .argv = cmd,
                 .stdin = .pipe,
                 .stdout = .pipe,
                 .stderr = .inherit,
@@ -128,7 +125,7 @@ fn connect(gpa: std.mem.Allocator, io: std.Io, project: ?Project, addr: Remote.A
                     .writer = undefined,
                 },
             };
-        } else return error.ExpectedProject,
+        },
         .ip => |ip| {
             const stream = try ip.connect(io, .{
                 .mode = .stream,
@@ -184,19 +181,19 @@ pub const Managed = struct {
 pub const Manager = struct {
     clients: std.ArrayList(*Managed),
     lock: std.Io.Mutex,
-    project: ?Project,
+    // project: ?Project,
     gpa: std.mem.Allocator,
     identity: Identity,
     env: ?*std.process.Environ.Map,
+    // inst: ?ClientInstall,
 
-    pub fn create(gpa: std.mem.Allocator, project: ?Project, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
+    pub fn create(gpa: std.mem.Allocator, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
         const self = try gpa.create(@This());
         errdefer gpa.destroy(self);
         self.* = .{
             .gpa = gpa,
             .clients = .empty,
             .lock = .init,
-            .project = project,
             .identity = identity,
             .env = env,
         };
@@ -218,7 +215,6 @@ pub const Manager = struct {
         const client: *Client = try Client.connect(
             self.gpa,
             io,
-            self.project,
             addr,
             self.identity,
             self.env,
@@ -247,11 +243,11 @@ pub const Manager = struct {
         } else return managed;
     }
 
-    // pub fn connect_str(self: *@This(), io: std.Io, addr_str: []const u8) !*Managed {
-    //     const addr = try Weft.RemoteAddress.parse(self.gpa, io, addr_str);
-    //     defer addr.deinit(self.gpa);
-    //     return try self.connect(io, addr);
-    // }
+    pub fn connect_str(self: *@This(), io: std.Io, addr_str: []const u8) !*Managed {
+        const addr = try Weft.RemoteAddress.parse(self.gpa, io, addr_str);
+        defer addr.deinit(self.gpa);
+        return try self.connect(io, addr);
+    }
 
     pub fn destroy(self: *@This(), io: std.Io) void {
         for (self.clients.items) |m| {

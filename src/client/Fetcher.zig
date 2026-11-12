@@ -114,7 +114,7 @@ pub fn fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {
 
 pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
     if (try self.has_artifact(io, remote, artifact)) {
-        try self.view.set_transfer(io, artifact, remote.name, undefined, .ready, 1.0);
+        try self.view.set_transfer(io, artifact, remote.name, null, .ready, 1.0, null, null);
         return;
     }
 
@@ -133,8 +133,8 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
 }
 
 pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
-    try self.view.set_transfer(io, artifact, remote.name, null, .pushing, 0.0);
-    defer self.view.set_transfer(io, artifact, remote.name, null, .ready, 1.0) catch {};
+    try self.view.set_transfer(io, artifact, remote.name, null, .pushing, 0.0, null, null);
+    defer self.view.set_transfer(io, artifact, remote.name, null, .ready, 1.0, null, null) catch {};
 
     const artifact_dir_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_dir_path);
@@ -173,8 +173,8 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         } else return error.ArtifactNotFound;
     };
 
-    try self.view.set_transfer(io, artifact, remote.name, null, .pulling, 0.0);
-    defer self.view.set_transfer(io, artifact, remote.name, null, .ready, 1.0) catch {};
+    try self.view.set_transfer(io, artifact, remote.name, null, .pulling, 0.0, null, null);
+    defer self.view.set_transfer(io, artifact, remote.name, null, .ready, 1.0, null, null) catch {};
 
     const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_path);

@@ -155,7 +155,7 @@ pub fn pull(
         } else break :caches cfg_caches;
     };
 
-    var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
+    var clients: *Client.Manager = try .create(gpa, inst.identity, env);
     defer clients.destroy(io);
 
     var view: View = .init(gpa, term, null);
@@ -170,7 +170,7 @@ pub fn pull(
         const local_path = try project.cache_dir_path(alloc, io, target.remote, cache_name);
         defer alloc.free(local_path);
 
-        try view.set_transfer(io, cache_name, target.remote, null, .pulling, 0.0);
+        try view.set_transfer(io, cache_name, target.remote, null, .pulling, 0.0, null, null);
 
         transfer.pull_cache(
             gpa,
@@ -188,7 +188,7 @@ pub fn pull(
             } else return err;
         };
 
-        try view.set_transfer(io, cache_name, target.remote, null, .ready, 1.0);
+        try view.set_transfer(io, cache_name, target.remote, null, .ready, 1.0, null, null);
         term.success("Pulled {s}@{s}", .{ cache_name, target.remote });
     }
 }
@@ -247,7 +247,7 @@ pub fn push(
             return error.CacheNotFound;
         }
 
-        var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
+        var clients: *Client.Manager = try .create(gpa, inst.identity, env);
         defer clients.destroy(io);
 
         var view: View = .init(gpa, term, null);
@@ -261,7 +261,7 @@ pub fn push(
         const local_path = try project.cache_dir_path(alloc, io, src.remote, src_cache_name);
         defer alloc.free(local_path);
 
-        try view.set_transfer(io, dst_cache_name, dst.remote, null, .pushing, 0.0);
+        try view.set_transfer(io, dst_cache_name, dst.remote, null, .pushing, 0.0, null, null);
 
         try transfer.push_cache(
             gpa,
@@ -274,7 +274,7 @@ pub fn push(
             dst_cache_name,
         );
 
-        try view.set_transfer(io, dst_cache_name, dst.remote, null, .ready, 1.0);
+        try view.set_transfer(io, dst_cache_name, dst.remote, null, .ready, 1.0, null, null);
         term.success("Pushed {s}.{s} -> {s}.{s}", .{ src.remote, src_cache_name, dst.remote, dst_cache_name });
     } else {
         const local_caches = try get_local_caches(alloc, io, project, src.remote);
@@ -283,7 +283,7 @@ pub fn push(
             return error.CacheNotFound;
         }
 
-        var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
+        var clients: *Client.Manager = try .create(gpa, inst.identity, env);
         defer clients.destroy(io);
 
         var view: View = .init(gpa, term, null);
@@ -298,7 +298,7 @@ pub fn push(
             const local_path = try project.cache_dir_path(alloc, io, src.remote, c_name);
             defer alloc.free(local_path);
 
-            try view.set_transfer(io, c_name, dst.remote, null, .pushing, 0.0);
+            try view.set_transfer(io, c_name, dst.remote, null, .pushing, 0.0, null, null);
 
             try transfer.push_cache(
                 gpa,
@@ -311,7 +311,7 @@ pub fn push(
                 c_name,
             );
 
-            try view.set_transfer(io, c_name, dst.remote, null, .ready, 1.0);
+            try view.set_transfer(io, c_name, dst.remote, null, .ready, 1.0, null, null);
             term.success("Pushed {s}.{s} -> {s}.{s}", .{ src.remote, c_name, dst.remote, c_name });
         }
     }

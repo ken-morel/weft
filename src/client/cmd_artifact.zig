@@ -25,7 +25,7 @@ pub fn run(
     deployment_spec: ?[]const u8,
     env: ?*std.process.Environ.Map,
 ) !void {
-    var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
+    var clients: *Client.Manager = try .create(gpa, inst.identity, env);
     defer clients.destroy(io);
     const l = log(.artifact);
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -60,7 +60,7 @@ pub fn run(
 
     const status: View.TransferItem.Status = if (direction == .pull) .pulling else .pushing;
 
-    try view.set_transfer(io, name, remote_name, null, status, 0.0);
+    try view.set_transfer(io, name, remote_name, null, status, 0.0, null, null);
 
     var managed = clients.connect(
         io,
@@ -89,7 +89,7 @@ pub fn run(
         };
     }
 
-    try view.set_transfer(io, name, remote_name, null, .ready, 1.0);
+    try view.set_transfer(io, name, remote_name, null, .ready, 1.0, null, null);
 
     var deployment = try project.load_deployment_leaky(gpa, alloc, io, dep_id);
     deployment.config = config;

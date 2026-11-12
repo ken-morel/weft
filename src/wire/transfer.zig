@@ -13,6 +13,7 @@ pub const Status = struct {
     file_total: u64 = 0,
     file_sent: u64 = 0,
     bytes_sent: u64 = 0,
+    speed: u64 = 0,
     done: bool = false,
     compressed: ?bool = null,
     err: ?anyerror = null,
@@ -71,8 +72,15 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
     if (status) |s| {
         s.total += header.total_files;
         s.compressed = header.compress;
+        s.speed = 0;
     }
 
+    var previous_total: u64 = if (status) |s|
+        s.bytes_sent
+    else
+        0;
+
+    var previous_time: std.Io.Timestamp = .now(io, .real);
     while (true) {
         const data = try conn.recv_buf(conn_buffer);
         if (data.len < 5 or !std.mem.eql(u8, data[0..4], "pack"))
@@ -98,6 +106,17 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
                 if (status) |s| {
                     s.file_sent += bytes.len;
                     s.bytes_sent += bytes.len;
+
+                    const new_time: std.Io.Timestamp = .now(io, .real);
+                    const delta = @as(u64, @max(0, previous_time.durationTo(new_time).toSeconds()));
+                    const raw_speed = if (delta > 0)
+                        (s.bytes_sent -| previous_total) / delta
+                    else
+                        0;
+
+                    s.speed = (s.speed * 9 + raw_speed) / 10;
+                    previous_time = new_time;
+                    previous_total = s.bytes_sent;
                 }
                 try packer.put(io, .{ .data = bytes });
             },

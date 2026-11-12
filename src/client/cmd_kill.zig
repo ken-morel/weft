@@ -65,7 +65,7 @@ pub fn run(
         return error.RemoteNotFound;
     };
 
-    var clients: *Client.Manager = try .create(alloc, project, inst.identity, env);
+    var clients: *Client.Manager = try .create(alloc, inst.identity, env);
     defer clients.destroy(io);
 
     const managed = clients.connect(io, remote.address) catch |err| {

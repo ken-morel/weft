@@ -578,7 +578,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                                 break :remote remote;
                     } else break :remote Remote{
                         .name = "weft",
-                        .address = try Remote.Address.resolve(gpa, alloc, io, cmd.remote, installation, project),
+                        .address = try .resolve(gpa, alloc, io, cmd.remote, installation, project),
                         .groups = "",
                     };
 
@@ -589,8 +589,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     gpa,
                     io,
                     &term,
-                    &installation,
-                    project,
+                    installation,
                     remote,
                     &environ_map,
                 );

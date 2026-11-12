@@ -131,13 +131,12 @@ pub fn run(
     gpa: std.mem.Allocator,
     io: std.Io,
     term: *Term,
-    inst: *const ClientInstall,
-    project: ?Project,
+    inst: ClientInstall,
     remote: Remote,
     env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.monitor);
-    var clients: *Client.Manager = try .create(gpa, project, inst.identity, env);
+    var clients: *Client.Manager = try .create(gpa, inst.identity, env);
     defer clients.destroy(io);
 
     var arena: std.heap.ArenaAllocator = .init(gpa);

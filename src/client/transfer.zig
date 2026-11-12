@@ -2,6 +2,7 @@ const std = @import("std");
 
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
+const sizes = @import("../util/sizes.zig");
 const Connection = @import("../wire/Connection.zig");
 const transfer = @import("../wire/transfer.zig");
 const View = @import("View.zig");
@@ -35,14 +36,14 @@ pub fn pull_dir(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try view.set_transfer(io, artifact, remote_name, status.compressed, .pulling, progress(&status));
+            try view.set_transfer(io, artifact, remote_name, status.compressed, .pulling, progress(&status), status.total, status.speed);
     }
     try group.await(io);
     if (status.err) |err|
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.pull.Res));
-    try view.set_transfer(io, artifact, remote_name, null, .ready, 1.0);
+    try view.set_transfer(io, artifact, remote_name, null, .ready, 1.0, null, null);
 }
 
 pub fn push_dir(
@@ -69,14 +70,14 @@ pub fn push_dir(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try view.set_transfer(io, artifact, remote_name, null, .pushing, progress(&status));
+            try view.set_transfer(io, artifact, remote_name, status.compressed, .pushing, progress(&status), status.total, status.speed);
     }
     try group.await(io);
     if (status.err) |err|
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.push.Res));
-    try view.set_transfer(io, artifact, remote_name, null, .ready, 1.0);
+    try view.set_transfer(io, artifact, remote_name, null, .ready, 1.0, null, null);
 }
 
 pub fn pull_cache(
@@ -106,15 +107,25 @@ pub fn pull_cache(
 
     {
         errdefer group.cancel(io);
+
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try view.set_transfer(io, cache_name, remote_name, status.compressed, .pulling, progress(&status));
+            try view.set_transfer(
+                io,
+                cache_name,
+                remote_name,
+                status.compressed,
+                .pulling,
+                progress(&status),
+                status.total,
+                status.speed,
+            );
     }
     try group.await(io);
     if (status.err) |err|
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.pull.Res));
-    try view.set_transfer(io, cache_name, remote_name, null, .ready, 1.0);
+    try view.set_transfer(io, cache_name, remote_name, null, .ready, 1.0, null, null);
 }
 
 pub fn push_cache(
@@ -140,14 +151,14 @@ pub fn push_cache(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try view.set_transfer(io, cache_name, remote_name, status.compressed, .pushing, progress(&status));
+            try view.set_transfer(io, cache_name, remote_name, status.compressed, .pushing, progress(&status), status.total, status.speed);
     }
     try group.await(io);
     if (status.err) |err|
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.push.Res));
-    try view.set_transfer(io, cache_name, remote_name, null, .ready, 1.0);
+    try view.set_transfer(io, cache_name, remote_name, null, .ready, 1.0, null, null);
 }
 
 fn progress(status: *const transfer.Status) f32 {

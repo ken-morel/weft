@@ -35,6 +35,8 @@ pub const TransferItem = struct {
     status: Status,
     compress: ?bool,
     reported: ?Status = null,
+    total: u64,
+    speed: u64,
 };
 
 pub const TaskPatch = struct {
@@ -162,11 +164,11 @@ pub fn has_error(self: *@This(), io: std.Io) bool {
     } else false;
 }
 
-pub fn set_transfer(self: *@This(), io: std.Io, name: []const u8, remote: []const u8, compress: ?bool, status: TransferItem.Status, percent: f32) !void {
+pub fn set_transfer(self: *@This(), io: std.Io, name: []const u8, remote: []const u8, compress: ?bool, status: TransferItem.Status, percent: f32, total: ?u64, speed: ?u64) !void {
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
-    const art = for (self.transfers.items) |*a| {
+    const art: ?*TransferItem = for (self.transfers.items) |*a| {
         if (std.mem.eql(u8, a.name, name) and std.mem.eql(u8, a.remote, remote))
             break a;
     } else null;
@@ -175,6 +177,8 @@ pub fn set_transfer(self: *@This(), io: std.Io, name: []const u8, remote: []cons
         a.status = status;
         a.percent = percent;
         a.compress = compress orelse a.compress;
+        a.total = total orelse a.total;
+        a.speed = speed orelse a.speed;
     } else {
         try self.transfers.append(self.gpa, .{
             .compress = compress,
@@ -182,6 +186,8 @@ pub fn set_transfer(self: *@This(), io: std.Io, name: []const u8, remote: []cons
             .remote = try self.gpa.dupe(u8, remote),
             .status = status,
             .percent = percent,
+            .total = total orelse 0,
+            .speed = speed orelse 0,
         });
     }
 
@@ -246,10 +252,11 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
         if (a.reported != null and a.reported.? == a.status)
             continue;
 
+        const comp = compressed_ui(a.compress);
         if (a.status == .pulling)
-            self.term.write_event(.cyan, "<", " {s}@{s}", .{ a.name, a.remote })
+            self.term.write_event(.cyan, "<", " {s}@{s}{s}", .{ a.name, a.remote, comp })
         else if (a.status == .pushing)
-            self.term.write_event(.yellow, ">", " {s}@{s}", .{ a.name, a.remote });
+            self.term.write_event(.yellow, ">", " {s}@{s}{s}", .{ a.name, a.remote, comp });
 
         a.reported = a.status;
     }
@@ -326,10 +333,12 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
             self.term.clear_line();
             lines += 1;
             const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, a.percent * 100.0)));
+            const comp = compressed_ui(a.compress);
+
             if (a.status == .pulling)
-                self.term.styled_ln(.cyan, "< .{s}@{s} {d}%", .{ a.name, a.remote, pct })
+                self.term.styled_ln(.cyan, "< .{s}@{s}{s} {d}%", .{ a.name, a.remote, comp, pct })
             else if (a.status == .pushing)
-                self.term.styled_ln(.yellow, "> {s}@{s} {d}%", .{ a.name, a.remote, pct });
+                self.term.styled_ln(.yellow, "> {s}@{s}{s} {d}%", .{ a.name, a.remote, comp, pct });
         }
     }
 
@@ -337,4 +346,14 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
     if (lines > 0)
         self.term.move_up(lines);
     try self.term.flush();
+}
+
+pub inline fn compressed_ui(compress: ?bool) []const u8 {
+    return if (compress) |c|
+        if (c)
+            "(compressed)"
+        else
+            "(not compressed)"
+    else
+        "(unknown)";
 }
