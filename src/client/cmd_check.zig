@@ -123,18 +123,16 @@ pub fn run(
 
     for (config.remotes) |r| {
         const raw_addr = if (r.@"1") |addr| addr else blk: {
-            if (client_cfg) |cfg| {
+            if (client_cfg) |cfg|
                 for (cfg.remotes) |cr|
                     if (std.mem.eql(u8, cr.@"0", r.@"0"))
                         break :blk cr.@"1";
-            }
-            if (std.mem.eql(u8, r.@"0", "local"))
-                break :blk "127.0.0.1:9338";
+
             l.warn("remote '{s}': address is not specified in weft.zon and not configured in client.zon", .{r.@"0"});
             break :blk null;
         };
 
-        if (raw_addr) |addr| {
+        if (raw_addr) |addr|
             if (addr.len > 0 and addr[0] == '!') {
                 const cmd_str = std.mem.trim(u8, addr[1..], " \t");
                 var iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
@@ -155,8 +153,7 @@ pub fn run(
                     l.err("remote '{s}': command is empty after '!'", .{r.@"0"});
                     errors += 1;
                 }
-            }
-        }
+            };
     }
 
     for (config.pipelines, 0..) |p1, idx|

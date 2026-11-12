@@ -303,7 +303,7 @@ fn poll_item(
                     });
 
                     if (fetcher) |f|
-                        if (is_target and !std.mem.eql(u8, remote_name, "local"))
+                        if (is_target)
                             try f.spawn_fetch(io, output);
                 }
             }
