@@ -7,6 +7,7 @@ const format_bytes = @import("../util/sizes.zig").format_bytes;
 pub const TaskItem = struct {
     remote: []const u8,
     pipeline: []const u8,
+    mode: []const u8,
     status: Task.Status = .preparing,
     reported: ?Task.Status = null,
     err: ?[]const u8 = null,
@@ -32,6 +33,7 @@ pub const TransferItem = struct {
     remote: []const u8,
     percent: f32 = 0,
     status: Status,
+    compress: ?bool,
     reported: ?Status = null,
 };
 
@@ -94,7 +96,7 @@ pub fn get_task(self: *@This(), io: std.Io, remote: []const u8, pipeline: []cons
         null;
 }
 
-pub fn set_task(self: *@This(), io: std.Io, remote: []const u8, pipeline: []const u8, patch: TaskPatch) !void {
+pub fn set_task(self: *@This(), io: std.Io, remote: []const u8, pipeline: []const u8, mode: []const u8, patch: TaskPatch) !void {
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
@@ -103,6 +105,7 @@ pub fn set_task(self: *@This(), io: std.Io, remote: []const u8, pipeline: []cons
         try self.tasks.append(self.gpa, .{
             .remote = try self.gpa.dupe(u8, remote),
             .pipeline = try self.gpa.dupe(u8, pipeline),
+            .mode = try self.gpa.dupe(u8, mode),
             .status = patch.status orelse .preparing,
             .started = .now(io, .real),
         });
@@ -159,7 +162,7 @@ pub fn has_error(self: *@This(), io: std.Io) bool {
     } else false;
 }
 
-pub fn set_transfer(self: *@This(), io: std.Io, name: []const u8, remote: []const u8, status: TransferItem.Status, percent: f32) !void {
+pub fn set_transfer(self: *@This(), io: std.Io, name: []const u8, remote: []const u8, compress: ?bool, status: TransferItem.Status, percent: f32) !void {
     self.mutex.lockUncancelable(io);
     defer self.mutex.unlock(io);
 
@@ -171,8 +174,10 @@ pub fn set_transfer(self: *@This(), io: std.Io, name: []const u8, remote: []cons
     if (art) |a| {
         a.status = status;
         a.percent = percent;
+        a.compress = compress orelse a.compress;
     } else {
         try self.transfers.append(self.gpa, .{
+            .compress = compress,
             .name = try self.gpa.dupe(u8, name),
             .remote = try self.gpa.dupe(u8, remote),
             .status = status,
@@ -209,7 +214,7 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
             continue;
 
         var key_buf: [128]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ t.remote, t.pipeline }) catch t.pipeline;
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}.{s}", .{ t.mode, t.remote, t.pipeline }) catch t.pipeline;
         const color = Term.task_color(key);
         const duration_ms: u64 = @intCast(@max(t.started.durationTo(.now(io, .real)).toMilliseconds(), 0));
 
@@ -224,8 +229,14 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
                 self.term.write_event(.red, "{#.err", " {s} {s}", .{ key, t.err orelse "<unknown error>" })
             else
                 self.term.write_event(.red, "#.err", " {s} ({d}ms, CPU: {d}ms): {s}", .{ key, duration_ms, t.cpu_ms orelse 0, t.err orelse "<unknown error>" }),
-            .skipped => self.term.write_event(.green, if (t.reported == null) "{#.skipped" else "#.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, t.cpu_ms orelse 0 }),
-            .killed => self.term.write_event(.red, if (t.reported == null) "{#.killed" else "#.killed", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, t.cpu_ms orelse 0 }),
+            .skipped => self.term.write_event(.green, if (t.reported == null)
+                "{}.skipped"
+            else
+                "}.skipped", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, t.cpu_ms orelse 0 }),
+            .killed => self.term.write_event(.red, if (t.reported == null)
+                "{}#killed"
+            else
+                "}#killed", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, t.cpu_ms orelse 0 }),
             .preparing, .harvesting, .frozen => {},
         }
         t.reported = t.status;
@@ -274,7 +285,7 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
             lines += 1;
 
             var key_buf: [128]u8 = undefined;
-            const key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ t.remote, t.pipeline }) catch t.pipeline;
+            const key = std.fmt.bufPrint(&key_buf, "{s}:{s}.{s}", .{ t.mode, t.remote, t.pipeline }) catch t.pipeline;
 
             switch (t.status) {
                 .preparing => self.term.styled_ln(.dim, "  {s}", .{key}),

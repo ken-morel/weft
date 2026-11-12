@@ -11,9 +11,10 @@ pub fn Res(comptime T: type) type {
 
 pub const Pack = union(enum(u8)) {
     pub const Pull = extern struct {
-        allow_compress: bool,
+        can_decompress: bool,
     };
     pub const Push = extern struct {
+        compress: bool,
         total_files: u64,
     };
     pull: Pull,

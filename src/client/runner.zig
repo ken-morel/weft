@@ -9,7 +9,6 @@ const Weft = @import("../domain/Weft.zig");
 const Connection = @import("../wire/Connection.zig");
 const Identity = @import("../wire/Identity.zig");
 const Client = @import("Client.zig");
-const client_remote = @import("Remote.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Fetcher = @import("Fetcher.zig");
@@ -33,7 +32,7 @@ pub fn run_deployment(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
+    const remotes = try Remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
     const identity = inst.identity;
 
     var depl_buf = deployment.id.to_string();
@@ -86,7 +85,7 @@ pub fn run_deployment(
 
         while (try deployment.next_step(term)) |step| {
             const remote = for (remotes) |*remote| {
-                if (std.mem.eql(u8, remote.name, step.group))
+                if (std.mem.eql(u8, remote.name, step.group) or remote.has_group(step.group))
                     break remote;
             } else return error.InvalidRemote;
 
@@ -98,7 +97,7 @@ pub fn run_deployment(
                 return error.InvalidRemote;
             }
 
-            try view.set_task(io, remote.name, pipeline.name, .{ .status = .preparing });
+            try view.set_task(io, remote.name, step.pipeline, step.mode, .{ .status = .preparing });
             try deployment.add_running(gpa, step);
             _ = try spawn(
                 io,
@@ -225,11 +224,11 @@ fn poll_batch(
         if (poll_res.logs) |logs| {
             if (logs.data.len > 0)
                 try view.print_logs(pipeline_name, logs.data);
-            try view.set_task(io, remote_name, pipeline_name, .{ .log_offset = logs.end_offset });
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .log_offset = logs.end_offset });
         }
 
         if (poll_res.usage) |u|
-            try view.set_task(io, remote_name, pipeline_name, .{
+            try view.set_task(io, remote_name, pipeline_name, "?", .{
                 .usage = .{
                     .cpu_usec = u.cpu_usec,
                     .memory_bytes = u.memory_bytes,
@@ -267,7 +266,7 @@ fn fail_step(
     depl.lock(io) catch return;
     defer depl.unlock(io);
     dep.remove_running(gpa, step.group, step.pipeline);
-    view.set_task(io, step.group, step.pipeline, .{ .status = .failed, .err = msg }) catch {};
+    view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .failed, .err = msg }) catch {};
     dep.save(io, project) catch {};
 }
 
@@ -284,7 +283,7 @@ fn poll_item(
 ) !void {
     if (status) |s| switch (s) {
         .preparing, .running, .harvesting, .frozen => {
-            try view.set_task(io, remote_name, pipeline_name, .{ .status = s });
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = s });
             return;
         },
         .done => {
@@ -309,14 +308,14 @@ fn poll_item(
                 }
             }
 
-            try view.set_task(io, remote_name, pipeline_name, .{ .status = .done });
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .done });
         },
         .failed => {
             const code = 1; //TODO: restore this when actually fetching the code
             deployment.remove_running(gpa, remote_name, pipeline_name);
             const err_msg = try gpa.print("task failed with exit code {d}", .{code});
             defer gpa.free(err_msg);
-            try view.set_task(io, remote_name, pipeline_name, .{ .status = .failed, .err = err_msg });
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .failed, .err = err_msg });
 
             if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
                 try deployment.add_failed(gpa, .{
@@ -328,11 +327,11 @@ fn poll_item(
         },
         .skipped => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
-            try view.set_task(io, remote_name, pipeline_name, .{ .status = .skipped });
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .skipped });
         },
         .killed => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
-            try view.set_task(io, remote_name, pipeline_name, .{ .status = .killed });
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .killed });
 
             if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
                 try deployment.add_failed(gpa, .{
@@ -348,7 +347,7 @@ fn poll_item(
                 return; // spawn still in flight; keep polling
 
         deployment.remove_running(gpa, remote_name, pipeline_name);
-        try view.set_task(io, remote_name, pipeline_name, .{ .status = .failed, .err = "task not found on remote" });
+        try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .failed, .err = "task not found on remote" });
         if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
             try deployment.add_failed(gpa, .{
                 .retries_left = 0,
@@ -374,7 +373,7 @@ pub fn run_task(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
+    const remotes = try Remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
     const identity = inst.identity;
 
     const remote = for (remotes) |*remote| {
@@ -488,7 +487,7 @@ pub fn run_task(
 
     try src.create_sources(alloc, io, term, inst, project, deployment);
 
-    try view.set_task(io, remote.name, pipeline.name, .{ .status = .preparing });
+    try view.set_task(io, remote.name, pipeline.name, step.mode, .{ .status = .preparing });
     try deployment.add_running(gpa, step);
     _ = try spawn(
         io,
@@ -649,7 +648,7 @@ pub fn spawn_step(
     const buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(buffer);
 
-    try view.set_task(io, step.group, step.pipeline, .{ .status = .preparing });
+    try view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .preparing });
 
     spawn_task: {
         const managed = try fetcher.clients.connect(io, remote.address);
@@ -670,7 +669,7 @@ pub fn spawn_step(
         };
 
         if (res) |_| {
-            try view.set_task(io, step.group, step.pipeline, .{ .status = .running });
+            try view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .running });
         } else |err| {
             fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;

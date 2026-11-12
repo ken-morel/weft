@@ -46,6 +46,8 @@ pub fn spawn_detach(io: std.Io, spawn_options: std.process.SpawnOptions) !void {
             _ = std.os.linux.write(std.posix.STDERR_FILENO, "spawn_detach failed: ", "spawn_detach failed: ".len);
             _ = std.os.linux.write(std.posix.STDERR_FILENO, @errorName(err).ptr, @errorName(err).len);
             _ = std.os.linux.write(std.posix.STDERR_FILENO, "\n", 1);
+            if (@errorReturnTrace()) |trace|
+                std.debug.dumpErrorReturnTrace(trace);
             std.os.linux.exit_group(1);
         };
         std.os.linux.exit_group(0);

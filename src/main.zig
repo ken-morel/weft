@@ -244,7 +244,7 @@ const Argz = union(enum) {
         pub const doc_file = "The file to decode. Default to '-' for stdin";
         file: []const u8 = "-",
     },
-    argz_help: argz.Help("weft", @This()),
+    argz_help: argz.Help("weft", Argz),
     nop: struct {
         pub const doc = "nop";
     },

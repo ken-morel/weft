@@ -193,11 +193,13 @@ fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
 
 pub fn run(self: *@This()) !void {
     _ = std.os.linux.syscall3(.setpriority, 0, 0, 10);
+    const cwd: std.Io.Dir = .cwd();
     const l = log(.daemon);
     const pid = std.os.linux.getpid();
     var pid_buf: [16]u8 = undefined;
     const pid_str = std.fmt.bufPrint(&pid_buf, "{d}\n", .{pid}) catch unreachable;
-    try domain.write_file_atomic(self.io, std.Io.Dir.cwd(), paths.weft_pid, pid_str, .{});
+    try cwd.createDirPath(self.io, paths.weft_run);
+    try domain.write_file_atomic(self.io, cwd, paths.weft_pid, pid_str, .{ .replace = true });
     defer std.Io.Dir.cwd().deleteFile(self.io, paths.weft_pid) catch {};
 
     try paths.ensure_dirs(self.io);

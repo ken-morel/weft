@@ -14,6 +14,7 @@ pub const Status = struct {
     file_sent: u64 = 0,
     bytes_sent: u64 = 0,
     done: bool = false,
+    compressed: ?bool = null,
     err: ?anyerror = null,
     pub const init: @This() = .{};
 };
@@ -53,7 +54,7 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
             .{
                 @backingInt(proto.Pack.pull),
                 std.mem.asBytes(&proto.Pack.Pull{
-                    .allow_compress = decompress,
+                    .can_decompress = decompress,
                 }),
             },
         ),
@@ -63,10 +64,14 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
         !std.mem.eql(u8, header_bytes[0..4], "pack") or
         header_bytes[4] != @backingInt(proto.Pack.push))
         return error.InvalidHeader;
+
     var header: proto.Pack.Push = undefined;
     @memcpy(std.mem.asBytes(&header), header_bytes[5..]);
-    if (status) |s|
+
+    if (status) |s| {
         s.total += header.total_files;
+        s.compressed = header.compress;
+    }
 
     while (true) {
         const data = try conn.recv_buf(conn_buffer);
@@ -97,6 +102,9 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
                 try packer.put(io, .{ .data = bytes });
             },
             proto.compressed_data => {
+                if (!decompress)
+                    return error.CompressedData;
+
                 const compressed = data[5..];
                 var input: std.Io.Reader = .fixed(compressed);
                 var output: std.Io.Writer = .fixed(decompress_buffer);
@@ -157,18 +165,6 @@ pub fn _push(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, source: []co
     );
     defer packer.deinit(io);
 
-    try conn.send(
-        try std.fmt.bufPrint(
-            send_buffer,
-            "pack{c}{s}",
-            .{
-                @backingInt(proto.Pack.push),
-                std.mem.asBytes(&proto.Pack.Push{
-                    .total_files = total_files,
-                }),
-            },
-        ),
-    );
     const header_bytes = try conn.recv_buf(read_buffer);
     if (header_bytes.len != 4 + 1 + @sizeOf(proto.Pack.Pull) or
         !std.mem.eql(u8, header_bytes[0..4], "pack") or
@@ -178,7 +174,23 @@ pub fn _push(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, source: []co
     var header: proto.Pack.Pull = undefined;
     @memcpy(std.mem.asBytes(&header), header_bytes[5..]);
 
-    const compress = allow_compress and header.allow_compress;
+    const compress = allow_compress and header.can_decompress;
+    if (status) |s|
+        s.compressed = compress;
+
+    try conn.send(
+        try std.fmt.bufPrint(
+            send_buffer,
+            "pack{c}{s}",
+            .{
+                @backingInt(proto.Pack.push),
+                std.mem.asBytes(&proto.Pack.Push{
+                    .total_files = total_files,
+                    .compress = compress,
+                }),
+            },
+        ),
+    );
 
     var pressor: Pressor = if (compress)
         .init(try alloc.alloc(u8, Pressor.buffer_size))

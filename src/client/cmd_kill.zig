@@ -28,7 +28,8 @@ pub fn run(
     const needs_resolution = if (deployment_spec) |d|
         d.len != 8
     else
-        false;
+        true;
+
     const dep_id: Deployment.Id = if (needs_resolution)
         try project.resolve_deployment_id(io, deployment_spec)
     else
