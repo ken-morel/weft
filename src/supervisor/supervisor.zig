@@ -4,6 +4,7 @@ const DaemonInstall = @import("../daemon/DaemonInstall.zig");
 const Task = @import("../daemon/Task.zig");
 const domain = @import("../domain/domain.zig");
 const spawn_detach = @import("../domain/domain.zig").spawn_detach;
+const chown = domain.chown;
 const paths = @import("../domain/paths.zig");
 const nix = @import("../nix/nix.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
@@ -33,7 +34,6 @@ pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate
     });
 }
 
-const chown = domain.chown;
 fn chown_tree(gpa: std.mem.Allocator, io: std.Io, parent: std.Io.Dir, uid: u32, gid: u32) !void {
     try chown(parent, ".", uid, gid);
     var walker = try parent.walk(gpa);
@@ -438,40 +438,25 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             }) |dir|
                 try rootfs_dir.createDirPath(io, dir);
 
-            const host_lib_stat = cwd.statFile(
-                io,
-                "/lib",
-                .{ .follow_symlinks = false },
-            ) catch null;
-            const host_lib_is_dir = if (host_lib_stat) |st|
-                st.kind == .directory
-            else
-                false;
-
-            const host_lib64_stat = cwd.statFile(
-                io,
-                "/lib64",
-                .{ .follow_symlinks = false },
-            ) catch null;
-            const host_lib64_is_dir = if (host_lib64_stat) |st|
-                st.kind == .directory
-            else
-                false;
-
             _ = std.os.linux.symlinkat("/bin", rootfs_dir.handle, "usr/bin");
-            if (host_lib_is_dir)
-                try rootfs_dir.createDirPath(io, "lib")
-            else
-                _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib");
 
-            if (host_lib64_is_dir)
-                try rootfs_dir.createDirPath(io, "lib64")
-            else if (host_lib_is_dir)
-                _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "lib64")
-            else
-                _ = std.os.linux.symlinkat("usr/lib", rootfs_dir.handle, "lib64");
-
-            _ = std.os.linux.symlinkat("lib", rootfs_dir.handle, "usr/lib64");
+            const mounts = [_][:0]const u8{ "/lib", "/lib64", "/usr/lib", "/usr/lib64" };
+            var has_mount: [mounts.len]bool = @splat(false);
+            for (mounts, &has_mount) |m, *h| {
+                const stat = cwd.statFile(
+                    io,
+                    m[1..],
+                    .{ .follow_symlinks = true },
+                ) catch |e|
+                    if (e != error.FileNotFound)
+                        return e
+                    else
+                        continue;
+                if (stat.kind == .directory) {
+                    try rootfs_dir.createDirPath(io, m[1..]);
+                    h.* = true;
+                } else l.warn("stat on {s} reported kind {any}", .{ m, stat.kind });
+            }
 
             const script = spec.script orelse unreachable;
             try rootfs_dir.writeFile(io, .{
@@ -527,23 +512,14 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                 "bin",
                 .{ .read_only = true, .allow_exec = true },
             );
-            try mount.bind(
-                "/usr/lib",
-                "usr/lib",
-                .{ .read_only = true, .allow_exec = true },
-            );
-            if (host_lib_is_dir)
-                try mount.bind(
-                    "/lib",
-                    "lib",
-                    .{ .read_only = true, .allow_exec = true },
-                );
-            if (host_lib64_is_dir)
-                try mount.bind(
-                    "/lib64",
-                    "lib64",
-                    .{ .read_only = true, .allow_exec = true },
-                );
+
+            for (mounts, has_mount) |m, h|
+                if (h)
+                    try mount.bind(
+                        m,
+                        m[1..],
+                        .{ .read_only = true, .allow_exec = true },
+                    );
 
             if (!spec.tune.net.private) {
                 try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/resolv.conf" });
@@ -805,7 +781,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         break :env_map env_map;
     };
     defer env_map.deinit();
-    l.debug("environment ready, spawning entry", .{}); //debug
+    l.debug("environment ready, spawning entry", .{});
 
     const entry_path = if (isolate.mount)
         "/entry"

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const Task = @import("../daemon/Task.zig");
 const Term = @import("../domain/Term.zig");
-const format_bytes = @import("../util/sizes.zig").format_bytes;
+const sizes = @import("../util/sizes.zig");
 
 pub const TaskItem = struct {
     remote: []const u8,
@@ -299,7 +299,7 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
                 .running => {
                     var mem_buf: [32]u8 = undefined;
                     const m_str = if (t.memory_bytes) |mb|
-                        format_bytes(&mem_buf, mb) catch "..."
+                        sizes.format_bytes(&mem_buf, mb) catch "..."
                     else
                         "--";
                     const dur = t.started.durationTo(.now(io, .real)).toMilliseconds();
@@ -312,7 +312,7 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
                 .harvesting => {
                     var mem_buf: [32]u8 = undefined;
                     const m_str = if (t.memory_bytes) |mb|
-                        format_bytes(&mem_buf, mb) catch "..."
+                        sizes.format_bytes(&mem_buf, mb) catch "..."
                     else
                         "--";
                     const dur = t.started.durationTo(.now(io, .real)).toMilliseconds();
@@ -334,11 +334,15 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
             lines += 1;
             const pct: u32 = @intFromFloat(@max(0.0, @min(100.0, a.percent * 100.0)));
             const comp = compressed_ui(a.compress);
+            var total_buf: [1 << 5]u8 = undefined;
+            var speed_buf: [1 << 5]u8 = undefined;
+            const total = try sizes.format_bytes(&total_buf, a.total);
+            const speed = try sizes.format_speed_bytes(&speed_buf, a.speed);
 
             if (a.status == .pulling)
-                self.term.styled_ln(.cyan, "< .{s}@{s}{s} {d}%", .{ a.name, a.remote, comp, pct })
+                self.term.styled_ln(.cyan, "< .{s}@{s}{s} {s}~{d}% @{s}", .{ a.name, a.remote, comp, total, pct, speed })
             else if (a.status == .pushing)
-                self.term.styled_ln(.yellow, "> {s}@{s}{s} {d}%", .{ a.name, a.remote, comp, pct });
+                self.term.styled_ln(.yellow, "> {s}@{s}{s} {s}~{d}% @{s}", .{ a.name, a.remote, comp, total, pct, speed });
         }
     }
 

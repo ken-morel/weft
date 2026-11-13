@@ -36,7 +36,7 @@ pub fn pull_dir(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try view.set_transfer(io, artifact, remote_name, status.compressed, .pulling, progress(&status), status.total, status.speed);
+            try view.set_transfer(io, artifact, remote_name, status.compressed, .pulling, progress(&status), status.bytes_sent, status.speed);
     }
     try group.await(io);
     if (status.err) |err|
@@ -70,7 +70,7 @@ pub fn push_dir(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try view.set_transfer(io, artifact, remote_name, status.compressed, .pushing, progress(&status), status.total, status.speed);
+            try view.set_transfer(io, artifact, remote_name, status.compressed, .pushing, progress(&status), status.bytes_sent, status.speed);
     }
     try group.await(io);
     if (status.err) |err|
@@ -116,7 +116,7 @@ pub fn pull_cache(
                 status.compressed,
                 .pulling,
                 progress(&status),
-                status.total,
+                status.bytes_sent,
                 status.speed,
             );
     }
@@ -151,7 +151,7 @@ pub fn push_cache(
     {
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
-            try view.set_transfer(io, cache_name, remote_name, status.compressed, .pushing, progress(&status), status.total, status.speed);
+            try view.set_transfer(io, cache_name, remote_name, status.compressed, .pushing, progress(&status), status.bytes_sent, status.speed);
     }
     try group.await(io);
     if (status.err) |err|

@@ -162,7 +162,7 @@ pub fn pull(
     view.auto_update = true;
     defer view.deinit();
 
-    const managed = try clients.connect(io, remote.address);
+    const managed = try clients.connect_blocking(io, remote.address);
     defer managed.release(io);
     const client = managed.inner;
 
@@ -254,7 +254,7 @@ pub fn push(
         view.auto_update = true;
         defer view.deinit();
 
-        const managed = try clients.connect(io, dst_remote.address);
+        const managed = try clients.connect_blocking(io, dst_remote.address);
         defer managed.release(io);
         const client = managed.inner;
 
@@ -290,7 +290,7 @@ pub fn push(
         view.auto_update = true;
         defer view.deinit();
 
-        const managed = try clients.connect(io, dst_remote.address);
+        const managed = try clients.connect_blocking(io, dst_remote.address);
         defer managed.release(io);
         const client = managed.inner;
 

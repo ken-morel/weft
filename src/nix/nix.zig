@@ -4,7 +4,7 @@ const paths = @import("../domain/paths.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
 const format_bytes = @import("../util/sizes.zig").format_bytes;
 pub const devbox = @import("devbox.zig");
-const NarInfo = @import("NarInfo.zig");
+pub const NarInfo = @import("NarInfo.zig");
 const NarUnpacker = @import("NarUnpacker.zig");
 
 const install_lock_path = paths.weft_nix ++ "nar/.lock";

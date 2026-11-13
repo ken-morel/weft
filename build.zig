@@ -16,7 +16,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = (optimize != .debug),
         .imports = &.{
             .{ .name = "build", .module = options.createModule() },
         },
@@ -25,6 +24,9 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "weft",
         .root_module = weft,
+        .use_lld = true,
+        .use_llvm = true,
+        .linkage = .static,
     });
 
     b.installArtifact(exe);

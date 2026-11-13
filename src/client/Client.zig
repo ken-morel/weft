@@ -106,8 +106,8 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
 
 fn connect(gpa: std.mem.Allocator, io: std.Io, addr: Remote.Address, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
     const transport: Transport = transport: switch (addr) {
-        .cmd => |cmd| {
-            // const l = std.log.scoped(.client_connect_cmd);
+        .provided => return error.UnresolvedAddress,
+        .stdio => |cmd| {
             if (cmd.len == 0)
                 return error.EmptyCommand;
 
@@ -140,20 +140,20 @@ fn connect(gpa: std.mem.Allocator, io: std.Io, addr: Remote.Address, identity: I
             };
         },
     };
+    errdefer switch (transport) {
+        .stdio => |s| {
+            var child = s.child;
+            child.kill(io);
+        },
+        .net => |n| n.stream.close(io),
+    };
     return try create_take(gpa, io, transport, identity);
 }
 
 pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
     switch (self.transport) {
         .net => |*n| n.stream.close(io),
-        .stdio => |*s| {
-            if (s.child.stdin) |*f|
-                f.close(io);
-            if (s.child.stdout) |*f|
-                f.close(io);
-            s.child.kill(io);
-            _ = s.child.wait(io) catch {};
-        },
+        .stdio => |*s| s.child.kill(io),
     }
     alloc.free(self.buffer);
     alloc.destroy(self);
@@ -178,14 +178,26 @@ pub const Managed = struct {
     }
 };
 
+const Provider = struct {
+    arena: std.heap.ArenaAllocator,
+    cmd: []const []const u8,
+    child: std.process.Child,
+    resolved: Remote.Address,
+};
+
+const max_resolve_depth = 8;
+
 pub const Manager = struct {
     clients: std.ArrayList(*Managed),
     lock: std.Io.Mutex,
-    // project: ?Project,
+    providers: std.ArrayList(*Provider),
+    provider_lock: std.Io.Mutex,
+
     gpa: std.mem.Allocator,
     identity: Identity,
     env: ?*std.process.Environ.Map,
-    // inst: ?ClientInstall,
+    inst: ?ClientInstall = null,
+    project: ?Project = null,
 
     pub fn create(gpa: std.mem.Allocator, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
         const self = try gpa.create(@This());
@@ -194,20 +206,94 @@ pub const Manager = struct {
             .gpa = gpa,
             .clients = .empty,
             .lock = .init,
+            .providers = .empty,
+            .provider_lock = .init,
             .identity = identity,
             .env = env,
         };
         return self;
     }
 
-    pub fn connect(self: *@This(), io: std.Io, addr: Remote.Address) !*Managed {
+    pub inline fn connect_nonblocking(self: *@This(), io: std.Io, addr: Remote.Address) !?*Managed {
+        return try _connect(self, io, addr, false);
+    }
+    pub inline fn connect_blocking(self: *@This(), io: std.Io, addr: Remote.Address) !*Managed {
+        return try _connect(self, io, addr, true) orelse unreachable;
+    }
+
+    fn _connect(self: *@This(), io: std.Io, addr: Remote.Address, block: bool) !?*Managed {
+        var current = addr;
+        const resolved: Remote.Address = for (0..max_resolve_depth) |_| {
+            switch (current) {
+                .provided => |cmd| current = try self.resolve_provided(io, cmd),
+                .ip, .stdio => break current,
+            }
+        } else {
+            std.log.scoped(.client_connect).err("remote address resolution is more than {d} levels deep", .{max_resolve_depth});
+            return error.AddressResolutionTooDeep;
+        };
+        return try self.connect_resolved(io, resolved, block);
+    }
+
+    fn resolve_provided(self: *@This(), io: std.Io, cmd: []const []const u8) !Remote.Address {
+        const l = std.log.scoped(.client_provider);
+        try self.provider_lock.lock(io);
+        defer self.provider_lock.unlock(io);
+
+        const provider: *Provider = for (self.providers.items) |p| {
+            if (Remote.Address.cmd_eql(p.cmd, cmd))
+                break p;
+        } else provider: {
+            if (cmd.len == 0)
+                return error.EmptyCommand;
+
+            const new_provider = try self.gpa.create(Provider);
+            errdefer self.gpa.destroy(new_provider);
+            new_provider.arena = .init(self.gpa);
+            errdefer new_provider.arena.deinit();
+            const ara = new_provider.arena.allocator();
+
+            new_provider.cmd = try Remote.Address.dupe_cmd(ara, cmd);
+            new_provider.child = try std.process.spawn(io, .{
+                .argv = new_provider.cmd,
+                .stdin = .ignore,
+                .stdout = .pipe,
+                .stderr = .inherit,
+                .environ_map = self.env,
+            });
+            errdefer new_provider.child.kill(io);
+
+            var buf: [1 << 9]u8 = undefined;
+            var reader = (new_provider.child.stdout orelse unreachable).reader(io, &buf);
+            const line = reader.interface.takeDelimiterExclusive(
+                '\n',
+            ) catch |err| {
+                l.err("address provider '{s}' did not print an address on its first line: {any}", .{ cmd[0], err });
+                return error.ProviderNoAddress;
+            };
+            const addr_str = std.mem.trim(u8, line, " \t\r");
+            l.debug("address provider '{s}' returned '{s}'", .{ cmd[0], addr_str }); //debug
+
+            new_provider.resolved = try Remote.Address.resolve_leaky(ara, ara, io, addr_str, self.inst, self.project);
+            try self.providers.append(self.gpa, new_provider);
+            break :provider new_provider;
+        };
+        return provider.resolved;
+    }
+
+    fn connect_resolved(self: *@This(), io: std.Io, addr: Remote.Address, block: bool) !?*Managed {
         try self.lock.lock(io);
-        if (std.meta.activeTag(addr) == .cmd) {
+        if (addr == .stdio) {
             for (self.clients.items) |m|
                 if (m.address.cmp(addr)) {
                     self.lock.unlock(io);
-                    try m.lock.lock(io);
-                    return m;
+                    if (block) {
+                        try m.lock.lock(io);
+                        return m;
+                    } else return if (m.lock.tryLock())
+                        m
+                    else
+                        null;
                 };
         }
         defer self.lock.unlock(io);
@@ -227,7 +313,7 @@ pub const Manager = struct {
         const managed = try self.gpa.create(Managed);
         errdefer self.gpa.destroy(managed);
 
-        const bounded = std.meta.activeTag(addr) == .cmd;
+        const bounded = addr == .stdio;
         managed.* = .{
             .address = addr_clone,
             .inner = client,
@@ -236,17 +322,16 @@ pub const Manager = struct {
             .bounded = bounded,
         };
 
-        try managed.lock.lock(io);
-        if (bounded) {
+        managed.lock.lockUncancelable(io);
+        if (bounded)
             try self.clients.append(self.gpa, managed);
-            return managed;
-        } else return managed;
+        return managed;
     }
 
     pub fn connect_str(self: *@This(), io: std.Io, addr_str: []const u8) !*Managed {
         const addr = try Weft.RemoteAddress.parse(self.gpa, io, addr_str);
         defer addr.deinit(self.gpa);
-        return try self.connect(io, addr);
+        return try self.connect_blocking(io, addr);
     }
 
     pub fn destroy(self: *@This(), io: std.Io) void {
@@ -256,6 +341,12 @@ pub const Manager = struct {
             self.gpa.destroy(m);
         }
         self.clients.deinit(self.gpa);
+        for (self.providers.items) |p| {
+            p.child.kill(io);
+            p.arena.deinit();
+            self.gpa.destroy(p);
+        }
+        self.providers.deinit(self.gpa);
         self.gpa.destroy(self);
     }
 };

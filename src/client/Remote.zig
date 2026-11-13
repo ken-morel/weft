@@ -90,7 +90,7 @@ pub fn resolve_single_remote_leaky(
     if (raw_addr) |addr| {
         return .{
             .name = r.@"0",
-            .address = try .resolve(
+            .address = try .resolve_leaky(
                 gpa,
                 ara,
                 io,
@@ -106,9 +106,17 @@ pub fn resolve_single_remote_leaky(
     }
 }
 
+/// Where and how to reach a daemon.
+///   `ip`       connect directly over TCP; any number of connections may be open.
+///   `stdio`    `!cmd`: the command's stdin/stdout *is* the connection. Binds the process,
+///              so only one connection per command can be held at a time.
+///   `provided` `~cmd`: the command prints an address on the first line of its stdout and keeps
+///              running (e.g. a port forwarder). The printed address is resolved again, so
+///              it may itself be an `ip`, a `stdio` or another `provided` address.
 pub const Address = union(enum) {
     ip: std.Io.net.IpAddress,
-    cmd: []const []const u8,
+    stdio: []const []const u8,
+    provided: []const []const u8,
 
     pub fn cmp(self: @This(), other: @This()) bool {
         const s = std.meta.activeTag(self);
@@ -116,18 +124,27 @@ pub const Address = union(enum) {
         return s == o and
             switch (s) {
                 .ip => self.ip.eql(&other.ip),
-                .cmd => self.cmd.len == other.cmd.len and
-                    for (self.cmd, other.cmd) |a, b| {
-                        if (!std.mem.eql(u8, a, b))
-                            break false;
-                    } else true,
+                .stdio => cmd_eql(self.stdio, other.stdio),
+                .provided => cmd_eql(self.provided, other.provided),
             };
     }
 
-    pub fn resolve(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, addr_str: []const u8, inst: ?ClientInstall, proj: ?Project) !@This() {
+    pub fn cmd_eql(a: []const []const u8, b: []const []const u8) bool {
+        return a.len == b.len and
+            for (a, b) |x, y| {
+                if (!std.mem.eql(u8, x, y))
+                    break false;
+            } else true;
+    }
+
+    pub fn resolve_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, addr_str: []const u8, inst: ?ClientInstall, proj: ?Project) !@This() {
         const l = log(.remote_address_resolve);
-        if (addr_str.len > 0 and addr_str[0] == '!') {
+        if (addr_str.len > 0 and (addr_str[0] == '!' or addr_str[0] == '~')) {
             const cmd = try parse_cmd(gpa, addr_str[1..]);
+            if (cmd.len == 0) {
+                l.err("empty command in remote address '{s}'", .{addr_str});
+                return error.EmptyCommand;
+            }
             cmd[0] = script: {
                 if (proj) |p|
                     if (try p.locate_script(gpa, io, cmd[0])) |path| {
@@ -143,7 +160,10 @@ pub const Address = union(enum) {
                 l.err("Could not resolve location of script '{s}' from remote address", .{cmd[0]});
                 return error.ScriptNotFound;
             };
-            return .{ .cmd = cmd };
+            return if (addr_str[0] == '!')
+                .{ .stdio = cmd }
+            else
+                .{ .provided = cmd };
         } else {
             const host, const port = if (std.mem.lastIndexOfScalar(u8, addr_str, ':')) |colon|
                 .{ addr_str[0..colon], try std.fmt.parseInt(u16, addr_str[colon + 1 ..], 10) }
@@ -175,27 +195,28 @@ pub const Address = union(enum) {
     pub fn dupe(self: @This(), gpa: std.mem.Allocator) !@This() {
         switch (self) {
             .ip => return self,
-            .cmd => |cmd| {
-                var list: std.ArrayList([]const u8) = try .initCapacity(gpa, cmd.len);
-                defer list.deinit(gpa);
-                errdefer for (list.items) |c|
-                    gpa.free(c);
-                for (cmd) |c|
-                    list.appendAssumeCapacity(try gpa.dupe(u8, c));
-
-                return .{ .cmd = try list.toOwnedSlice(gpa) };
-            },
+            .stdio => |cmd| return .{ .stdio = try dupe_cmd(gpa, cmd) },
+            .provided => |cmd| return .{ .provided = try dupe_cmd(gpa, cmd) },
         }
     }
     pub fn deinit(self: @This(), gpa: std.mem.Allocator) void {
         switch (self) {
-            .cmd => |cmd| {
+            .stdio, .provided => |cmd| {
                 for (cmd) |c|
                     gpa.free(c);
                 gpa.free(cmd);
             },
             .ip => {},
         }
+    }
+    pub fn dupe_cmd(gpa: std.mem.Allocator, cmd: []const []const u8) ![]const []const u8 {
+        var list: std.ArrayList([]const u8) = try .initCapacity(gpa, cmd.len);
+        defer list.deinit(gpa);
+        errdefer for (list.items) |c|
+            gpa.free(c);
+        for (cmd) |c|
+            list.appendAssumeCapacity(try gpa.dupe(u8, c));
+        return try list.toOwnedSlice(gpa);
     }
     fn parse_cmd(gpa: std.mem.Allocator, raw: []const u8) ![][]const u8 {
         const str = std.mem.trim(u8, raw, " \t\r\n");

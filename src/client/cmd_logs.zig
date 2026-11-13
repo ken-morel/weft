@@ -77,7 +77,7 @@ pub fn run(
     var clients: *Client.Manager = try .create(alloc, inst.identity, env);
     defer clients.destroy(io);
 
-    var managed = clients.connect(
+    var managed = clients.connect_blocking(
         io,
         remote.address,
     ) catch |e| {

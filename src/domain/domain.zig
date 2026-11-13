@@ -1,9 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const read_only_user_permissions = if (builtin.os.tag == .linux)
-    @as(std.Io.File.Permissions, @fromBackingInt(@intCast(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR))))
-else {};
+pub const read_only_user_permissions = @as(std.Io.File.Permissions, if (builtin.os.tag == .linux)
+    @fromBackingInt(@intCast(@as(u32, std.os.linux.S.IRUSR | std.os.linux.S.IWUSR)))
+else
+    .default_file);
 
 pub fn write_file_atomic(
     io: std.Io,
@@ -66,7 +67,6 @@ pub fn chown(parent: std.Io.Dir, sub_path: [:0]const u8, uid: u32, gid: u32) !vo
     }
 }
 
-/// Like createDirPath, but every component of `sub_path` ends up owned by uid:uid.
 pub fn create_dir_path_owned(io: std.Io, dir: std.Io.Dir, sub_path: []const u8, uid: u32) !void {
     try dir.createDirPath(io, sub_path);
     var buf: [std.posix.PATH_MAX]u8 = undefined;

@@ -133,7 +133,7 @@ pub fn run(
         };
 
         if (raw_addr) |addr|
-            if (addr.len > 0 and addr[0] == '!') {
+            if (addr.len > 0 and (addr[0] == '!' or addr[0] == '~')) {
                 const cmd_str = std.mem.trim(u8, addr[1..], " \t");
                 var iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
                 if (iter.next()) |script_name| {
@@ -150,7 +150,7 @@ pub fn run(
                         }
                     }
                 } else {
-                    l.err("remote '{s}': command is empty after '!'", .{r.@"0"});
+                    l.err("remote '{s}': command is empty after '{c}'", .{ r.@"0", addr[0] });
                     errors += 1;
                 }
             };

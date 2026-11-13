@@ -182,7 +182,7 @@ const Argz = union(enum) {
         },
         kill: struct {
             pub const doc = "Kill a deployment or a specific pipeline in a deployment";
-            pub const doc_step = "The target spec to kill can be <pipeline>, <remote>.<pipeline>, or <mode>:<remote>.<pipeline>";
+            pub const doc_step = "The target spec to kill can be <pipeline> or <remote>.<pipeline>";
             pub const doc_deployment = "The deployment id (defaults to latest)";
 
             step: []const u8,
@@ -190,7 +190,7 @@ const Argz = union(enum) {
         },
         logs: struct {
             pub const doc = "Get the logs for a running/completed pipeline";
-            pub const doc_step = "The target spec to follow can be <pipeline>, <remote>.<pipeline>, or <mode>:<remote>.<pipeline>";
+            pub const doc_step = "The target spec to follow can be <pipeline> or <remote>.<pipeline>";
             pub const doc_deployment = "The deployment id to follow (defaults to latest)";
 
             step: []const u8,
@@ -238,6 +238,12 @@ const Argz = union(enum) {
 
             name: []const u8,
         },
+        info: struct {
+            pub const doc = "Fetch the narinfo of a nix package and display it as yaml";
+            pub const doc_pkg = "The package id, as <hash>-<name>, or just the 32 character hash";
+
+            pkg: []const u8,
+        },
     },
     decode: struct {
         pub const doc = "Decode and pretty print a zoto-encoded binary file or stdin";
@@ -251,6 +257,16 @@ const Argz = union(enum) {
 };
 
 pub fn main(minimal: std.process.Init.Minimal) !void {
+    // make sure client connection subprocesses get killed
+    // also affects the daemon though, duh
+    // _ = std.os.linux.prctl(
+    //     @backingInt(std.os.linux.PR.SET_PDEATHSIG),
+    //     @backingInt(std.os.linux.SIG.TERM),
+    //     0,
+    //     0,
+    //     0,
+    // );
+
     var allocator = switch (builtin.mode) {
         inline .debug, .safe => std.heap.SafeAllocator.init(std.heap.page_allocator, .{
             .check_write_after_free = true,
@@ -578,7 +594,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                                 break :remote remote;
                     } else break :remote Remote{
                         .name = "weft",
-                        .address = try .resolve(gpa, alloc, io, cmd.remote, installation, project),
+                        .address = try .resolve_leaky(gpa, alloc, io, cmd.remote, installation, project),
                         .groups = "",
                     };
 
@@ -647,6 +663,49 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                             term.println("      {s}: {s}", .{ o.name, o.basename() });
                     }
                 }
+            },
+            .info => |i| {
+                var size_buf: [32]u8 = undefined;
+                if (i.pkg.len < 32) {
+                    log.err("invalid package id '{s}': expected at least a 32 character hash", .{i.pkg});
+                    return error.InvalidHash;
+                }
+                var client: std.http.Client = .{
+                    .allocator = gpa,
+                    .io = io,
+                };
+                defer client.deinit();
+
+                const info = nix.NarInfo.fetch(
+                    gpa,
+                    &client,
+                    i.pkg[0..32],
+                ) catch |err| {
+                    if (err == error.InvalidHttpResponse)
+                        log.err("no narinfo found for '{s}' on cache.nixos.org", .{i.pkg[0..32]});
+                    return err;
+                };
+                defer info.deinit(gpa);
+
+                term.println("store_path: \"{s}\"", .{info.store_path});
+                term.println("url: \"{s}\"", .{info.url});
+                term.println("compression: \"{s}\"", .{info.compression});
+                if (info.file_hash) |h|
+                    term.println("file_hash: \"{s}\"", .{h});
+                term.println("file_size: {d} # {s}", .{ info.file_size, sizes.format_bytes(&size_buf, info.file_size) catch "" });
+                term.println("nar_hash: \"{s}\"", .{info.nar_hash});
+                term.println("nar_size: {d} # {s}", .{ info.nar_size, sizes.format_bytes(&size_buf, info.nar_size) catch "" });
+                if (info.deriver) |d|
+                    term.println("deriver: \"{s}\"", .{d});
+                if (info.has_deps()) {
+                    term.println("references:", .{});
+                    var deps = info.deps();
+                    while (deps.next()) |dep|
+                        if (dep.len > 0)
+                            term.println("  - \"{s}\"", .{dep});
+                } else term.println("references: []", .{});
+                if (info.sig) |sig|
+                    term.println("sig: \"{s}\"", .{sig});
             },
         },
         .decode => |d| {

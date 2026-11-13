@@ -62,7 +62,7 @@ pub fn run(
 
     try view.set_transfer(io, name, remote_name, null, status, 0.0, null, null);
 
-    var managed = clients.connect(
+    var managed = clients.connect_blocking(
         io,
         remote.address,
     ) catch |err| {

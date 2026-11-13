@@ -14,10 +14,42 @@ pub const Status = struct {
     file_sent: u64 = 0,
     bytes_sent: u64 = 0,
     speed: u64 = 0,
+    window_bytes: u64 = 0,
+    window_start: ?std.Io.Timestamp = null,
     done: bool = false,
     compressed: ?bool = null,
     err: ?anyerror = null,
     pub const init: @This() = .{};
+
+    const speed_window_ms = 200;
+
+    fn add(self: *@This(), io: std.Io, n: usize) void {
+        self.file_sent += n;
+        self.bytes_sent += n;
+        self.window_bytes += n;
+
+        const now: std.Io.Timestamp = .now(io, .real);
+        const start = self.window_start orelse {
+            self.window_start = now;
+            return;
+        };
+        const elapsed_ms: u64 = @intCast(@max(0, start.durationTo(now).toMilliseconds()));
+        if (elapsed_ms < speed_window_ms)
+            return;
+        const raw = (self.window_bytes * 1000) / elapsed_ms;
+        self.speed = if (self.speed == 0)
+            raw
+        else
+            (self.speed * 9 + raw) / 10;
+        self.window_bytes = 0;
+        self.window_start = now;
+    }
+
+    fn reset(self: *@This()) void {
+        self.speed = 0;
+        self.window_bytes = 0;
+        self.window_start = null;
+    }
 };
 
 pub fn pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []const u8, decompress: bool, status: ?*Status) !void {
@@ -72,15 +104,9 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
     if (status) |s| {
         s.total += header.total_files;
         s.compressed = header.compress;
-        s.speed = 0;
+        s.reset();
     }
 
-    var previous_total: u64 = if (status) |s|
-        s.bytes_sent
-    else
-        0;
-
-    var previous_time: std.Io.Timestamp = .now(io, .real);
     while (true) {
         const data = try conn.recv_buf(conn_buffer);
         if (data.len < 5 or !std.mem.eql(u8, data[0..4], "pack"))
@@ -103,21 +129,8 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
             proto.folder => try packer.put(io, .{ .folder = data[5..] }),
             proto.data => {
                 const bytes = data[5..];
-                if (status) |s| {
-                    s.file_sent += bytes.len;
-                    s.bytes_sent += bytes.len;
-
-                    const new_time: std.Io.Timestamp = .now(io, .real);
-                    const delta = @as(u64, @max(0, previous_time.durationTo(new_time).toSeconds()));
-                    const raw_speed = if (delta > 0)
-                        (s.bytes_sent -| previous_total) / delta
-                    else
-                        0;
-
-                    s.speed = (s.speed * 9 + raw_speed) / 10;
-                    previous_time = new_time;
-                    previous_total = s.bytes_sent;
-                }
+                if (status) |s|
+                    s.add(io, bytes.len);
                 try packer.put(io, .{ .data = bytes });
             },
             proto.compressed_data => {
@@ -130,10 +143,8 @@ pub fn _pull(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, dest: []cons
                 try pressor.decompress(&input, &output);
                 const bytes = output.buffered();
                 try packer.put(io, .{ .data = bytes });
-                if (status) |s| {
-                    s.file_sent += bytes.len;
-                    s.bytes_sent += bytes.len;
-                }
+                if (status) |s|
+                    s.add(io, bytes.len);
             },
             proto.end => break,
             else => return error.InvalidPack,
@@ -176,6 +187,7 @@ pub fn _push(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, source: []co
     if (status) |s| {
         s.total += total_files;
         s.done = false;
+        s.reset();
     }
 
     var packer: Packer = try Packer.packer_take(
@@ -258,10 +270,8 @@ pub fn _push(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, source: []co
                 }
             } else .{ bytes, false };
 
-            if (status) |s| {
-                s.file_sent += bytes.len;
-                s.bytes_sent += data.len;
-            }
+            if (status) |s|
+                s.add(io, bytes.len);
 
             try conn.send(
                 try std.fmt.bufPrint(

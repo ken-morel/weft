@@ -135,7 +135,7 @@ pub const InitSystem = enum {
             .openrc => &.{ "rc-service", svc, "start" },
             .none => {
                 try domain.spawn_detach(io, .{
-                    .argv = &.{ paths.weft_binary, "daemon", "run" },
+                    .argv = &.{ "sh", "-c", "nohup " ++ paths.weft_binary ++ " daemon run &!" },
                     .stdin = .ignore,
                     .stdout = .ignore,
                     .stderr = .ignore,
@@ -201,7 +201,7 @@ pub const InitSystem = enum {
                 cwd.deleteFile(io, "/etc/systemd/system/weftd.service") catch {};
 
                 _ = try _do(io, &.{ "systemctl", "daemon-reload" });
-                _ = try _do(io, &.{ "systemctl", "enable", "--now", "weft.service" });
+                _ = try _do(io, &.{ "systemctl", "enable", "weft.service" });
                 _ = try _do(io, &.{ "systemctl", "restart", "weft.service" });
             },
             .runit => {
@@ -261,9 +261,7 @@ pub const InitSystem = enum {
                 _ = try _do(io, &.{ "rc-update", "add", "weft", "default" });
                 try self.restart(io, "weft");
             },
-            .none => {
-                try self.start(io, "weft");
-            },
+            .none => try self.start(io, "weft"),
         }
     }
 };
@@ -280,9 +278,8 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, template: ?[]const u8) !void 
         return error.NoInitSystemFound;
     };
 
-    pid1.stop(io, "weft") catch |err| {
+    pid1.stop(io, "weft") catch |err|
         l.info("Could not stop existing service: {any}", .{err});
-    };
 
     install_exe: {
         const exe_path = try std.process.executablePathAlloc(io, alloc);

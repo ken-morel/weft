@@ -48,7 +48,7 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
-    const managed_client = try self.clients.connect(io, remote.address);
+    const managed_client = try self.clients.connect_blocking(io, remote.address);
     defer managed_client.release(io);
     const client = managed_client.inner;
 
@@ -139,7 +139,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     const artifact_dir_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_dir_path);
 
-    const managed = try self.clients.connect(io, remote.address);
+    const managed = try self.clients.connect_blocking(io, remote.address);
     defer managed.release(io);
     const client = managed.inner;
 
@@ -179,7 +179,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     const artifact_path = try self.project.artifact_dir_path(self.gpa, io, self.dep.id, artifact);
     defer self.gpa.free(artifact_path);
 
-    const managed = try self.clients.connect(io, remote.address);
+    const managed = try self.clients.connect_blocking(io, remote.address);
     defer managed.release(io);
     const client = managed.inner;
 

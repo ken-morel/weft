@@ -68,7 +68,7 @@ pub fn run(
     var clients: *Client.Manager = try .create(alloc, inst.identity, env);
     defer clients.destroy(io);
 
-    const managed = clients.connect(io, remote.address) catch |err| {
+    const managed = clients.connect_blocking(io, remote.address) catch |err| {
         l.err("could not reach remote '{s}': {any}", .{ remote_name, err });
         return err;
     };

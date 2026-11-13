@@ -43,6 +43,8 @@ pub fn run_deployment(
 
     const clients: *Client.Manager = try .create(gpa, identity, env);
     defer clients.destroy(io);
+    clients.inst = inst;
+    clients.project = project;
 
     var fetcher: Fetcher = .{
         .gpa = gpa,
@@ -176,7 +178,7 @@ fn poll_remote(
     fetcher: ?*Fetcher,
 ) void {
     const alloc = poll_arena.allocator();
-    const managed = clients.connect(io, remote.address) catch return;
+    const managed = (clients.connect_nonblocking(io, remote.address) catch return) orelse return;
     defer managed.release(io);
     const client = managed.inner;
 
@@ -468,6 +470,8 @@ pub fn run_task(
 
     const clients: *Client.Manager = try .create(gpa, identity, env);
     defer clients.destroy(io);
+    clients.inst = inst;
+    clients.project = project;
 
     var fetcher: Fetcher = .{
         .gpa = gpa,
@@ -651,7 +655,7 @@ pub fn spawn_step(
     try view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .preparing });
 
     spawn_task: {
-        const managed = try fetcher.clients.connect(io, remote.address);
+        const managed = try fetcher.clients.connect_blocking(io, remote.address);
         defer managed.release(io);
         const client = managed.inner;
 
@@ -668,9 +672,9 @@ pub fn spawn_step(
             return;
         };
 
-        if (res) |_| {
-            try view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .running });
-        } else |err| {
+        if (res) |_|
+            try view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .running })
+        else |err| {
             fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;
         }

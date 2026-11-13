@@ -108,7 +108,7 @@ fn connect(
     from: std.Io.Timestamp,
 ) !*Client.Managed {
     const l = log(.monitor_connect);
-    var managed = clients.connect(
+    var managed = clients.connect_blocking(
         io,
         remote.address,
     ) catch |err| {
