@@ -423,6 +423,9 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
 
         try mount.isolate();
         try mount.mount_fs("tmpfs", rootfs_path, "tmpfs", "size=16m,mode=0755", true);
+        if (std.os.linux.errno(std.os.linux.chdir(rootfs_path.ptr)) != .SUCCESS)
+            return error.ChdirFailed;
+
         l.debug("rootfs tmpfs mounted", .{}); //debug
 
         {
@@ -432,9 +435,9 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             const user_home_rel = try gpa.printSentinel("home/{s}", .{username}, 0);
             defer gpa.free(user_home_rel);
             for ([_][]const u8{
-                "nix/store", "bin",         "usr", "usr/lib", "proc",
-                "tmp",       "dev/shm",     "etc", "work",    "in",
-                "out",       user_home_rel,
+                "nix/store", "bin",     "usr", "proc",
+                "tmp",       "dev/shm", "etc", "work",
+                "in",        "out",     user_home_rel,
             }) |dir|
                 try rootfs_dir.createDirPath(io, dir);
 
@@ -445,7 +448,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             for (mounts, &has_mount) |m, *h| {
                 const stat = cwd.statFile(
                     io,
-                    m[1..],
+                    m,
                     .{ .follow_symlinks = true },
                 ) catch |e|
                     if (e != error.FileNotFound)
@@ -499,8 +502,6 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                     },
                 );
             }
-            if (std.os.linux.errno(std.os.linux.chdir(rootfs_path.ptr)) != .SUCCESS)
-                return error.ChdirFailed;
 
             try mount.bind(
                 paths.weft_nix_store,
@@ -520,6 +521,11 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
                         m[1..],
                         .{ .read_only = true, .allow_exec = true },
                     );
+
+            if (cwd.statFile(io, "/etc/ld.so.cache", .{ .follow_symlinks = true })) |_| {
+                try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/ld.so.cache" });
+                try mount.bind("/etc/ld.so.cache", "etc/ld.so.cache", .{ .read_only = true });
+            } else |_| {}
 
             if (!spec.tune.net.private) {
                 try rootfs_dir.writeFile(io, .{ .data = "", .sub_path = "etc/resolv.conf" });
