@@ -35,6 +35,7 @@ pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Cli
     };
 
     var group: std.Io.Group = .init;
+    errdefer group.cancel(io);
     try spawn(io, &group, Spawn.func, .{ gpa, io, client, narinfo, false });
 
     if (narinfo.has_deps()) {

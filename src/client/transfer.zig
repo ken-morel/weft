@@ -43,7 +43,7 @@ pub fn pull_dir(
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.pull.Res));
-    try view.set_transfer(io, artifact, remote_name, null, .ready, 1.0, null, null);
+    try view.set_transfer(io, artifact, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 
 pub fn push_dir(
@@ -77,7 +77,7 @@ pub fn push_dir(
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.push.Res));
-    try view.set_transfer(io, artifact, remote_name, null, .ready, 1.0, null, null);
+    try view.set_transfer(io, artifact, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 
 pub fn pull_cache(
@@ -125,7 +125,7 @@ pub fn pull_cache(
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.pull.Res));
-    try view.set_transfer(io, cache_name, remote_name, null, .ready, 1.0, null, null);
+    try view.set_transfer(io, cache_name, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 
 pub fn push_cache(
@@ -158,7 +158,7 @@ pub fn push_cache(
         return err;
 
     _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.push.Res));
-    try view.set_transfer(io, cache_name, remote_name, null, .ready, 1.0, null, null);
+    try view.set_transfer(io, cache_name, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 
 fn progress(status: *const transfer.Status) f32 {

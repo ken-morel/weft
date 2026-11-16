@@ -34,23 +34,26 @@ pub const Args = struct {
         @memset(self_args, null);
         errdefer alloc.free(self_args);
         var skip = false;
+        var positional_only = false;
         for (args, 0..) |raw, i| {
             if (skip) {
                 skip = false;
                 continue;
             }
-            if (is_flag(raw)) {
-                if (is_neg_flag(raw) or i + 1 >= args.len or is_flag(args[i + 1])) {
-                    self_args[i] = .{ .toggle = .{ flag_name(raw), !is_neg_flag(raw) } };
-                } else if (i + 1 <= args.len) {
+            if (!positional_only and std.mem.eql(u8, raw, "--")) {
+                positional_only = true;
+                continue;
+            }
+            if (!positional_only and is_flag(raw)) {
+                if (is_neg_flag(raw) or i + 1 >= args.len or is_flag(args[i + 1]))
+                    self_args[i] = .{ .toggle = .{ flag_name(raw), !is_neg_flag(raw) } }
+                else if (i + 1 <= args.len) {
                     self_args[i] = .{
                         .key_value = .{ flag_name(args[i]), args[i + 1] },
                     };
                     skip = true;
                 } else return ArgzParseError.ExpectedArgument;
-            } else {
-                self_args[i] = .{ .value = raw };
-            }
+            } else self_args[i] = .{ .value = raw };
         }
         return .{
             .args = self_args,
@@ -147,7 +150,9 @@ pub inline fn parse(comptime A: type, alloc: std.mem.Allocator, io: ?std.Io, arg
         const help_cmd = if (args.len > 0 and std.mem.eql(u8, args[0], "help"))
             args[1..]
         else for (args, 0..) |raw, i| {
-            if (std.mem.eql(u8, raw, "--help") or std.mem.eql(u8, raw, "-h"))
+            if (std.mem.eql(u8, raw, "--"))
+                break null
+            else if (std.mem.eql(u8, raw, "--help") or std.mem.eql(u8, raw, "-h"))
                 break args[0..i];
         } else null;
         if (help_cmd) |cmd_slice|

@@ -71,7 +71,7 @@ pub fn run_deployment(
     var poll_arena: std.heap.ArenaAllocator = .init(gpa);
     defer poll_arena.deinit();
 
-    while (true) : (try std.Io.sleep(io, .fromSeconds(2), .awake)) {
+    while (true) : (try std.Io.sleep(io, .fromSeconds(1), .awake)) {
         try depl.lock(io);
         defer depl.unlock(io);
         if (deployment.completed() and fetcher.is_idle(io))
@@ -80,7 +80,7 @@ pub fn run_deployment(
         if (view.has_error(io) and deployment.running.len == 0) {
             try deployment.save(io, project);
             l.err("Error during deployment", .{});
-            try std.Io.sleep(io, .fromSeconds(1), .awake);
+            try std.Io.sleep(io, .fromSeconds(5), .awake);
             try view.update(io);
             return error.DeploymentFailed;
         }

@@ -9,6 +9,7 @@ const ClientInstall = @import("client/ClientInstall.zig");
 const cmd_artifact = @import("client/cmd_artifact.zig");
 const cmd_cache = @import("client/cmd_cache.zig");
 const cmd_check = @import("client/cmd_check.zig");
+const cmd_env = @import("client/cmd_env.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
 const cmd_logs = @import("client/cmd_logs.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
@@ -35,8 +36,28 @@ const sizes = @import("util/sizes.zig");
 
 const include_daemon = builtin.target.os.tag == .linux;
 
+pub fn logger(
+    comptime level: std.log.Level,
+    comptime scope: @EnumLiteral(),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const io = std.Options.debug_io;
+    const prev = io.swapCancelProtection(.blocked);
+    defer _ = io.swapCancelProtection(prev);
+    var buffer: [64]u8 = undefined;
+    const stderr = std.debug.lockStderr(&buffer).terminal();
+    defer std.debug.unlockStderr();
+    stderr.setColor(.bright_black) catch {};
+    stderr.writer.writeAll("weft:") catch {};
+    stderr.setColor(.reset) catch {};
+    return std.log.defaultLogFileTerminal(level, scope, format, args, stderr) catch {};
+}
+
 pub const std_options: std.Options = .{
     .fmt_max_depth = 10,
+    .http_enable_ssl_key_log_file = false,
+    .logFn = logger,
 };
 
 const Argz = union(enum) {
@@ -97,6 +118,14 @@ const Argz = union(enum) {
         pub const doc_targets = "The different deployment targets";
 
         targets: [][]const u8 = &.{},
+    },
+    env: struct {
+        pub const doc = "Run a shell or command in one or more pipeline or environment contexts";
+        pub const doc_env = "Comma-separated pipeline or environment names, optionally prefixed with <mode>:";
+        pub const doc_cmds = "Command and arguments to run (pass after '--' if passing flags; defaults to $SHELL)";
+
+        env: []const u8,
+        cmds: [][]const u8 = &.{},
     },
     @"resume": struct {
         pub const doc = "Resume an existing possibly failed deployment";
@@ -394,6 +423,23 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     .targets = targets,
                 },
             }, &environ_map);
+        },
+        .env => |cmd| {
+            const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
+            const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{});
+            defer project_dir.close(io);
+            const project = try Project.open_leaky(alloc, io, project_dir);
+
+            return cmd_env.run(
+                gpa,
+                io,
+                &term,
+                project,
+                installation,
+                cmd.env,
+                cmd.cmds,
+                &environ_map,
+            );
         },
         .@"resume" => |cmd| {
             const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);

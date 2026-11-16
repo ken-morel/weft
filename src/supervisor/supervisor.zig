@@ -119,10 +119,27 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     log.info("supervising task {s}", .{cgroup_name});
 
     const spec = try task.read_spec(gpa, alloc, io);
+    try task.write_status(gpa, io, .preparing);
+    errdefer task.write_status(gpa, io, .failed) catch {};
+
+    if (spec.pkgs.len > 0) {
+        log.info("preparing {d} nix package(s)...", .{spec.pkgs.len});
+        var client: std.http.Client = .{
+            .io = io,
+            .allocator = gpa,
+        };
+        defer client.deinit();
+
+        for (spec.pkgs) |pkg| {
+            log.debug("installing nix package {s}", .{pkg}); //debug
+            try nix.install_package(gpa, io, &client, pkg);
+        }
+
+        log.info("all nix packages installed", .{});
+    }
 
     if (spec.script == null) {
         log.debug("Creating empty outputs for pipeline", .{}); //debug
-        try task.write_status(gpa, io, .done);
         for (spec.outputs) |output| {
             defer _ = barena.reset(.free_all);
 
@@ -135,6 +152,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 return e;
             try cwd.createDirPath(io, artifact_path);
         }
+        try task.write_status(gpa, io, .done);
         return;
     }
 
@@ -169,25 +187,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
             try balloc.print("{d}", .{std.os.linux.getpid()}),
             .{ .replace = true },
         );
-        try task.write_status(gpa, io, .preparing);
         break :write_pid;
-    }
-    errdefer task.write_status(gpa, io, .failed) catch {};
-
-    if (spec.pkgs.len > 0) {
-        log.info("preparing {d} nix package(s)...", .{spec.pkgs.len});
-        var client: std.http.Client = .{
-            .io = io,
-            .allocator = gpa,
-        };
-        defer client.deinit();
-
-        for (spec.pkgs) |pkg| {
-            log.debug("installing nix package {s}", .{pkg}); //debug
-            try nix.install_package(gpa, io, &client, pkg);
-        }
-
-        log.info("all nix packages installed", .{});
     }
 
     prepare_files: {
@@ -751,38 +751,30 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         var env_map: std.process.Environ.Map = .init(gpa);
         errdefer env_map.deinit();
 
-        var path_writer: std.Io.Writer.Allocating = .init(gpa);
-        defer path_writer.deinit();
-
-        for (spec.pkgs) |pkg|
-            try path_writer.writer.print("/nix/store/{s}/bin:", .{pkg});
-
-        if (isolate.mount)
-            try path_writer.writer.writeAll("/bin")
-        else
-            try path_writer.writer.writeAll(paths.weft_bin ++ ":/usr/bin:/bin");
-        try path_writer.writer.flush();
-
         const home_val = if (isolate.mount)
             try alloc.print("/home/{s}", .{username})
         else
             host_home;
 
-        try env_map.put("PATH", try path_writer.toOwnedSlice());
         try env_map.put("HOME", home_val);
         try env_map.put("USER", username);
         try env_map.put("LOGNAME", username);
         try env_map.put("TMPDIR", "/tmp");
         try env_map.put("IN", if (isolate.mount) "/in" else try alloc.print("{s}in", .{rootfs_path}));
         try env_map.put("OUT", if (isolate.mount) "/out" else try alloc.print("{s}out", .{rootfs_path}));
-        try env_map.put("WEFT_VERSION", @import("build").version_str);
-        try env_map.put("WEFT_MODE", spec.mode);
-        try env_map.put("WEFT_WORKSPACE", spec.task_id.workspace);
         try env_map.put("WEFT_PIPELINE", spec.task_id.pipeline);
         try env_map.put("WEFT_DEPLOYMENT", try spec.task_id.deployment.to_string_alloc(alloc));
 
-        for (spec.vars) |kv|
-            try env_map.put(kv.@"0", kv.@"1");
+        const base_path = if (isolate.mount)
+            "/bin"
+        else
+            paths.weft_bin ++ ":/usr/bin:/bin";
+
+        const resolved_env: Task.Spec.Env = .{
+            .vars = spec.vars,
+            .pkgs = spec.pkgs,
+        };
+        try resolved_env.apply(gpa, &env_map, base_path, spec.mode, spec.task_id.workspace);
 
         break :env_map env_map;
     };

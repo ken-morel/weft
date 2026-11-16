@@ -259,6 +259,35 @@ pub const Spec = struct {
     pub const Env = struct {
         vars: []const struct { []const u8, []const u8 } = &.{},
         pkgs: []const []const u8 = &.{},
+
+        pub fn apply(
+            self: @This(),
+            gpa: std.mem.Allocator,
+            env_map: *std.process.Environ.Map,
+            base_path: []const u8,
+            mode: []const u8,
+            workspace: []const u8,
+        ) !void {
+            var path_writer: std.Io.Writer.Allocating = .init(gpa);
+            defer path_writer.deinit();
+
+            for (self.pkgs) |pkg|
+                try path_writer.writer.print("/nix/store/{s}/bin:", .{pkg});
+
+            try path_writer.writer.writeAll(base_path);
+            try path_writer.writer.flush();
+
+            const path_val = try path_writer.toOwnedSlice();
+            defer gpa.free(path_val);
+
+            try env_map.put("PATH", path_val);
+            try env_map.put("WEFT_VERSION", @import("build").version_str);
+            try env_map.put("WEFT_MODE", mode);
+            try env_map.put("WEFT_WORKSPACE", workspace);
+
+            for (self.vars) |kv|
+                try env_map.put(kv.@"0", kv.@"1");
+        }
     };
 
     pub fn resolve_env_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, mode: []const u8, envs: []const Weft.Env, dotenv: DotEnv, env: Weft.Env) !Env {
