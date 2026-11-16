@@ -45,13 +45,26 @@ pub fn logger(
     const io = std.Options.debug_io;
     const prev = io.swapCancelProtection(.blocked);
     defer _ = io.swapCancelProtection(prev);
-    var buffer: [64]u8 = undefined;
+    var buffer: [1 << 5]u8 = undefined;
+
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
     stderr.setColor(.bright_black) catch {};
     stderr.writer.writeAll("weft:") catch {};
+    stderr.setColor(switch (level) {
+        .err => .red,
+        .warn => .yellow,
+        .info => .green,
+        .debug => .magenta,
+    }) catch {};
+    stderr.setColor(.bold) catch {};
+    stderr.setColor(.dim) catch {};
+    stderr.setColor(.bold) catch {};
+    if (scope != .default)
+        stderr.writer.print("({stderr})", .{scope}) catch {};
+    stderr.writer.writeAll(": ") catch {};
     stderr.setColor(.reset) catch {};
-    return std.log.defaultLogFileTerminal(level, scope, format, args, stderr) catch {};
+    stderr.writer.print(format ++ "\n", args) catch {};
 }
 
 pub const std_options: std.Options = .{

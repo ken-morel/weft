@@ -5,9 +5,13 @@
 - **Native Linux Task Supervisor & Isolation**:
   - Replaced `systemd-run` task execution with native Linux namespaces (`CLONE_NEWNS`, `NEWUTS`, `NEWIPC`, `NEWPID`, `NEWNET`, `NEWCGROUP`) and cgroups v2 (`CGroup2.zig`).
   - Added dedicated supervisor process (`weft supervisor supervise`, `weft supervisor spawn`) to manage task sandboxes, `pivot_root`, tmpfs mounts, read-only overlays, sibling policies, and signal propagation.
+- **Local Environment Shell (`weft env`)**:
+  - Added `weft env [mode:]name[,name...] [-- cmds...]` to resolve packages and variables across one or more comma-separated pipelines or environments (checking `pipelines` first, then `environments`), install missing Nix packages through the local daemon, and run commands or `$SHELL` in the current working directory.
+  - Added `--` end-of-options passthrough in CLI argument parsing (`argz.zig`).
 - **Nix & Package Provisioning (`src/nix/`)**:
   - Added `weft nix search <query>` to search packages via the Devbox API.
   - Added `weft nix query <name>` to inspect available versions, platforms, and output store paths.
+  - Added `weft nix info <pkg>` to fetch `.narinfo` metadata from `cache.nixos.org` and display it as YAML.
   - Custom streaming NAR unpacker (`NarUnpacker.zig`) supporting zstd/xz decompression directly into `/var/lib/weft/store/` with atomic locking.
 - **ZOTO Binary Inspection**:
   - Added `weft decode` CLI tool to inspect and pretty-print zoto-encoded binary payloads (task specs, status, wire packets) from `stdin` as colored Zig struct definitions, with support for multiline scripts, tuples, error sets, and remaining-byte diagnostics.
@@ -23,6 +27,7 @@
   - Unified artifact push/pull into wire transfer layer (`src/wire/transfer.zig`) with compression negotiation.
 - **Client & TUI Enhancements**:
   - `weft monitor` now supports explicit remote addresses.
+  - Added provided remote addresses (`~<script> [args...]`) that spawn an address-provider process (such as a port forwarder), resolve the address printed on its first line of `stdout`, and keep it running for the session.
   - Deduped runner polling and deployment step rendering into a unified step renderer (`DeploymentView.zig`).
   - Improved error propagation on resumed deployments and config loading.
   - Scoped debug logging added across daemon, supervisor, and runner subsystems.
