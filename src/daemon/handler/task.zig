@@ -15,7 +15,6 @@ const Server = @import("../Server.zig");
 const Task = @import("../Task.zig");
 
 pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(proto.task.poll.Res) {
-    const l = log(.handle_task_poll);
     const cwd: std.Io.Dir = .cwd();
     const gpa = daemon.gpa;
 
@@ -29,7 +28,6 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(pr
         defer _ = barena.reset(.free_all);
 
         const id = req.task;
-        l.debug("poll {s}/{s}/{d}", .{ id.workspace, id.pipeline, id.deployment }); //debug
         const task: Task = .{ .id = id };
 
         const status = task.read_status(gpa, io) catch |err|
@@ -46,8 +44,6 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(pr
                 );
                 continue;
             } else return err;
-
-        l.debug("status: {s}", .{@tagName(status)}); //debug
 
         const logs: ?proto.task.poll.Logs = if (req.logs_offset) |offset| read_logs: {
             const logs_file = cwd.openFile(

@@ -67,7 +67,8 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
         };
 
         const t_start = std.Io.Clock.now(.real, daemon.io);
-        l.debug("request: {any}", .{request});
+        if (request != .task_poll)
+            l.debug("request: {any}", .{request});
 
         switch (request) {
             .artifact_push => {
@@ -162,7 +163,8 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
             const t_end = std.Io.Clock.now(.real, daemon.io);
             const dur = t_start.durationTo(t_end);
             var dur_buf: [32]u8 = undefined;
-            l.info("{s} handled in {s}", .{ @tagName(request), format_duration(&dur_buf, dur.nanoseconds) });
+            if (request != .task_poll)
+                l.info("{s} handled in {s}", .{ @tagName(request), format_duration(&dur_buf, dur.nanoseconds) });
         }
     }
 }

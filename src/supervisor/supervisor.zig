@@ -15,15 +15,12 @@ const default_max_pids = 256;
 const max_freeze_depth = 64;
 
 pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate: DaemonInstall.Isolate) !void {
-    const exe_path = try std.process.executablePathAlloc(io, gpa);
-    defer gpa.free(exe_path);
-
     const isolate_arg = try gpa.print("{d}", .{@backingInt(isolate)});
     defer gpa.free(isolate_arg);
 
     try spawn_detach(io, .{
         .argv = &.{
-            exe_path,
+            "/proc/self/exe",
             "supervisor",
             "supervise",
             id.workspace,

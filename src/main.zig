@@ -50,7 +50,7 @@ pub fn logger(
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
     stderr.setColor(.bright_black) catch {};
-    stderr.writer.writeAll("weft:") catch {};
+    stderr.writer.writeAll("weft") catch {};
     stderr.setColor(switch (level) {
         .err => .red,
         .warn => .yellow,
@@ -61,8 +61,7 @@ pub fn logger(
     stderr.setColor(.dim) catch {};
     stderr.setColor(.bold) catch {};
     if (scope != .default)
-        stderr.writer.print("({stderr})", .{scope}) catch {};
-    stderr.writer.writeAll(": ") catch {};
+        stderr.writer.print("{any}: ", .{scope}) catch {};
     stderr.setColor(.reset) catch {};
     stderr.writer.print(format ++ "\n", args) catch {};
 }
@@ -75,7 +74,7 @@ pub const std_options: std.Options = .{
 
 const Argz = union(enum) {
     pub const doc =
-        \\Weft, a deployment tool
+        \\Weft, a deployment tool https://github.com/ken-morel/weft
     ;
 
     daemon: union(enum) {
@@ -118,7 +117,6 @@ const Argz = union(enum) {
     version: struct {
         pub const doc = "Display information about the weft build";
     },
-
     check: struct {
         pub const doc = "Validate weft.zon";
     },

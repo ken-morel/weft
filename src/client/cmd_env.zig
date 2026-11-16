@@ -284,6 +284,7 @@ pub fn run(
     else
         &.{shell};
 
+    l.info("running command", .{});
     var child = try std.process.spawn(io, .{
         .argv = argv,
         .stdin = .inherit,
