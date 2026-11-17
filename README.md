@@ -2,18 +2,18 @@
 
 Weft is a deployment and task orchestration tool for Linux written in Zig. A single static binary with zero external dependencies serves as the CLI client, the remote daemon, and the task supervisor.
 
-The primary goal of Weft is to make reproducible, multi-stage deployments practical even on constrained targets such as $0.30 TierHive instances, low-memory VPS hosts, unprivileged LXC or OpenVZ containers, and ephemeral environments like Google Colab, while scaling up cleanly to dedicated bare-metal servers.
+The primary goal of Weft is to make reproducible, multi-stage deployments practical even on constrained targets such as $0.30 TierHive instances, low-memory VPS hosts, unprivileged LXC or OpenVZ containers, and ephemeral environments like Google Colab.
 
 - Tasks run directly under a built-in Linux supervisor rather than a container runtime like Docker or Podman, avoiding background daemon bloat and image registry overhead while adapting isolation to what the host kernel permits.
 - Pipeline environments can provision packages directly from Nix package repositories without requiring NixOS or a Nix daemon on the target machine.
-- Remotes can be reached over direct TCP connections, through local stdio proxy commands (`!<script>`), or via dynamic address-provider scripts (`~<script>`, such as port forwarders) when deploying to machines without public IP addresses.
+- Remotes can be reached over direct TCP connections, through local stdio proxy commands, or via dynamic address-provider scripts (`~<script>`, such as port forwarders) when deploying to machines without public IP addresses.
 - Client-to-daemon communication is authenticated using Ed25519 keypairs and encrypted end-to-end with XChaCha20-Poly1305 AEAD. On first use, the client generates a private key in `$XDG_CONFIG_HOME/weft/key` (or `~/.config/weft/key`). Remote daemons maintain a registry of authorized client public keys, verifying the client's signature and protocol version hash during a Diffie-Hellman key exchange before accepting commands or transferring data.
 
 ---
 
 ## 1. Installation and CLI Reference
 
-All CLI commands accept arguments either positionally (in the order shown below) or as named flags (`--<field> <value>`), with `--` ending flag parsing so trailing arguments and flags pass through verbatim. Commands that render live terminal UIs (`do`, `resume`, `env`, `task spawn`, `remote monitor`, `artifact pull/push`, `cache pull/push`) automatically detect when `stdout` is redirected to a file or piped into another process, stripping ANSI escape sequences and redrawing footers to emit clean, append-only plain text streams.
+All CLI commands accept arguments either positionally (in the order shown below) or as named flags (`-<field> <value>`), with `--` ending flag parsing so trailing arguments and flags pass through verbatim. Commands that render live terminal UIs (`do`, `resume`, `env`, `task spawn`, `remote monitor`, `artifact pull/push`, `cache pull/push`) automatically detect when `stdout` is redirected to a file or piped into another process, stripping ANSI escape sequences and redrawing footers to emit clean, append-only plain text streams.
 
 ### Installation
 
@@ -51,7 +51,7 @@ The compiled binary is output to `zig-out/bin/weft`.
 - `weft remote install {[user@]{ssh_alias|domain|ip}[:port]} [isolate[-scale]]`  
   Uploads the local `weft` binary to the target host via `scp`, runs `weft daemon install` over `ssh`, and registers the local client's public key with the remote daemon.
   - The SSH target accepts an `~/.ssh/config` host alias, a domain name, or an IP address. Omitting `user@` defaults to `root@`, and omitting `:port` uses port 22 or the port configured in `~/.ssh/config`.
-  - The optional `[isolate[-scale]]` argument (such as `kvm-small`, `lxc-large`, `vz-tiny`, or `colab`) configures the remote daemon's containerization and worker concurrency profile, detailed in the Daemon section below.
+  - The optional `[isolate[-scale][-port]]` argument (such as `kvm-small`, `lxc-large-9338`, `tiny-vz`, or `colab-9338`) configures the remote daemon's containerization and worker concurrency profile, detailed in the Daemon section below.
 
 - `weft remote register {[user@]{ssh_alias|domain|ip}[:port]} [pubkey]`  
   Registers an authorized client public key on a remote daemon over SSH by invoking `/usr/local/bin/weft daemon register <pubkey>` on the target host.
@@ -95,7 +95,7 @@ The compiled binary is output to `zig-out/bin/weft`.
   Resolves Nix packages and environment variables for one or more comma-separated pipelines or environments (checking `pipelines` first, then `environments`), ensures any missing Nix packages are installed via the `local` daemon, and runs a command or interactive `$SHELL` in the current working directory.
   - Omitting `<mode>:` defaults to `default`.
   - When multiple comma-separated names are given (for example, `weft env prod:build,tools`), packages are combined and deduplicated in order, and later environment variables override earlier ones.
-  - Prepends `/nix/store/<pkg>/bin` entries to the host `PATH` and exports `WEFT_ENV`, `WEFT_MODE`, `WEFT_WORKSPACE`, and `WEFT_VERSION`.
+  - Prepends `/nix/store/<pkg>/bin` entries to the host `PATH` and exports `WEFT_ENV`(You can display this in your shell prompt), `WEFT_MODE`, `WEFT_WORKSPACE`, and `WEFT_VERSION`.
   - If `cmds` is omitted, `$SHELL` (or `/bin/sh`) is launched; pass `--` before `cmds` when forwarding flags such as `--help` or `-v`.
 
 #### `weft task`

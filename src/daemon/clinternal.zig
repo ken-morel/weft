@@ -6,7 +6,7 @@ const proto = @import("../domain/proto.zig");
 const zoto = @import("../util/zoto.zig");
 const Task = @import("Task.zig");
 
-pub fn reload_keys(io: std.Io) void {
+pub fn reload(io: std.Io) void {
     const l = log(.clinternal_reloadkeys);
 
     const addr: std.Io.net.UnixAddress = std.Io.net.UnixAddress.init(paths.weft_socket) catch |err| {
@@ -25,7 +25,7 @@ pub fn reload_keys(io: std.Io) void {
     zoto.serialize(
         &writer.interface,
         proto.DaemonMsg,
-        .reload_keys,
+        .reload,
         .{ .header = true },
     ) catch |err| {
         l.warn("failed to serialize reload keys message: {any}", .{err});

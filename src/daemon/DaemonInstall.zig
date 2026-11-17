@@ -19,7 +19,6 @@ pub const Isolate = packed struct(u8) {
         .{ "kvm", .{ .cgroups = true, .mount = true, .pid = true, .net = true } },
         .{ "lxc", .{ .cgroups = false, .mount = true, .pid = true, .net = true } },
         .{ "vz", .{ .cgroups = false, .mount = false, .pid = false, .net = false } },
-        .{ "colab", .{ .cgroups = false, .mount = false, .pid = false, .net = false } },
     };
     pub fn template(name: []const u8) ?@This() {
         return inline for (templates) |t| {
@@ -31,14 +30,15 @@ pub const Isolate = packed struct(u8) {
 };
 
 pub const Scale = struct {
-    max_workers: u32,
+    max_workers: u8,
     compress: bool,
     decompress: bool,
 
     pub const templates = [_]struct { []const u8, @This() }{
-        .{ "tiny", .{ .max_workers = 1, .compress = false, .decompress = false } },
-        .{ "small", .{ .max_workers = 4, .compress = false, .decompress = true } },
-        .{ "large", .{ .max_workers = 16, .compress = true, .decompress = true } },
+        .{ "atomic", .{ .max_workers = 1, .compress = false, .decompress = false } },
+        .{ "tiny", .{ .max_workers = 2, .compress = false, .decompress = false } },
+        .{ "small", .{ .max_workers = 8, .compress = false, .decompress = true } },
+        .{ "large", .{ .max_workers = 32, .compress = true, .decompress = true } },
     };
     pub fn template(name: []const u8) ?@This() {
         return inline for (templates) |t| {
@@ -59,14 +59,17 @@ pub const Config = struct {
         const s = spec orelse return cfg;
         var it = std.mem.splitScalar(u8, s, '-');
         while (it.next()) |part| {
-            if (part.len == 0) continue;
+            if (part.len == 0)
+                continue;
             if (Isolate.template(part)) |iso|
                 cfg.isolate = iso
             else if (Scale.template(part)) |sc|
                 cfg.scale = sc
+            else if (std.fmt.parseInt(u16, part, 10) catch null) |p|
+                cfg.port = p
             else {
                 log(.config).err(
-                    "unknown template component '{s}'. Valid isolates: kvm, lxc, vz, colab. Valid scales: tiny, small, large",
+                    "unknown template component '{s}'. Valid isolates: kvm, lxc, vz, colab. Valid scales: tiny, small, large. Or a valid u16 port number",
                     .{part},
                 );
                 return error.TemplateNotFound;

@@ -59,9 +59,9 @@ pub fn logger(
     }) catch {};
     stderr.setColor(.bold) catch {};
     stderr.setColor(.dim) catch {};
-    stderr.setColor(.bold) catch {};
     if (scope != .default)
-        stderr.writer.print("{any}: ", .{scope}) catch {};
+        stderr.writer.print("{any}", .{scope}) catch {};
+    stderr.writer.print(": ", .{}) catch {};
     stderr.setColor(.reset) catch {};
     stderr.writer.print(format ++ "\n", args) catch {};
 }
@@ -94,7 +94,7 @@ const Argz = union(enum) {
         },
         ipc: union(enum) {
             pub const hidden = true;
-            reload_keys: struct {},
+            reload: struct {},
         },
     },
 
@@ -379,11 +379,11 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     return err;
                 };
                 try DaemonInstall.add_key(io, key);
-                clinternal.reload_keys(io);
+                clinternal.reload(io);
             },
             .ipc => |i| switch (i) {
-                .reload_keys => {
-                    clinternal.reload_keys(io);
+                .reload => {
+                    clinternal.reload(io);
                 },
             },
         },

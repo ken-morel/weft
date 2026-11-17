@@ -68,7 +68,7 @@ pub fn validate_key(self: *@This(), key: [32]u8) bool {
     } else false;
 }
 
-pub fn reload_keys(self: *@This()) !void {
+pub fn reload(self: *@This()) !void {
     const l = log(.daemon_keys);
     const new_keys = try DaemonInstall.get_keys(self.gpa, self.io);
     self.keys_lock.lockUncancelable(self.io);
@@ -76,6 +76,8 @@ pub fn reload_keys(self: *@This()) !void {
     self.gpa.free(self.keys);
     self.keys = new_keys;
     l.info("reloaded {d} client keys", .{new_keys.len});
+    //LEAK: The previous config ain't freed
+    self.config = try DaemonInstall.read_config_leaky(self.arena.allocator(), io);
 }
 
 pub fn run_client_server(self: *@This()) !void {
@@ -165,8 +167,8 @@ pub fn _run_system_server(self: *@This()) !void {
             );
             l.info("received command: {any}", .{cmd});
             switch (cmd) {
-                .reload_keys => {
-                    self.reload_keys() catch |err|
+                .reload => {
+                    self.reload() catch |err|
                         l.err("failed to reload keys: {any}", .{err});
                     continue :run .done;
                 },

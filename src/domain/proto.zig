@@ -176,7 +176,7 @@ pub const Request = enum(u8) {
 };
 
 pub const DaemonMsg = union(enum) {
-    reload_keys,
+    reload,
 };
 
 req: Request,
