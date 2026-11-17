@@ -1,6 +1,5 @@
 const std = @import("std");
 
-/// TODO: Improve error reporting. With diagnostics and help
 pub const ArgzParseError = error{
     ExpectedCommand,
     InvalidCommand,
@@ -13,13 +12,20 @@ pub const ArgzParseError = error{
 };
 
 fn flag_matches(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        const norm_a = if (ca == '-') '_' else ca;
-        const norm_b = if (cb == '-') '_' else cb;
-        if (norm_a != norm_b) return false;
-    }
-    return true;
+    if (a.len != b.len)
+        return false;
+    return for (a, b) |ca, cb| {
+        const norm_a = if (ca == '-')
+            '_'
+        else
+            ca;
+        const norm_b = if (cb == '-')
+            '_'
+        else
+            cb;
+        if (norm_a != norm_b)
+            break false;
+    } else true;
 }
 
 pub const Args = struct {

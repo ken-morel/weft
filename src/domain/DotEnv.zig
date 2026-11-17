@@ -72,8 +72,6 @@ pub fn parse(alloc: std.mem.Allocator, content: []const u8) !std.StringHashMapUn
     return map;
 }
 
-//TODO: Make DotEnv a struct which will cache the results of this load_env
-
 pub fn load_file_leaky(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, filename: []const u8) !std.StringHashMapUnmanaged([]const u8) {
     var env: std.StringHashMapUnmanaged([]const u8) = .empty;
     errdefer env.deinit(ara);

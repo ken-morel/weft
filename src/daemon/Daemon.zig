@@ -77,7 +77,7 @@ pub fn reload(self: *@This()) !void {
     self.keys = new_keys;
     l.info("reloaded {d} client keys", .{new_keys.len});
     //LEAK: The previous config ain't freed
-    self.config = try DaemonInstall.read_config_leaky(self.arena.allocator(), io);
+    self.config = try DaemonInstall.read_config_leaky(self.arena.allocator(), self.io);
 }
 
 pub fn run_client_server(self: *@This()) !void {

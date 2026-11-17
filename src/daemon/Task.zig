@@ -240,8 +240,8 @@ pub fn usage(self: @This(), gpa: std.mem.Allocator, io: std.Io) !?proto.task.pol
 
 pub const Spec = struct {
     pub const Tune = Weft.Pipeline.Tune;
-    pub const max_size = 64 << 10; //TODO: Make sure we use this everywhere
-    pub const max_script_size = 60 << 10; //TODO: Make sure we use this everywhere
+    pub const max_size = 64 << 10;
+    pub const max_script_size = 60 << 10;
 
     task_id: proto.task.Id,
     script: ?[]const u8,
