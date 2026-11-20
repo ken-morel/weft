@@ -111,8 +111,8 @@ The compiled binary is output to `zig-out/bin/weft`.
 - `weft task kill {[mode:][remote.]pipeline} [deployment]`  
   Terminates the running task for the specified pipeline step in the given deployment (defaults to latest).
 
-- `weft task logs {[mode:][remote.]pipeline} [deployment]`  
-  Streams the combined stdout/stderr logs for a running or completed pipeline step in the given deployment (defaults to latest), polling until the task finishes. Writes raw log chunks directly to `stdout` (bracketed by `{ remote.pipeline` and `} remote.pipeline` or `#.failed`/`#.killed` markers) so it can be redirected directly into a log file (`weft task logs prod.server > server.log`).
+- `weft task logs {[mode:][remote.]pipeline} [deployment] [-from <offset>]`  
+  Streams the combined stdout/stderr logs for a running or completed pipeline step in the given deployment (defaults to latest), starting from byte `<offset>` (defaults to `0`) and polling until the task finishes. Writes raw log chunks directly to `stdout` (bracketed by `{ remote.pipeline` and `} remote.pipeline` or `#.failed`/`#.killed` markers) so it can be redirected directly into a log file (`weft task logs prod.server > server.log`).
 
 #### `weft artifact`
 

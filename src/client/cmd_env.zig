@@ -111,21 +111,21 @@ fn ensure_packages(
         const res = try client.conn.recv_object(req_alloc, proto.Res(proto.task.poll.Res));
         const item = try res orelse break null;
 
-        if (item.logs) |logs| {
+        const more = if (item.logs) |logs| logs: {
             if (logs.data.len > 0)
                 try view.print_logs(name, logs.data);
             offset = logs.end_offset;
             try view.set_task(io, "local", name, mode, .{ .log_offset = logs.end_offset });
-        }
+            break :logs logs.more;
+        } else false;
+
+        if (more)
+            continue;
 
         if (item.status) |s| {
             try view.set_task(io, "local", name, mode, .{ .status = s });
             switch (s) {
-                .done, .skipped, .failed, .killed, .frozen => {
-                    const has_more = if (item.logs) |logs| logs.data.len > 0 else false;
-                    if (!has_more)
-                        break s;
-                },
+                .done, .skipped, .failed, .killed, .frozen => break s,
                 else => {},
             }
         }

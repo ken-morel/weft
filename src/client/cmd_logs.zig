@@ -21,6 +21,7 @@ pub fn run(
     inst: ClientInstall,
     step: Step,
     deployment_spec: ?[]const u8,
+    from: u64,
     env: ?*std.process.Environ.Map,
 ) !void {
     const l = log(.follow);
@@ -70,7 +71,7 @@ pub fn run(
         .pipeline = pipeline_name,
     };
 
-    var offset: u64 = 0;
+    var offset: u64 = from;
 
     const buffer = try alloc.alloc(u8, Connection.max_packet_size);
 
@@ -117,26 +118,22 @@ pub fn run(
             return e;
         };
 
-        var has_more_logs = false;
         if (data) |item| {
-            if (item.logs) |logs| {
+            status = item.status;
+            const more = if (item.logs) |logs| logs: {
                 try stdout.writeStreamingAll(io, logs.data);
                 offset = logs.end_offset;
-                if (logs.data.len > 0)
-                    has_more_logs = true;
-            }
-            status = item.status;
+                break :logs logs.more;
+            } else false;
+            if (more)
+                continue;
             if (status) |s| switch (s) {
-                .done, .failed, .killed, .skipped, .frozen => {
-                    if (!has_more_logs)
-                        break;
-                },
+                .done, .failed, .killed, .skipped, .frozen => break,
                 else => {},
             };
         } else break;
 
-        if (!has_more_logs)
-            try std.Io.sleep(io, .fromSeconds(2), .awake);
+        try std.Io.sleep(io, .fromSeconds(2), .awake);
     }
 
     if (status) |s| switch (s) {

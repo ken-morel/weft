@@ -112,6 +112,26 @@ pub const task = struct {
         pub inline fn w_d(self: @This(), a: []const u8) struct { []const u8, []const u8, Deployment.Id } {
             return .{ self.workspace, a, self.deployment };
         }
+        pub fn from_task_dir(path: []const u8) ?@This() {
+            var p = path;
+            while (p.len > 0 and p[p.len - 1] == '/')
+                p = p[0 .. p.len - 1];
+
+            var it = std.mem.splitBackwardsScalar(u8, p, '/');
+            const deployment_str = it.next() orelse return null;
+            const deployment = Deployment.Id.parse(deployment_str) catch return null;
+            const pipeline = it.next() orelse return null;
+            const task_tag = it.next() orelse return null;
+            if (!std.mem.eql(u8, task_tag, "task"))
+                return null;
+            const workspace = it.next() orelse return null;
+
+            return .{
+                .workspace = workspace,
+                .pipeline = pipeline,
+                .deployment = deployment,
+            };
+        }
     };
 
     pub const spawn = struct {
@@ -125,6 +145,7 @@ pub const task = struct {
         pub const Logs = struct {
             data: []const u8,
             end_offset: u64,
+            more: bool,
         };
         pub const TaskUsage = struct {
             cpu_usec: u64 = 0,

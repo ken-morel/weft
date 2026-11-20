@@ -214,44 +214,70 @@ fn poll_batch(
     client: *Client,
     fetcher: ?*Fetcher,
 ) !void {
-    for (batch) |task|
-        try client.conn.send_object(log_buffer, proto.task.poll.Req, task);
-    try client.conn.send_object(log_buffer, proto.task.poll.Req, null);
+    var pending: std.ArrayList(proto.task.poll.Req) = .empty;
+    defer pending.deinit(alloc);
+    try pending.appendSlice(alloc, batch);
 
-    var count: usize = 0;
-    while (count < batch.len) : (count += 1) {
-        const res = try client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
-        const item = try res;
-        const poll_res = item orelse break;
+    var next_pending: std.ArrayList(proto.task.poll.Req) = .empty;
+    defer next_pending.deinit(alloc);
 
-        const pipeline_name = poll_res.task.pipeline;
-        if (poll_res.logs) |logs| {
-            if (logs.data.len > 0)
-                try view.print_logs(pipeline_name, logs.data);
-            try view.set_task(io, remote_name, pipeline_name, "?", .{ .log_offset = logs.end_offset });
+    while (pending.items.len > 0) {
+        next_pending.clearRetainingCapacity();
+
+        for (pending.items) |task|
+            try client.conn.send_object(log_buffer, proto.task.poll.Req, task);
+
+        var count: usize = 0;
+        while (count < pending.items.len) : (count += 1) {
+            const res = try client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
+            const item = try res;
+            const poll_res = item orelse break;
+
+            const pipeline_name = poll_res.task.pipeline;
+            var next_offset: ?u64 = null;
+            if (poll_res.logs) |logs| {
+                if (logs.data.len > 0)
+                    try view.print_logs(pipeline_name, logs.data);
+                next_offset = logs.end_offset;
+                try view.set_task(io, remote_name, pipeline_name, "?", .{ .log_offset = logs.end_offset });
+            }
+
+            if (poll_res.usage) |u|
+                try view.set_task(io, remote_name, pipeline_name, "?", .{
+                    .usage = .{
+                        .cpu_usec = u.cpu_usec,
+                        .memory_bytes = u.memory_bytes,
+                        .now = std.Io.Clock.now(.real, io),
+                    },
+                });
+
+            const more = if (poll_res.logs) |logs|
+                logs.more
+            else
+                false;
+            if (more)
+                try next_pending.append(alloc, .{
+                    .task = poll_res.task,
+                    .logs_offset = next_offset,
+                })
+            else
+                try poll_item(
+                    gpa,
+                    io,
+                    project,
+                    deployment,
+                    view,
+                    fetcher,
+                    remote_name,
+                    pipeline_name,
+                    poll_res.status,
+                );
         }
 
-        if (poll_res.usage) |u|
-            try view.set_task(io, remote_name, pipeline_name, "?", .{
-                .usage = .{
-                    .cpu_usec = u.cpu_usec,
-                    .memory_bytes = u.memory_bytes,
-                    .now = std.Io.Clock.now(.real, io),
-                },
-            });
-
-        try poll_item(
-            gpa,
-            io,
-            project,
-            deployment,
-            view,
-            fetcher,
-            remote_name,
-            pipeline_name,
-            poll_res.status,
-        );
+        std.mem.swap(std.ArrayList(proto.task.poll.Req), &pending, &next_pending);
     }
+
+    try client.conn.send_object(log_buffer, proto.task.poll.Req, null);
     if (client.conn.recv_object_buf(log_buffer, proto.Res(proto.task.poll.Res))) |res| {
         _ = res catch {};
     } else |_| {}

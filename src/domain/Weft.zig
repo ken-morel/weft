@@ -74,6 +74,7 @@ pub const Pipeline = struct {
     tune: Tune = .{},
     timeout: ?u32 = null,
     max_retries: u16 = 10,
+    restart: bool = true,
     retention: ?Retention = null,
 
     sibling: HandleSibling = .{ .then = .ignore },

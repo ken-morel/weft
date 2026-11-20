@@ -6,6 +6,7 @@ const Weft = @import("../domain/Weft.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");
 const Project = @import("Project.zig");
+const Step = @import("Step.zig");
 
 fn is_valid_mount_path(path: []const u8) bool {
     if (path.len == 0)
@@ -82,6 +83,11 @@ pub fn run(
     };
 
     var errors: usize = 0;
+
+    if (!Step.is_valid_name(config.workspace)) {
+        l.err("workspace name '{s}' is invalid (must start with a letter and contain only letters, numbers, and '-')", .{config.workspace});
+        errors += 1;
+    }
 
     const sources = config.get_sources();
     for (sources, 0..) |s1, idx|
@@ -182,30 +188,40 @@ pub fn run(
     defer cycle_stack.deinit(alloc);
 
     for (config.pipelines) |pipeline| {
-        for (pipeline.in) |input| {
+        if (!Step.is_valid_name(pipeline.name)) {
+            l.err("pipeline name '{s}' is invalid (must start with a letter and contain only letters, numbers, and '-')", .{pipeline.name});
+            errors += 1;
+        }
+
+        for (pipeline.in) |raw_input| {
+            const input = Weft.strip_mode(null, raw_input) orelse raw_input;
             if (Weft.is_source_artifact(input)) {
-                if (std.mem.startsWith(u8, input, "src.")) {
-                    const req_src = input["src.".len..];
-                    for (sources) |src_entry| {
-                        if (std.mem.eql(u8, src_entry.@"0", req_src))
-                            break;
-                    } else {
-                        l.err("pipeline '{s}': input '{s}' references source '{s}' not defined in .sources", .{
-                            pipeline.name,
-                            input,
-                            req_src,
-                        });
-                        errors += 1;
-                    }
-                }
-            } else {
-                for (config.pipelines) |*other| {
-                    if (other.produces(input))
+                const req_src = input[1..];
+                for (sources) |src_entry| {
+                    if (std.mem.eql(u8, src_entry.@"0", req_src))
                         break;
                 } else {
+                    l.err("pipeline '{s}': input '{s}' references source '{s}' not defined in .sources", .{
+                        pipeline.name,
+                        raw_input,
+                        req_src,
+                    });
+                    errors += 1;
+                }
+            } else {
+                const produced = produced: for (config.pipelines) |*other| {
+                    const outs: []const []const u8 = other.out orelse &.{other.name};
+                    for (outs) |raw_out| {
+                        const out = Weft.strip_mode(null, raw_out) orelse raw_out;
+                        if (std.mem.eql(u8, out, input))
+                            break :produced true;
+                    }
+                } else false;
+
+                if (!produced) {
                     l.err("pipeline '{s}': input '{s}' is not produced by any pipeline", .{
                         pipeline.name,
-                        input,
+                        raw_input,
                     });
                     errors += 1;
                 }

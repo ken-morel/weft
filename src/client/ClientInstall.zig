@@ -18,7 +18,9 @@ pub const Remote = struct {
 };
 
 pub const Config = struct {
-    remotes: []const Remote = &.{},
+    remotes: []const Remote = &.{
+        .{ "local", "127.0.0.1:9338" },
+    },
     compress: bool = true,
     decompress: bool = true,
 };
@@ -72,15 +74,10 @@ pub fn ensure_config(io: std.Io, dir: std.Io.Dir) !void {
             return err;
     defer file.close(io);
 
-    const default_content =
-        \\.{
-        \\    .remotes = .{
-        \\        .{ "local", "127.0.0.1:9338" },
-        \\    },
-        \\}
-        \\
-    ;
-    try file.writePositionalAll(io, default_content, 0);
+    var buf: [1 << 5]u8 = undefined;
+    var writer = file.writer(io, &buf);
+    try std.zon.stringify.serialize(Config{}, .{}, &writer.interface);
+    try writer.flush();
 }
 
 pub fn read_config_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io) !Config {

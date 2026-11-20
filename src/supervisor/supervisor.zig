@@ -14,6 +14,30 @@ const mount = @import("mount.zig");
 const default_max_pids = 256;
 const max_freeze_depth = 64;
 
+fn open_signal() !std.os.linux.fd_t {
+    var mask = std.os.linux.sigemptyset();
+    std.os.linux.sigaddset(&mask, .TERM);
+    std.os.linux.sigaddset(&mask, .TSTP);
+    std.os.linux.sigaddset(&mask, .CONT);
+
+    if (std.os.linux.errno(std.os.linux.sigprocmask(std.os.linux.SIG.BLOCK, &mask, null)) != .SUCCESS)
+        return error.SigprocmaskFailed;
+
+    const rc = std.os.linux.signalfd(-1, &mask, std.os.linux.SFD.CLOEXEC | std.os.linux.SFD.NONBLOCK);
+    return if (std.os.linux.errno(rc) != .SUCCESS)
+        error.SignalfdFailed
+    else
+        @intCast(rc);
+}
+
+fn read_signal(sig_fd: std.os.linux.fd_t) ?std.os.linux.SIG {
+    var info: std.os.linux.signalfd_siginfo = undefined;
+    const rc = std.os.linux.read(sig_fd, std.mem.asBytes(&info), @sizeOf(std.os.linux.signalfd_siginfo));
+    if (std.os.linux.errno(rc) != .SUCCESS or rc != @sizeOf(std.os.linux.signalfd_siginfo))
+        return null;
+    return @fromBackingInt(@intCast(info.signo));
+}
+
 pub fn spawn_supervisor(gpa: std.mem.Allocator, io: std.Io, id: Task.Id, isolate: DaemonInstall.Isolate) !void {
     const isolate_arg = try gpa.print("{d}", .{@backingInt(isolate)});
     defer gpa.free(isolate_arg);
@@ -114,6 +138,9 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     const cgroup_name = try task.cgroup_name(gpa);
     defer gpa.free(cgroup_name);
     log.info("supervising task {s}", .{cgroup_name});
+
+    const sig_fd = try open_signal();
+    defer _ = std.os.linux.close(sig_fd);
 
     const spec = try task.read_spec(gpa, alloc, io);
     try task.write_status(gpa, io, .preparing);
@@ -259,6 +286,13 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         break :handle_siblings false;
     };
 
+    while (read_signal(sig_fd)) |sig|
+        if (sig == .TERM) {
+            log.info("task killed before spawn", .{});
+            try task.write_status(gpa, io, .killed);
+            return;
+        };
+
     if (skip)
         log.info("task skipped", .{})
     else {
@@ -312,7 +346,14 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         const child_pid: std.posix.pid_t = child.id orelse unreachable;
         defer if (!isolate.cgroups) {
             _ = std.os.linux.kill(-child_pid, .KILL);
+            _ = std.os.linux.kill(child_pid, .KILL);
         };
+
+        const pid_fd_rc = std.os.linux.pidfd_open(child_pid, 0);
+        if (std.os.linux.errno(pid_fd_rc) != .SUCCESS)
+            return error.PidfdOpenFailed;
+        const pid_fd: std.os.linux.fd_t = @intCast(pid_fd_rc);
+        defer _ = std.os.linux.close(pid_fd);
 
         if (cgroup_mut) |*cgroup|
             try cgroup.procs_add(gpa, io, child_pid);
@@ -320,34 +361,116 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         log.debug("task running in sandbox (pid {d})", .{child_pid}); //debug
 
         try task.write_status(gpa, io, .running);
+
+        const deadline_ns: ?i96 = if (spec.timeout) |secs|
+            std.Io.Clock.now(.awake, io).nanoseconds + @as(i96, secs) * std.time.ns_per_s
+        else
+            null;
+
         var child_status: u32 = 0;
+        var killed = false;
+        var timed_out = false;
         const term: std.process.Child.Term = term: {
             while (true) {
-                const res = std.os.linux.waitpid(child_pid, @ptrCast(&child_status), 0);
-                if (std.os.linux.errno(res) == .INTR)
+                const timeout_ms: i32 = if (deadline_ns) |dl| timeout_ms: {
+                    const rem_ns = dl - std.Io.Clock.now(.awake, io).nanoseconds;
+                    if (rem_ns <= 0)
+                        break :timeout_ms 0;
+                    const rem_ms = @divFloor(rem_ns + std.time.ns_per_ms - 1, std.time.ns_per_ms);
+                    break :timeout_ms @intCast(@min(rem_ms, std.math.maxInt(i32)));
+                } else -1;
+
+                var fds = [_]std.os.linux.pollfd{
+                    .{ .fd = pid_fd, .events = std.os.linux.POLL.IN, .revents = 0 },
+                    .{ .fd = sig_fd, .events = std.os.linux.POLL.IN, .revents = 0 },
+                };
+                const poll_rc = std.os.linux.poll(&fds, fds.len, timeout_ms);
+                if (std.os.linux.errno(poll_rc) == .INTR)
                     continue;
-                if (std.os.linux.errno(res) != .SUCCESS) {
-                    log.err("waitpid error: {s}", .{@tagName(std.os.linux.errno(res))});
-                    return error.TaskFailed;
+
+                if (poll_rc == 0 and deadline_ns != null and !timed_out) {
+                    log.err("task timed out after {d}s, terminating", .{spec.timeout orelse 0});
+                    timed_out = true;
+                    if (cgroup_mut) |*cgroup|
+                        cgroup.kill(gpa, io) catch {}
+                    else {
+                        _ = std.os.linux.kill(-child_pid, .KILL);
+                        _ = std.os.linux.kill(child_pid, .KILL);
+                    }
+                    continue;
                 }
-                if (std.os.linux.W.IFEXITED(child_status))
-                    break :term .{ .exited = std.os.linux.W.EXITSTATUS(child_status) }
-                else if (std.os.linux.W.IFSIGNALED(child_status))
-                    break :term .{ .signal = std.os.linux.W.TERMSIG(child_status) }
-                else if (std.os.linux.W.IFSTOPPED(child_status))
-                    break :term .{ .stopped = std.os.linux.W.STOPSIG(child_status) }
-                else
-                    break :term .{ .unknown = child_status };
+
+                if (fds[1].revents & std.os.linux.POLL.IN != 0)
+                    while (read_signal(sig_fd)) |sig| switch (sig) {
+                        .TERM => {
+                            log.info("received kill signal, terminating task", .{});
+                            killed = true;
+                            if (cgroup_mut) |*cgroup|
+                                try cgroup.kill(gpa, io)
+                            else {
+                                _ = std.os.linux.kill(-child_pid, .KILL);
+                                _ = std.os.linux.kill(child_pid, .KILL);
+                            }
+                        },
+                        .TSTP => {
+                            log.info("received freeze signal, freezing task", .{});
+                            if (cgroup_mut) |*cgroup|
+                                try cgroup.frozen_set(gpa, io, true)
+                            else {
+                                _ = std.os.linux.kill(-child_pid, .STOP);
+                                _ = std.os.linux.kill(child_pid, .STOP);
+                            }
+                            try task.write_status(gpa, io, .frozen);
+                        },
+                        .CONT => {
+                            log.info("received unfreeze signal, unfreezing task", .{});
+                            if (cgroup_mut) |*cgroup|
+                                try cgroup.frozen_set(gpa, io, false)
+                            else {
+                                _ = std.os.linux.kill(-child_pid, .CONT);
+                                _ = std.os.linux.kill(child_pid, .CONT);
+                            }
+                            try task.write_status(gpa, io, .running);
+                        },
+                        else => {},
+                    };
+
+                if (fds[0].revents & (std.os.linux.POLL.IN | std.os.linux.POLL.HUP | std.os.linux.POLL.ERR) != 0) {
+                    const res = std.os.linux.waitpid(child_pid, @ptrCast(&child_status), 0);
+                    if (std.os.linux.errno(res) == .INTR)
+                        continue;
+                    if (std.os.linux.errno(res) != .SUCCESS) {
+                        if (killed)
+                            break :term .{ .signal = .KILL };
+                        log.err("waitpid error: {s}", .{@tagName(std.os.linux.errno(res))});
+                        return error.TaskFailed;
+                    }
+                    if (std.os.linux.W.IFEXITED(child_status))
+                        break :term .{ .exited = std.os.linux.W.EXITSTATUS(child_status) }
+                    else if (std.os.linux.W.IFSIGNALED(child_status))
+                        break :term .{ .signal = std.os.linux.W.TERMSIG(child_status) }
+                    else if (std.os.linux.W.IFSTOPPED(child_status))
+                        break :term .{ .stopped = std.os.linux.W.STOPSIG(child_status) }
+                    else
+                        break :term .{ .unknown = child_status };
+                }
             }
         };
+        if (killed) {
+            log.info("task killed", .{});
+            try task.write_status(gpa, io, .killed);
+            return;
+        }
         switch (term) {
             .exited => |code| log.info("task exited with code {d}", .{code}),
             .signal => |sig| log.err("task terminated by signal {s}", .{@tagName(sig)}),
             .stopped => |sig| log.err("task stopped by signal {s}", .{@tagName(sig)}),
             .unknown => |code| log.err("task terminated with unknown status {d}", .{code}),
         }
-        if (term != .exited or term.exited != 0)
+        if (timed_out)
             return error.TaskFailed;
+        if (term != .exited or term.exited != 0)
+            return;
     }
     try task.write_status(gpa, io, .harvesting);
     log.info("harvesting {d} output(s)", .{spec.outputs.len});
@@ -386,7 +509,13 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
 }
 
 pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
+    reset_signals_mask: {
+        const empty_mask = std.os.linux.sigemptyset();
+        _ = std.os.linux.sigprocmask(std.os.linux.SIG.SETMASK, &empty_mask, null);
+        break :reset_signals_mask;
+    }
     _ = std.os.linux.syscall3(.setpriority, 0, 0, 0);
+
     const l = std.log.scoped(.supervisor_spawn);
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
@@ -432,8 +561,8 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             const user_home_rel = try gpa.printSentinel("home/{s}", .{username}, 0);
             defer gpa.free(user_home_rel);
             for ([_][]const u8{
-                "nix/store", "bin",     "usr", "proc",
-                "tmp",       "dev/shm", "etc", "work",
+                "nix/store", "bin",     "usr",         "proc",
+                "tmp",       "dev/shm", "etc",         "work",
                 "in",        "out",     user_home_rel,
             }) |dir|
                 try rootfs_dir.createDirPath(io, dir);
@@ -797,7 +926,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         const done = std.os.linux.waitpid(-1, @ptrCast(&status), 0); // takes i32 for status
         if (std.os.linux.errno(done) == .INTR)
             continue;
-        l.debug("reaped pid {d}", .{done}); //debug
+        l.debug("reaped pid {d}", .{done});
         if (done == child_pid) {
             const code: u8 = if (std.os.linux.W.IFEXITED(status))
                 std.os.linux.W.EXITSTATUS(status)

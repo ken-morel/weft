@@ -105,18 +105,63 @@ pub fn read_status(self: @This(), gpa: std.mem.Allocator, io: std.Io) !Status {
     return zoto.deserialize(null, &content, Status, .{ .header = true });
 }
 
+fn read_supervisor_pid(self: @This(), gpa: std.mem.Allocator, io: std.Io) !?i32 {
+    const pid_path = try gpa.print(paths.task_run_pid, self.id.wpd());
+    defer gpa.free(pid_path);
+
+    var pid_buf: [32]u8 = undefined;
+    const pid_str = std.Io.Dir.cwd().readFile(io, pid_path, &pid_buf) catch |err|
+        return if (err == error.FileNotFound)
+            null
+        else
+            err;
+    const trimmed = std.mem.trim(u8, pid_str, " \t\r\n");
+    return std.fmt.parseInt(i32, trimmed, 10) catch null;
+}
+
 pub fn kill(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
     const l = log(.task_io);
     l.debug("killing task {s}/{s}/{d}", .{ self.id.workspace, self.id.pipeline, self.id.deployment }); //debug
-    const cg = try self.cgroup(gpa);
-    defer cg.deinit(gpa);
-    try cg.kill(gpa, io);
+    const pid = try self.read_supervisor_pid(gpa, io) orelse return error.ProcessNotFound;
+    const rc = std.os.linux.kill(pid, .TERM);
+    switch (std.os.linux.errno(rc)) {
+        .SUCCESS => {},
+        .SRCH => return error.ProcessNotFound,
+        .PERM => return error.PermissionDenied,
+        else => return error.Unexpected,
+    }
+}
+
+pub fn freeze(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
+    const l = log(.task_io);
+    l.debug("freezing task {s}/{s}/{d}", .{ self.id.workspace, self.id.pipeline, self.id.deployment }); //debug
+    const pid = try self.read_supervisor_pid(gpa, io) orelse return error.ProcessNotFound;
+    const rc = std.os.linux.kill(pid, .TSTP);
+    switch (std.os.linux.errno(rc)) {
+        .SUCCESS => {},
+        .SRCH => return error.ProcessNotFound,
+        .PERM => return error.PermissionDenied,
+        else => return error.Unexpected,
+    }
+}
+
+pub fn unfreeze(self: @This(), gpa: std.mem.Allocator, io: std.Io) !void {
+    const l = log(.task_io);
+    l.debug("unfreezing task {s}/{s}/{d}", .{ self.id.workspace, self.id.pipeline, self.id.deployment }); //debug
+    const pid = try self.read_supervisor_pid(gpa, io) orelse return error.ProcessNotFound;
+    const rc = std.os.linux.kill(pid, .CONT);
+    switch (std.os.linux.errno(rc)) {
+        .SUCCESS => {},
+        .SRCH => return error.ProcessNotFound,
+        .PERM => return error.PermissionDenied,
+        else => return error.Unexpected,
+    }
 }
 
 pub fn is_active(self: @This(), gpa: std.mem.Allocator, io: std.Io) !bool {
-    const cg = try self.cgroup(gpa);
-    defer cg.deinit(gpa);
-    return cg.is_active(gpa, io);
+    const pid = try self.read_supervisor_pid(gpa, io) orelse return false;
+    const rc = std.os.linux.syscall2(.kill, @as(u32, @bitCast(pid)), 0);
+    return std.os.linux.errno(rc) != .SRCH;
 }
 pub fn send_input(self: @This(), gpa: std.mem.Allocator, io: std.Io, data: []const u8) !bool {
     const in_path = try gpa.print(paths.task_run_in, self.id.wpd());
@@ -254,6 +299,7 @@ pub const Spec = struct {
     sibling: Weft.Pipeline.HandleSibling = .{ .then = .ignore },
     tune: Tune,
     mode: []const u8,
+    restartable: bool = true,
     retention: Weft.Retention,
 
     pub const Env = struct {
@@ -412,6 +458,7 @@ pub const Spec = struct {
             .sibling = pipeline.sibling,
             .tune = pipeline.tune,
             .mode = mode,
+            .restartable = pipeline.restart,
             .retention = pipeline.retention orelse config.retention,
         };
     }

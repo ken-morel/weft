@@ -5,6 +5,7 @@ const domain = @import("../domain/domain.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
+const supervisor = @import("../supervisor/supervisor.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
@@ -193,6 +194,73 @@ fn handle_signal(sig: std.posix.SIG) callconv(.c) void {
     std.process.exit(0);
 }
 
+fn recover_active_tasks(self: *@This()) !void {
+    const l = log(.respawn_active);
+    var active_dir = std.Io.Dir.cwd().openDir(self.io, paths.weft_active, .{ .iterate = true }) catch |err| {
+        l.warn("could not open {s}: {any}", .{ paths.weft_active, err });
+        return err;
+    };
+    defer active_dir.close(self.io);
+
+    var spec_arena: std.heap.ArenaAllocator = .init(self.gpa);
+    defer spec_arena.deinit();
+
+    var iter = active_dir.iterate();
+    while (try iter.next(self.io)) |entry| {
+        defer _ = spec_arena.reset(.retain_capacity);
+
+        var link_buf: [std.posix.PATH_MAX]u8 = undefined;
+        const link_len = active_dir.readLink(self.io, entry.name, &link_buf) catch continue;
+
+        const tid = Task.Id.from_task_dir(link_buf[0..link_len]) orelse {
+            l.warn("removing unparseable active symlink '{s}'", .{entry.name});
+            active_dir.deleteFile(self.io, entry.name) catch {};
+            continue;
+        };
+
+        const task: Task = .{ .id = tid };
+        const status = task.read_status(self.gpa, self.io) catch |err| {
+            l.warn("removing dead active symlink '{s}' (status unreadable: {any})", .{ entry.name, err });
+            active_dir.deleteFile(self.io, entry.name) catch {};
+            continue;
+        };
+
+        switch (status) {
+            .done, .skipped, .failed, .killed => {
+                l.info("removing dead active symlink '{s}' (status: {s})", .{ entry.name, @tagName(status) });
+                active_dir.deleteFile(self.io, entry.name) catch {};
+            },
+            .preparing, .running, .harvesting, .frozen => {
+                const running = task.is_active(self.gpa, self.io) catch false;
+                if (running)
+                    continue;
+
+                const spec = task.read_spec(self.gpa, spec_arena.allocator(), self.io) catch |err| {
+                    l.warn("task '{s}' is inactive and spec unreadable ({any}); removing dead symlink", .{ entry.name, err });
+                    task.write_status(self.gpa, self.io, .killed) catch {};
+                    active_dir.deleteFile(self.io, entry.name) catch {};
+                    continue;
+                };
+
+                if (spec.restartable) {
+                    l.info("respawning inactive restartable task {s}/{s}/{d}", .{ tid.workspace, tid.pipeline, tid.deployment });
+                    supervisor.spawn_supervisor(
+                        self.gpa,
+                        self.io,
+                        task.id,
+                        self.config.isolate,
+                    ) catch |err|
+                        l.err("failed to respawn task {s}/{s}/{d}: {any}", .{ tid.workspace, tid.pipeline, tid.deployment, err });
+                } else {
+                    l.info("task {s}/{s}/{d} is inactive and not restartable; marking killed and removing symlink", .{ tid.workspace, tid.pipeline, tid.deployment });
+                    task.write_status(self.gpa, self.io, .killed) catch {};
+                    active_dir.deleteFile(self.io, entry.name) catch {};
+                }
+            },
+        }
+    }
+}
+
 pub fn run(self: *@This()) !void {
     _ = std.os.linux.syscall3(.setpriority, 0, 0, 10);
     const cwd: std.Io.Dir = .cwd();
@@ -220,6 +288,7 @@ pub fn run(self: *@This()) !void {
         for ([_][]const u8{ "+cpu", "+memory", "+io", "+pids" }) |ctrl|
             try weft_cg.subtree_control_set(self.gpa, self.io, ctrl);
     }
+    try self.recover_active_tasks();
 
     var group: std.Io.Group = .init;
 

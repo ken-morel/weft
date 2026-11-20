@@ -236,9 +236,11 @@ const Argz = union(enum) {
             pub const doc = "Get the logs for a running/completed pipeline";
             pub const doc_step = "The target spec to follow can be <pipeline> or <remote>.<pipeline>";
             pub const doc_deployment = "The deployment id to follow (defaults to latest)";
+            pub const doc_from = "Byte offset to start streaming logs from (defaults to 0)";
 
             step: []const u8,
             deployment: ?[]const u8 = null,
+            from: u64 = 0,
         },
     },
 
@@ -613,7 +615,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     return e;
                 };
 
-                return cmd_logs.run(gpa, io, project, installation, target, l.deployment, &environ_map);
+                return cmd_logs.run(gpa, io, project, installation, target, l.deployment, l.from, &environ_map);
             },
         },
         .remote => |r| switch (r) {

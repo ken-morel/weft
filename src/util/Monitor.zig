@@ -392,47 +392,6 @@ const TaskMetrics = struct {
     pids: u32 = 0,
 };
 
-fn parse_task_dir_path(path: []const u8) ?proto.task.Id {
-    var p = path;
-    while (p.len > 0 and p[p.len - 1] == '/')
-        p = p[0 .. p.len - 1];
-
-    var it = std.mem.splitBackwardsScalar(u8, p, '/');
-    const deployment_str = it.next() orelse return null;
-    const deployment = Deployment.Id.parse(deployment_str) catch return null;
-    const pipeline = it.next() orelse return null;
-    const task_tag = it.next() orelse return null;
-    if (!std.mem.eql(u8, task_tag, "task"))
-        return null;
-    const workspace = it.next() orelse return null;
-
-    return .{
-        .workspace = workspace,
-        .pipeline = pipeline,
-        .deployment = deployment,
-    };
-}
-
-fn parse_active_name(name: []const u8) ?proto.task.Id {
-    if (name.len < 10)
-        return null;
-    const deployment_str = name[name.len - 8 ..];
-    if (name[name.len - 9] != '_')
-        return null;
-    const deployment = Deployment.Id.parse(deployment_str) catch return null;
-    const rest = name[0 .. name.len - 9];
-    const sep = std.mem.indexOfScalar(u8, rest, '_') orelse return null;
-    const workspace = rest[0..sep];
-    const pipeline = rest[sep + 1 ..];
-    if (workspace.len == 0 or pipeline.len == 0)
-        return null;
-    return .{
-        .workspace = workspace,
-        .pipeline = pipeline,
-        .deployment = deployment,
-    };
-}
-
 fn collect_proc_tree_metrics(io: std.Io, root_pid: i32, metrics: *TaskMetrics) void {
     var proc_dir = std.Io.Dir.cwd().openDir(io, "/proc", .{ .iterate = true }) catch {
         metrics.pids = 1;
@@ -613,17 +572,10 @@ fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
         defer active_dir.close(io);
         var iter = active_dir.iterate();
         while (iter.next(io) catch null) |entry| {
-            var task_id: ?proto.task.Id = null;
-
             var link_buf: [std.posix.PATH_MAX]u8 = undefined;
-            if (active_dir.readLink(io, entry.name, &link_buf)) |len| {
-                task_id = parse_task_dir_path(link_buf[0..len]);
-            } else |_| {}
+            const link_len = active_dir.readLink(io, entry.name, &link_buf) catch continue;
 
-            if (task_id == null)
-                task_id = parse_active_name(entry.name);
-
-            const tid = task_id orelse continue;
+            const tid = Task.Id.from_task_dir(link_buf[0..link_len]) orelse continue;
 
             const already_added = existing: for (list.items) |existing| {
                 if (std.mem.eql(u8, existing.task.id.workspace, tid.workspace) and
@@ -668,6 +620,9 @@ fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
             }
 
             const metrics = collect_task_metrics(io, tid, sup_pid);
+            if (metrics.pids == 0)
+                continue;
+
             const t = Task{ .id = tid };
             try list.append(gpa, .{
                 .task = try t.dupe(gpa),
@@ -676,96 +631,6 @@ fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
                 .memory_peak_bytes = metrics.memory_peak_bytes,
                 .pids = metrics.pids,
             });
-        }
-    } else |_| {}
-
-    if (std.Io.Dir.cwd().openDir(io, paths.weft_workspace, .{ .iterate = true })) |ws_dir| {
-        defer ws_dir.close(io);
-        var ws_iter = ws_dir.iterate();
-        while (ws_iter.next(io) catch null) |ws_entry| {
-            if (ws_entry.kind != .directory)
-                continue;
-
-            var scratch_path_buf: [256]u8 = undefined;
-            const scratch_path = std.fmt.bufPrint(&scratch_path_buf, "{s}/scratch", .{ws_entry.name}) catch continue;
-            var scratch_dir = ws_dir.openDir(io, scratch_path, .{ .iterate = true }) catch continue;
-            defer scratch_dir.close(io);
-
-            var pipe_iter = scratch_dir.iterate();
-            while (pipe_iter.next(io) catch null) |pipe_entry| {
-                if (pipe_entry.kind != .directory)
-                    continue;
-
-                var pipe_dir = scratch_dir.openDir(io, pipe_entry.name, .{ .iterate = true }) catch continue;
-                defer pipe_dir.close(io);
-
-                var dep_iter = pipe_dir.iterate();
-                while (dep_iter.next(io) catch null) |dep_entry| {
-                    if (dep_entry.kind != .directory)
-                        continue;
-
-                    const dep_id = Deployment.Id.parse(dep_entry.name) catch continue;
-                    const tid = proto.task.Id{
-                        .workspace = ws_entry.name,
-                        .pipeline = pipe_entry.name,
-                        .deployment = dep_id,
-                    };
-
-                    const already_added = existing: for (list.items) |existing| {
-                        if (std.mem.eql(u8, existing.task.id.workspace, tid.workspace) and
-                            std.mem.eql(u8, existing.task.id.pipeline, tid.pipeline) and
-                            existing.task.id.deployment.raw == tid.deployment.raw)
-                            break :existing true;
-                    } else false;
-                    if (already_added)
-                        continue;
-
-                    var task_path_buf: [256]u8 = undefined;
-                    const task_path = std.fmt.bufPrint(&task_path_buf, paths.task, .{ tid.workspace, tid.pipeline, tid.deployment }) catch continue;
-                    var task_dir = std.Io.Dir.cwd().openDir(io, task_path, .{}) catch continue;
-                    defer task_dir.close(io);
-
-                    var status_buf: [128]u8 = undefined;
-                    const status_len = if (task_dir.openFile(io, "status", .{ .mode = .read_only })) |f| blk: {
-                        defer f.close(io);
-                        break :blk f.readPositionalAll(io, &status_buf, 0) catch 0;
-                    } else |_| 0;
-                    if (status_len == 0)
-                        continue;
-
-                    var slice: []const u8 = status_buf[0..status_len];
-                    const status = zoto.deserialize(null, &slice, Task.Status, .{ .header = true }) catch continue;
-                    switch (status) {
-                        .preparing, .running, .harvesting, .frozen => {},
-                        .done, .skipped, .failed, .killed => continue,
-                    }
-
-                    var pid_path_buf: [256]u8 = undefined;
-                    const pid_path = std.fmt.bufPrint(&pid_path_buf, paths.task_run_pid, .{ tid.workspace, tid.pipeline, tid.deployment }) catch null;
-                    var sup_pid: ?i32 = null;
-                    if (pid_path) |pp| {
-                        var pid_buf: [32]u8 = undefined;
-                        if (read_file(io, pp, &pid_buf)) |pid_str| {
-                            const trimmed = std.mem.trim(u8, pid_str, " \t\r\n");
-                            if (std.fmt.parseInt(i32, trimmed, 10)) |p| {
-                                if (!is_pid_alive(p))
-                                    continue;
-                                sup_pid = p;
-                            } else |_| {}
-                        }
-                    }
-
-                    const metrics = collect_task_metrics(io, tid, sup_pid);
-                    const t = Task{ .id = tid };
-                    try list.append(gpa, .{
-                        .task = try t.dupe(gpa),
-                        .cpu_usage_usec = metrics.cpu_usage_usec,
-                        .memory_bytes = metrics.memory_bytes,
-                        .memory_peak_bytes = metrics.memory_peak_bytes,
-                        .pids = metrics.pids,
-                    });
-                }
-            }
         }
     } else |_| {}
 
