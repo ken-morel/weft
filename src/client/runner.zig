@@ -349,7 +349,7 @@ fn poll_item(
 
             if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
                 try deployment.add_failed(gpa, .{
-                    .retries_left = pipeline.max_retries,
+                    .retries_left = pipeline.retries,
                     .remote = remote_name,
                     .pipeline = pipeline.name,
                     .status = .{ .term = code },
@@ -365,7 +365,7 @@ fn poll_item(
 
             if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
                 try deployment.add_failed(gpa, .{
-                    .retries_left = pipeline.max_retries,
+                    .retries_left = pipeline.retries,
                     .remote = remote_name,
                     .pipeline = pipeline.name,
                     .status = .stopped,

@@ -110,43 +110,51 @@ pub fn kill(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.kill.Res) {
     return .{};
 }
 
-fn cmp_deployment_desc(_: void, a: Deployment.Id, b: Deployment.Id) bool {
+fn _cmp_deployment_desc(_: void, a: Deployment.Id, b: Deployment.Id) bool {
     return a.raw > b.raw;
 }
 
-fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) void {
+fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
     const l = log(.task_retention);
     const cwd: std.Io.Dir = .cwd();
 
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
+    const task: Task = .{ .id = spec.task_id };
 
     prune_tasks: {
         const keep_count: usize = if (spec.retention.archive > 0)
             spec.retention.archive - 1
         else
             0;
-        const parent_path = alloc.print(paths.workspace ++ "task/{s}/", .{
-            spec.task_id.workspace,
-            spec.task_id.pipeline,
-        }) catch break :prune_tasks;
+        const task_path = try gpa.print(paths.task, task.id.wpd());
+        defer gpa.free(task_path);
+        const task_dir_path = std.fs.path.dirname(task_path) orelse unreachable;
 
-        var parent_dir = cwd.openDir(io, parent_path, .{ .iterate = true }) catch break :prune_tasks;
+        var parent_dir = cwd.openDir(
+            io,
+            task_dir_path,
+            .{ .iterate = true },
+        ) catch |err|
+            if (err == error.FileNotFound)
+                break :prune_tasks
+            else
+                return err;
         defer parent_dir.close(io);
 
         var ids: std.ArrayList(Deployment.Id) = .empty;
         var iter = parent_dir.iterate();
-        while (iter.next(io) catch null) |entry| {
+        while (try iter.next(io)) |entry| {
             if (entry.kind != .directory)
                 continue;
-            const dep_id = Deployment.Id.parse(entry.name) catch continue;
+            const dep_id = try Deployment.Id.parse(entry.name);
             if (dep_id.raw == spec.task_id.deployment.raw)
                 continue;
-            ids.append(alloc, dep_id) catch break;
+            try ids.append(alloc, dep_id);
         }
 
-        std.mem.sort(Deployment.Id, ids.items, {}, cmp_deployment_desc);
+        std.mem.sort(Deployment.Id, ids.items, {}, _cmp_deployment_desc);
 
         if (ids.items.len > keep_count)
             for (ids.items[keep_count..]) |old_id| {
@@ -155,44 +163,45 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) void {
                     .pipeline = spec.task_id.pipeline,
                     .deployment = old_id,
                 } };
-                if (old_task.is_active(gpa, io) catch false)
+                if (try old_task.is_active(gpa, io))
                     continue;
 
                 const name = old_id.to_string();
-                l.debug("pruning old task dir {s}{s}", .{ parent_path, &name });
+                l.debug("pruning old task dir {s}{s}", .{ task_dir_path, &name });
                 parent_dir.deleteTree(io, &name) catch |err|
-                    l.warn("failed to prune task dir {s}{s}: {any}", .{ parent_path, &name, err });
-                if (alloc.print(paths.active_link, old_task.id.wpd())) |link_path|
-                    cwd.deleteFile(io, link_path) catch {}
-                else |_| {}
+                    l.warn("failed to prune task dir {s}{s}: {any}", .{ task_dir_path, &name, err });
+                const link_path = try gpa.print(paths.active_link, old_task.id.wpd());
+                defer gpa.free(link_path);
+                cwd.deleteFile(io, link_path) catch {};
             };
     }
 
-    const keep_artifacts: usize = if (spec.retention.artifacts > 0)
-        spec.retention.artifacts - 1
-    else
-        0;
-    for (spec.outputs) |output| {
-        const parent_path = alloc.print(paths.workspace ++ "artifact/{s}/", .{
-            spec.task_id.workspace,
-            output,
-        }) catch continue;
+    const keep_artifacts: usize = spec.retention.artifacts -| 1;
 
-        var parent_dir = cwd.openDir(io, parent_path, .{ .iterate = true }) catch continue;
+    for (spec.outputs) |output| {
+        const artifact_path = try gpa.print(paths.artifact, task.id.w_d(output));
+        defer gpa.free(artifact_path);
+        const parent_path = std.fs.path.dirname(artifact_path) orelse unreachable;
+
+        var parent_dir = cwd.openDir(io, parent_path, .{ .iterate = true }) catch |err|
+            if (err != error.FileNotFound)
+                return err
+            else
+                continue;
         defer parent_dir.close(io);
 
         var ids: std.ArrayList(Deployment.Id) = .empty;
         var iter = parent_dir.iterate();
-        while (iter.next(io) catch null) |entry| {
+        while (try iter.next(io)) |entry| {
             if (entry.kind != .directory)
                 continue;
-            const dep_id = Deployment.Id.parse(entry.name) catch continue;
+            const dep_id = try Deployment.Id.parse(entry.name);
             if (dep_id.raw == spec.task_id.deployment.raw)
                 continue;
-            ids.append(alloc, dep_id) catch break;
+            try ids.append(alloc, dep_id);
         }
 
-        std.mem.sort(Deployment.Id, ids.items, {}, cmp_deployment_desc);
+        std.mem.sort(Deployment.Id, ids.items, {}, _cmp_deployment_desc);
 
         if (ids.items.len > keep_artifacts)
             for (ids.items[keep_artifacts..]) |old_id| {
@@ -217,7 +226,7 @@ pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res)
 
     l.info("spawning task {s}/{s}/{d}", .{ task.id.workspace, task.id.pipeline, task.id.deployment });
 
-    apply_retention(gpa, daemon.io, spec);
+    try apply_retention(gpa, daemon.io, spec);
 
     const task_dir = try gpa.print(paths.task, task.id.wpd());
     defer gpa.free(task_dir);

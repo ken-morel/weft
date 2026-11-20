@@ -8,8 +8,8 @@ pub const Keep = struct {
 };
 
 pub const Retention = struct {
-    artifacts: u32 = 2,
-    archive: u32 = 10,
+    artifacts: u32,
+    archive: u32,
 };
 
 pub const Pipeline = struct {
@@ -73,8 +73,8 @@ pub const Pipeline = struct {
     run: ?Run = null,
     tune: Tune = .{},
     timeout: ?u32 = null,
-    max_retries: u16 = 10,
-    restart: bool = true,
+    retries: u16 = 10,
+    restart: bool = false,
     retention: ?Retention = null,
 
     sibling: HandleSibling = .{ .then = .ignore },
@@ -114,14 +114,7 @@ pub const Pipeline = struct {
             true;
     }
 };
-pub const Remote = struct {
-    /// The remote name
-    []const u8,
-    /// The weft host:port or !script, or null if loaded from client config
-    ?[]const u8,
-    /// The remote tags seperated by spaces
-    []const u8,
-};
+pub const Remote = struct { []const u8, ?[]const u8, []const u8 };
 
 pub fn remote_has_group(remote: anytype, group: []const u8) bool {
     const raw_groups = if (@hasField(@TypeOf(remote), "groups"))
@@ -142,8 +135,10 @@ sources: ?[]const struct { []const u8, []const u8 } = null,
 
 pipelines: []const Pipeline = &.{},
 remotes: []const Remote = &.{.{ "local", null, "local" }},
-
-retention: Retention = .{},
+retention: Retention = .{
+    .archive = 10,
+    .artifacts = 2,
+},
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
     return for (self.pipelines) |*pipeline| {

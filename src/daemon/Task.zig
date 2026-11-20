@@ -200,23 +200,22 @@ pub const TaskSiblingsIterator = struct {
     skip_self: bool,
 
     pub fn next(self: *@This(), io: std.Io) !?Task {
-        const ignore_deployment = if (self.skip_self)
-            self.task.id.deployment.to_string()
-        else
-            null;
+        const dir = self.dir orelse return null;
         return if (self.iter) |*iter|
             while (try iter.next(io)) |entry| {
-                if (entry.kind != .directory)
-                    continue
-                else if (ignore_deployment) |i| {
-                    if (std.mem.eql(u8, entry.name, &i))
-                        continue;
-                } else {
-                    const dep_id = Deployment.Id.parse(entry.name) catch continue;
-                    var sibling = self.task.*;
-                    sibling.id.deployment = dep_id;
-                    break sibling;
-                }
+                var link_buf: [std.posix.PATH_MAX]u8 = undefined;
+                const link_len = dir.readLink(io, entry.name, &link_buf) catch continue;
+                const tid = Id.from_task_dir(link_buf[0..link_len]) orelse continue;
+
+                if (!std.mem.eql(u8, tid.workspace, self.task.id.workspace) or
+                    !std.mem.eql(u8, tid.pipeline, self.task.id.pipeline))
+                    continue;
+                if (self.skip_self and tid.deployment.raw == self.task.id.deployment.raw)
+                    continue;
+
+                var sibling = self.task.*;
+                sibling.id.deployment = tid.deployment;
+                break sibling;
             } else null
         else
             null;
@@ -228,11 +227,9 @@ pub const TaskSiblingsIterator = struct {
     }
 };
 
-pub fn siblings(self: *const @This(), gpa: std.mem.Allocator, io: std.Io, skip_self: bool) !TaskSiblingsIterator {
+pub fn siblings(self: *const @This(), io: std.Io, skip_self: bool) !TaskSiblingsIterator {
     const l = log(.task_io);
-    const tasks_run = try gpa.print(paths.tasks_run_parent, self.id.wp());
-    defer gpa.free(tasks_run);
-    const dir = std.Io.Dir.cwd().openDir(io, tasks_run, .{ .iterate = true }) catch |err|
+    const dir = std.Io.Dir.cwd().openDir(io, paths.weft_active, .{ .iterate = true }) catch |err|
         if (err == error.FileNotFound)
             return .{
                 .task = self,
@@ -243,7 +240,7 @@ pub fn siblings(self: *const @This(), gpa: std.mem.Allocator, io: std.Io, skip_s
         else
             return err;
 
-    l.debug("listing sibling deployments in {s}", .{tasks_run}); //debug
+    l.debug("listing sibling deployments in {s}", .{paths.weft_active}); //debug
     return .{
         .task = self,
         .dir = dir,

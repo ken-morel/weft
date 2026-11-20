@@ -91,7 +91,7 @@ fn freeze_dir(io: std.Io, dir: std.Io.Dir, depth: u8) !void {
 }
 
 fn first_active_sibling(gpa: std.mem.Allocator, io: std.Io, task: *const Task) !?Task {
-    var siblings = try task.siblings(gpa, io, false);
+    var siblings = try task.siblings(io, true);
     defer siblings.deinit(io);
     return while (try siblings.next(io)) |sibling| {
         if (try sibling.is_active(gpa, io))
@@ -264,7 +264,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
         switch (spec.sibling.then) {
             .ignore => {},
             .kill => {
-                var siblings = try task.siblings(gpa, io, false);
+                var siblings = try task.siblings(io, true);
                 defer siblings.deinit(io);
                 while (try siblings.next(io)) |sibling|
                     if (try sibling.is_active(gpa, io)) {
