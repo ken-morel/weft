@@ -89,7 +89,7 @@ pub fn run_deployment(
 
         while (try deployment.next_step(term)) |step| {
             const remote = for (remotes) |*remote| {
-                if (std.mem.eql(u8, remote.name, step.group) or remote.has_group(step.group))
+                if (std.mem.eql(u8, remote.name, step.remote))
                     break remote;
             } else return error.InvalidRemote;
 
@@ -117,11 +117,11 @@ pub fn run_deployment(
             defer batch_tasks.deinit(poll_arena.allocator());
 
             for (deployment.running) |step| {
-                if (!std.mem.eql(u8, step.group, remote_name))
+                if (!std.mem.eql(u8, step.remote, remote_name))
                     continue;
                 const step_task = view.get_task(
                     io,
-                    step.group,
+                    step.remote,
                     step.pipeline,
                 ) orelse continue;
                 if (!step_task.is_active())
@@ -295,8 +295,8 @@ fn fail_step(
 ) void {
     depl.lock(io) catch return;
     defer depl.unlock(io);
-    dep.remove_running(gpa, step.group, step.pipeline);
-    view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .failed, .err = msg }) catch {};
+    dep.remove_running(gpa, step.remote, step.pipeline);
+    view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .failed, .err = msg }) catch {};
     dep.save(io, project) catch {};
 }
 
@@ -326,7 +326,7 @@ fn poll_item(
                         break true;
                 } else false;
 
-                for (p.out) |output| {
+                for (p.out orelse &.{p.name}) |output| {
                     try deployment.add_artifact(gpa, .{
                         .remote = remote_name,
                         .pipeline = p.name,
@@ -409,7 +409,7 @@ pub fn run_task(
     const identity = inst.identity;
 
     const remote = for (remotes) |*remote| {
-        if (std.mem.eql(u8, remote.name, step.group))
+        if (std.mem.eql(u8, remote.name, step.remote))
             break remote;
     } else return error.InvalidRemote;
 
@@ -543,14 +543,14 @@ pub fn run_task(
         defer depl.unlock(io);
 
         const still_running = for (deployment.running) |running| {
-            if (std.mem.eql(u8, running.group, step.group) and std.mem.eql(u8, running.pipeline, step.pipeline))
+            if (std.mem.eql(u8, running.remote, step.remote) and std.mem.eql(u8, running.pipeline, step.pipeline))
                 break true;
         } else false;
 
         if (!still_running)
             break;
 
-        const step_task = view.get_task(io, step.group, step.pipeline) orelse break;
+        const step_task = view.get_task(io, step.remote, step.pipeline) orelse break;
         if (!step_task.is_active())
             continue;
 
@@ -570,7 +570,7 @@ pub fn run_task(
             deployment,
             &view,
             remote,
-            step.group,
+            step.remote,
             &poll_arena,
             log_buffer,
             &batch,
@@ -586,7 +586,7 @@ pub fn run_task(
         l.warn("error waiting for artifact transfers: {any}", .{err});
     try view.update(io);
 
-    const final_task = view.get_task(io, step.group, step.pipeline) orelse {
+    const final_task = view.get_task(io, step.remote, step.pipeline) orelse {
         l.err("task {s} was never registered", .{step.pipeline});
         return error.DeploymentFailed;
     };
@@ -684,7 +684,7 @@ pub fn spawn_step(
     const buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(buffer);
 
-    try view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .preparing });
+    try view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .preparing });
 
     spawn_task: {
         const managed = try fetcher.clients.connect_blocking(io, remote.address);
@@ -705,7 +705,7 @@ pub fn spawn_step(
         };
 
         if (res) |_|
-            try view.set_task(io, step.group, step.pipeline, step.mode, .{ .status = .running })
+            try view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .running })
         else |err| {
             fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;

@@ -44,16 +44,16 @@ pub fn run(
         return error.InvalidPipeline;
     };
 
-    const remote_name = if (std.mem.eql(u8, step.group, "_"))
+    const remote_name = if (std.mem.eql(u8, step.remote, "_"))
         for (deployment.artifacts) |art| {
             if (std.mem.eql(u8, art.pipeline, pipeline_name))
                 break art.remote;
         } else for (deployment.running) |run_| {
             if (std.mem.eql(u8, run_.pipeline, pipeline_name))
-                break run_.group;
+                break run_.remote;
         } else if (deployment.config.select_remote_for(pipeline, "local")) |r| r.@"0" else "local"
     else
-        step.group;
+        step.remote;
 
     const remote: *const Remote = for (remotes) |*rem| {
         if (std.mem.eql(u8, rem.name, remote_name))

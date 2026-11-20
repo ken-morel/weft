@@ -69,7 +69,7 @@ pub const Pipeline = struct {
 
     name: []const u8,
     in: []const Input = &.{},
-    out: []const Output = &.{},
+    out: ?[]const Output = null,
     run: ?Run = null,
     tune: Tune = .{},
     timeout: ?u32 = null,
@@ -96,10 +96,13 @@ pub const Pipeline = struct {
         };
     }
     pub fn produces(self: @This(), artifact: []const u8) bool {
-        return for (self.out) |out| {
-            if (std.mem.eql(u8, out, artifact))
-                break true;
-        } else false;
+        return if (self.out) |outs|
+            for (outs) |out| {
+                if (std.mem.eql(u8, out, artifact))
+                    return true;
+            } else false
+        else
+            std.mem.eql(u8, self.name, artifact);
     }
     pub fn matches_remote(self: @This(), remote: anytype) bool {
         return if (self.on) |on_list|
@@ -161,7 +164,7 @@ pub fn select_remote_for(self: @This(), pipeline: *const Pipeline, group: []cons
 
 pub fn get_producer(self: @This(), output: []const u8) ?*const Pipeline {
     return pipeline: for (self.pipelines) |*pipeline| {
-        for (pipeline.out) |out|
+        for (pipeline.out orelse &.{pipeline.name}) |out|
             if (std.mem.eql(u8, out, output))
                 break :pipeline pipeline;
     } else null;

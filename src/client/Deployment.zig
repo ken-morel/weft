@@ -112,14 +112,27 @@ pub fn next_step(self: @This(), term: *Term) !?Step {
         prev_done = false;
         break switch (try self.resolve_step(term, target.pipeline, 0)) {
             .waits, .running => continue :target,
-            .needs => |n| break :target .{
-                .group = target.group,
-                .pipeline = n,
-                .mode = target.mode,
+            .needs => |n| blk: {
+                const l = log(.next_step);
+                const needed = self.config.get_pipeline(n) orelse return error.InvalidPipeline;
+                const r = self.config.find_remote(target.remote) orelse {
+                    l.err("remote '{s}' not found for pipeline '{s}'", .{ target.remote, n });
+                    return error.InvalidRemote;
+                };
+                if (!needed.matches_remote(r)) {
+                    l.err("pipeline '{s}' cannot run on remote '{s}' (does not match .on)", .{ n, target.remote });
+                    return error.InvalidRemote;
+                }
+
+                break :blk .{
+                    .remote = target.remote,
+                    .pipeline = n,
+                    .mode = target.mode,
+                };
             },
             .runnable => {
                 break :target .{
-                    .group = target.group,
+                    .remote = target.remote,
                     .pipeline = target.pipeline,
                     .mode = target.mode,
                 };
@@ -227,7 +240,7 @@ pub fn add_running(self: *@This(), alloc: std.mem.Allocator, step: Step) !void {
 
 pub fn remove_running(self: *@This(), gpa: std.mem.Allocator, remote: []const u8, pipeline: []const u8) void {
     for (self.running, 0..) |s, idx|
-        if (std.mem.eql(u8, s.group, remote) and std.mem.eql(u8, s.pipeline, pipeline)) {
+        if (std.mem.eql(u8, s.remote, remote) and std.mem.eql(u8, s.pipeline, pipeline)) {
             self.running[idx] = self.running[self.running.len - 1];
             self.running = gpa.realloc(self.running, self.running.len - 1) catch self.running[0 .. self.running.len - 1];
             return;

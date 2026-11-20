@@ -467,10 +467,10 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
             .stopped => |sig| log.err("task stopped by signal {s}", .{@tagName(sig)}),
             .unknown => |code| log.err("task terminated with unknown status {d}", .{code}),
         }
-        if (timed_out)
-            return error.TaskFailed;
-        if (term != .exited or term.exited != 0)
+        if (timed_out or term != .exited or term.exited != 0) {
+            try task.write_status(gpa, io, .failed);
             return;
+        }
     }
     try task.write_status(gpa, io, .harvesting);
     log.info("harvesting {d} output(s)", .{spec.outputs.len});

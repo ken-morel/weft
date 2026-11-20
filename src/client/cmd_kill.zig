@@ -42,10 +42,10 @@ pub fn run(
 
     const remotes = try client_remote.resolve_remotes_leaky(gpa, alloc, io, deployment.config, inst, project);
 
-    const remote_name = if (std.mem.eql(u8, step.group, "_"))
+    const remote_name = if (std.mem.eql(u8, step.remote, "_"))
         for (deployment.running) |run_| {
             if (std.mem.eql(u8, run_.pipeline, step.pipeline))
-                break run_.group;
+                break run_.remote;
         } else for (deployment.artifacts) |art| {
             if (std.mem.eql(u8, art.pipeline, step.pipeline))
                 break art.remote;
@@ -54,7 +54,7 @@ pub fn run(
             return error.TaskRemoteNotFound;
         }
     else
-        step.group;
+        step.remote;
     // TODO: Make sure that you error if a remote isn't a group but a remote name
 
     const remote = for (remotes) |r| {

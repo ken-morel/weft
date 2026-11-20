@@ -3,7 +3,7 @@ const std = @import("std");
 const Deployment = @import("Deployment.zig");
 
 mode: []const u8,
-group: []const u8,
+remote: []const u8,
 pipeline: []const u8,
 barrier: bool = false,
 
@@ -20,7 +20,7 @@ pub fn eq(a: @This(), b: @This()) bool {
     if (!std.mem.eql(u8, a.pipeline, b.pipeline))
         return false
     else
-        return std.mem.eql(u8, a.group, b.group);
+        return std.mem.eql(u8, a.remote, b.remote);
 }
 
 pub fn parse_target(name: []const u8, mode: []const u8) !@This() {
@@ -46,7 +46,7 @@ pub fn parse_target(name: []const u8, mode: []const u8) !@This() {
         return error.InvalidStep;
     return .{
         .mode = m,
-        .group = remote,
+        .remote = remote,
         .pipeline = pipeline,
     };
 }
