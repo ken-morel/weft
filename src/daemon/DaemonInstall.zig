@@ -8,7 +8,7 @@ const read_only_user_permissions = domain.read_only_user_permissions;
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 
-pub const Isolate = packed struct(u8) {
+pub const Isolate = bitpack struct(u8) {
     cgroups: bool,
     mount: bool,
     pid: bool,

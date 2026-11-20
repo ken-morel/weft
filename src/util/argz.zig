@@ -34,14 +34,13 @@ pub const Args = struct {
         key_value: struct { []const u8, []const u8 },
         toggle: struct { []const u8, bool },
     };
-    args: []?Arg,
-    pub fn tokenize(alloc: std.mem.Allocator, args: []const []const u8) !@This() {
-        const self_args = try alloc.alloc(?Arg, args.len);
-        @memset(self_args, null);
-        errdefer alloc.free(self_args);
+    items: []?Arg,
+    pub fn tokenize(gpa: std.mem.Allocator, raw_args: []const []const u8) !@This() {
+        var args: std.ArrayList(?Arg) = try .initCapacity(gpa, raw_args.len);
+        defer args.deinit(gpa);
         var skip = false;
         var positional_only = false;
-        for (args, 0..) |raw, i| {
+        for (raw_args, 0..) |raw, i| {
             if (skip) {
                 skip = false;
                 continue;
@@ -51,22 +50,22 @@ pub const Args = struct {
                 continue;
             }
             if (!positional_only and is_flag(raw)) {
-                if (is_neg_flag(raw) or i + 1 >= args.len or is_flag(args[i + 1]))
-                    self_args[i] = .{ .toggle = .{ flag_name(raw), !is_neg_flag(raw) } }
-                else if (i + 1 <= args.len) {
-                    self_args[i] = .{
-                        .key_value = .{ flag_name(args[i]), args[i + 1] },
-                    };
+                if (is_neg_flag(raw) or i + 1 >= raw_args.len or is_flag(raw_args[i + 1]))
+                    try args.append(gpa, .{ .toggle = .{ flag_name(raw), !is_neg_flag(raw) } })
+                else if (i + 1 <= raw_args.len) {
+                    try args.append(gpa, .{
+                        .key_value = .{ flag_name(raw_args[i]), raw_args[i + 1] },
+                    });
                     skip = true;
                 } else return ArgzParseError.ExpectedArgument;
-            } else self_args[i] = .{ .value = raw };
+            } else try args.append(gpa, .{ .value = raw });
         }
         return .{
-            .args = self_args,
+            .items = try args.toOwnedSlice(gpa),
         };
     }
     pub fn take_positional(self: *@This()) ?[]const u8 {
-        return for (self.args) |*arg| {
+        return for (self.items) |*arg| {
             if (arg.*) |val|
                 switch (val) {
                     .value => |s| {
@@ -78,7 +77,7 @@ pub const Args = struct {
         } else null;
     }
     pub fn take_flag(self: *@This(), key: []const u8) ?[]const u8 {
-        return for (self.args) |*arg| {
+        return for (self.items) |*arg| {
             if (arg.*) |a|
                 switch (a) {
                     .key_value => |kv| if (flag_matches(kv.@"0", key)) {
@@ -96,9 +95,12 @@ pub const Args = struct {
                 };
         } else null;
     }
+    pub inline fn take(self: *@This(), key: []const u8) ?[]const u8 {
+        return self.take_flag(key) orelse self.take_positional();
+    }
 
     pub fn deinit(self: @This(), alloc: std.mem.Allocator) void {
-        alloc.free(self.args);
+        alloc.free(self.items);
     }
     fn is_flag(str: []const u8) bool {
         if (str.len == 0 or str[0] != '-')
@@ -199,15 +201,15 @@ fn subcmd(comptime C: type, alloc: std.mem.Allocator, io: ?std.Io, args: []const
     };
 }
 
-fn cmdargs(comptime A: type, alloc: std.mem.Allocator, io: ?std.Io, raw_args: []const []const u8) !A {
+fn cmdargs(comptime A: type, ara: std.mem.Allocator, io: ?std.Io, raw_args: []const []const u8) !A {
     const S = switch (@typeInfo(A)) {
         inline .@"struct" => |S| S,
         inline .void => return {},
         inline else => @compileError("Only structs (and void) are accepted for commands. You may want to wrap " ++ @typeName(A) ++ " in a struct"),
     };
 
-    var args: Args = try .tokenize(alloc, raw_args);
-    defer args.deinit(alloc);
+    var args: Args = try .tokenize(ara, raw_args);
+    defer args.deinit(ara);
 
     var obj: A = undefined;
 
@@ -219,46 +221,46 @@ fn cmdargs(comptime A: type, alloc: std.mem.Allocator, io: ?std.Io, raw_args: []
                     if (Ar.len == 0)
                         continue :fields;
                     var idx: usize = 0;
-                    while (args.take_flag(field_name) orelse args.take_positional()) |val| {
-                        arr[idx] = try parse_value(Ar.child, alloc, io, val);
+                    while (args.take(field_name)) |val| {
+                        arr[idx] = try parse_value(Ar.child, ara, io, val);
                         idx += 1;
                         if (idx >= Ar.len)
                             break :value arr;
                     } else return ArgzParseError.ExpectedArgument;
                 },
+
                 inline .pointer => |Ptr| switch (Ptr.size) {
                     .slice => {
                         if (Ptr.child == u8) {
-                            break :value if (args.take_flag(field_name) orelse args.take_positional()) |val|
+                            break :value if (args.take(field_name)) |val|
                                 val
                             else
                                 field_attrs.defaultValue(field_type) orelse
                                     return ArgzParseError.ExpectedArgument;
                         }
                         var list: std.ArrayList(Ptr.child) = .empty;
-                        defer list.deinit(alloc);
-                        while (args.take_flag(field_name) orelse args.take_positional()) |val| {
+                        defer list.deinit(ara);
+                        while (args.take(field_name)) |val| {
                             try list.append(
-                                alloc,
-                                try parse_value(Ptr.child, alloc, io, val),
+                                ara,
+                                try parse_value(Ptr.child, ara, io, val),
                             );
                         }
-                        break :value try list.toOwnedSlice(alloc);
+                        break :value try list.toOwnedSlice(ara);
                     },
                     else => @compileError("Argz only supports slice pointers"),
                 },
-                else => {
-                    break :value if (args.take_flag(field_name) orelse args.take_positional()) |val|
-                        try parse_value(
-                            field_type,
-                            alloc,
-                            io,
-                            val,
-                        )
-                    else
-                        field_attrs.defaultValue(field_type) orelse
-                            return ArgzParseError.ExpectedArgument;
-                },
+
+                inline else => break :value if (args.take(field_name)) |val|
+                    try parse_value(
+                        field_type,
+                        ara,
+                        io,
+                        val,
+                    )
+                else
+                    field_attrs.defaultValue(field_type) orelse
+                        return ArgzParseError.ExpectedArgument,
             }
         };
     return obj;
@@ -298,7 +300,7 @@ pub fn parse_value(comptime T: type, alloc: std.mem.Allocator, io: ?std.Io, val:
                 break :a @fromBackingInt(@intCast(field.value));
         } else ArgzParseError.InvalidArgument,
         inline .@"union" => |U| inline for (U.fields) |field| {
-            if (std.mem.startsWith(u8, val, field.name ++ ":"))
+            if (std.mem.startsWith(u8, val, field.name ++ "="))
                 break @unionInit(
                     T,
                     field.name,

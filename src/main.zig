@@ -10,6 +10,7 @@ const cmd_artifact = @import("client/cmd_artifact.zig");
 const cmd_cache = @import("client/cmd_cache.zig");
 const cmd_check = @import("client/cmd_check.zig");
 const cmd_env = @import("client/cmd_env.zig");
+const cmd_init = @import("client/cmd_init.zig");
 const cmd_kill = @import("client/cmd_kill.zig");
 const cmd_logs = @import("client/cmd_logs.zig");
 const cmd_monitor = @import("client/cmd_monitor.zig");
@@ -116,6 +117,9 @@ const Argz = union(enum) {
 
     version: struct {
         pub const doc = "Display information about the weft build";
+    },
+    init: struct {
+        pub const doc = "Initialize a new weft project in the current directory";
     },
     check: struct {
         pub const doc = "Validate weft.zon";
@@ -407,6 +411,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 return supervisor.spawner(gpa, io, task, isolate);
             },
         },
+        .init => try cmd_init.run(gpa, io),
         .check => {
             const project_dir = try std.Io.Dir.cwd().openDir(io, ".", .{ .iterate = true });
             defer project_dir.close(io);
@@ -465,7 +470,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 }
             else
                 try project.latest_deployment_id(io) orelse {
-                    log.err("no deployments found in .weft", .{});
+                    log.err("no deployments found in weft/do", .{});
                     return error.NoDeployments;
                 };
 

@@ -176,7 +176,7 @@ pub fn _push(gpa: std.mem.Allocator, io: std.Io, conn: *Connection, source: []co
 
     const total_files: u64 = total_files: {
         var count_walker = try dir.walk(gpa);
-        defer count_walker.deinit();
+        defer count_walker.deinit(io);
         var count: u32 = 0;
         while (try count_walker.next(io)) |entry|
             if (entry.kind == .file) {

@@ -1,7 +1,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 
-pub const Ms = packed struct(u32) {
+pub const Ms = bitpack struct(u32) {
     read_only: bool = false,
     no_suid: bool = false,
     no_dev: bool = false,
@@ -22,7 +22,7 @@ pub const MOVE_MOUNT = struct {
     pub const F_EMPTY_PATH: u32 = 0x04;
 };
 
-pub const MountAttrFlag = packed struct(u64) {
+pub const MountAttrFlag = bitpack struct(u64) {
     read_only: bool = false,
     no_suid: bool = false,
     no_dev: bool = false,

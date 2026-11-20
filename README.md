@@ -74,6 +74,11 @@ The compiled binary is output to `zig-out/bin/weft`.
 - `weft daemon register <key>`  
   Adds a 64-character hex Ed25519 public key to `/etc/weft/keys` and notifies the running local daemon over IPC to reload its authorized keys without restarting.
 
+#### `weft init`
+
+- `weft init`  
+  Initializes a new Weft project in the current directory by creating `weft/weft.zon` (with `.workspace` set to the current directory's basename, a `local` remote, and empty pipelines) and `weft/.gitignore` (ignoring `do` and `cache`).
+
 #### `weft do`
 
 - `weft do {[mode:][remote.]pipeline ...}`  
@@ -85,8 +90,8 @@ The compiled binary is output to `zig-out/bin/weft`.
 #### `weft resume`
 
 - `weft resume [deployment]`  
-  Resumes an interrupted or failed deployment using its recorded state in `.weft/`, skipping steps whose outputs are already present and retrying incomplete or failed steps.
-  - `deployment` accepts either a full deployment ID or a unique trailing character suffix, and defaults to the latest deployment in `.weft/`.
+  Resumes an interrupted or failed deployment using its recorded state in `weft/do/`, skipping steps whose outputs are already present and retrying incomplete or failed steps.
+  - `deployment` accepts either a full deployment ID or a unique trailing character suffix, and defaults to the latest deployment in `weft/do/`.
   - Supports the same plain-text piped output format as `weft do`.
 
 #### `weft env`
@@ -112,7 +117,7 @@ The compiled binary is output to `zig-out/bin/weft`.
 #### `weft artifact`
 
 - `weft artifact pull <name> [remote] [deployment]`  
-  Downloads artifact `<name>` from `<remote>` (defaults to `local`) in `<deployment>` (defaults to latest) into the local `.weft/<deployment>/artifacts/<name>` directory and records `local` as holding the artifact.
+  Downloads artifact `<name>` from `<remote>` (defaults to `local`) in `<deployment>` (defaults to latest) into the local `weft/do/<deployment>/<name>` directory and records `local` as holding the artifact.
 
 - `weft artifact push <name> [remote] [deployment]`  
   Uploads artifact or source `<name>` from the local deployment directory to `<remote>` (defaults to `local`) in `<deployment>` (defaults to latest) and records `<remote>` as holding the artifact.
@@ -125,21 +130,21 @@ The compiled binary is output to `zig-out/bin/weft`.
 
 #### `weft cache`
 
-`pull` transfers workspace caches strictly from a remote to `.weft/caches/<remote>/<cache>` on the local machine. `push` transfers strictly from `.weft/caches/` on the local machine to a remote.
+`pull` transfers workspace caches strictly from a remote to `weft/cache/<remote>/<cache>` on the local machine. `push` transfers strictly from `weft/cache/` on the local machine to a remote.
 
 - `weft cache pull {remote[.cache]}`  
   Pulls a specific cache when given `remote.cache`, or pulls all caches declared in `keep` across all pipelines in `weft/weft.zon` when given `remote`.
 
 - `weft cache push {src_remote[.src_cache]} [dst_remote[.dst_cache]]`  
   Pushes one or more locally stored caches to a remote.
-  - Passing `a.foo` pushes `.weft/caches/a/foo` to remote `a` as `foo`.
-  - Passing `a` pushes all caches currently present under `.weft/caches/a/` to remote `a`.
-  - Passing `a.foo b.foo` or `a.foo b` pushes `.weft/caches/a/foo` to remote `b` as `foo`.
-  - Passing `a.foo b.bar` pushes `.weft/caches/a/foo` to remote `b` under the renamed cache `bar`.
-  - Passing `a b` pushes all caches currently present under `.weft/caches/a/` to remote `b` under their respective names.
+  - Passing `a.foo` pushes `weft/cache/a/foo` to remote `a` as `foo`.
+  - Passing `a` pushes all caches currently present under `weft/cache/a/` to remote `a`.
+  - Passing `a.foo b.foo` or `a.foo b` pushes `weft/cache/a/foo` to remote `b` as `foo`.
+  - Passing `a.foo b.bar` pushes `weft/cache/a/foo` to remote `b` under the renamed cache `bar`.
+  - Passing `a b` pushes all caches currently present under `weft/cache/a/` to remote `b` under their respective names.
 
 - `weft cache path {remote[.cache]}`  
-  Prints the local filesystem path `.weft/caches/<remote>[/<cache>]`.
+  Prints the local filesystem path `weft/cache/<remote>[/<cache>]`.
 
 #### `weft nix`
 

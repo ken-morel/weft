@@ -35,6 +35,7 @@ pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Cli
     errdefer group.cancel(io);
 
     try spawn(io, &group, download_nar, .{ gpa, io, client, narinfo, false });
+    l.debug("downloading {s}.nar.zst for {s}", .{ narinfo.file_hash orelse "??", pkg_id });
 
     if (narinfo.has_deps()) {
         var deps = narinfo.deps();
@@ -47,6 +48,7 @@ pub fn install_package(gpa: std.mem.Allocator, io: std.Io, client: *std.http.Cli
     }
 
     try group.await(io);
+    l.debug("downloaded {s}.nar.zst for {s}. Installing to {s}", .{ narinfo.file_hash orelse "??", pkg_id, narinfo.store_path });
 
     install_nar(gpa, io, narinfo) catch |err| {
         l.warn("failed to unpack nar for {s} ({s}), refetching...", .{ pkg_id, @errorName(err) });

@@ -31,7 +31,7 @@ pub fn spawn(
         }
     else
         try project.latest_deployment_id(io) orelse {
-            l.err("no deployments found in .weft", .{});
+            l.err("no deployments found in weft/do", .{});
             return error.NoDeployments;
         };
 
