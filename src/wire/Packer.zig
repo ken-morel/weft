@@ -33,7 +33,7 @@ pub fn unpacker(dir: std.Io.Dir) @This() {
 
 pub fn deinit(self: *@This(), io: std.Io) void {
     if (self.walker) |*walker|
-        walker.deinit();
+        walker.deinit(io);
     if (self.handle) |handle|
         handle.close(io);
 }

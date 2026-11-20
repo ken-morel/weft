@@ -41,7 +41,7 @@ pub fn create_sources(gpa: std.mem.Allocator, io: std.Io, _: *Term, inst: Client
         var walk_root = try project.dir.openDir(io, source.@"1", .{ .iterate = true });
         defer walk_root.close(io);
         var walker: Walker = try .init(&arena, io, walk_root);
-        defer walker.deinit(&arena);
+        defer walker.deinit(io, &arena);
 
         while (try walker.next(&arena, io)) |entry|
             switch (entry) {

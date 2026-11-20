@@ -1,6 +1,7 @@
 .zig-cache
 zig-out
 zig-pkg
-.weft
+weft/do
+weft/cache
 .ckb
 PLAN.md

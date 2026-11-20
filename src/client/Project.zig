@@ -25,7 +25,7 @@ pub fn resolve_deployment_id(self: @This(), io: std.Io, spec: ?[]const u8) !Depl
         }
     else
         try self.latest_deployment_id(io) orelse {
-            l.err("no deployments found in .weft", .{});
+            l.err("no deployments found", .{});
             return error.NoDeployments;
         };
 }
@@ -53,17 +53,17 @@ pub fn get_config_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io) !Weft
     };
 }
 
-pub inline fn open_weft_dir(self: @This(), io: std.Io) !std.Io.Dir {
-    return self.dir.createDirPathOpen(io, ".weft", .{ .open_options = .{ .iterate = true } });
+pub inline fn open_deployments_dir(self: @This(), io: std.Io) !std.Io.Dir {
+    return self.dir.createDirPathOpen(io, "weft/do", .{ .open_options = .{ .iterate = true } });
 }
 pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: Deployment.Id) !std.Io.Dir {
-    const weft_dir = try self.open_weft_dir(io);
-    defer weft_dir.close(io);
+    const deployments_dir = try self.open_deployments_dir(io);
+    defer deployments_dir.close(io);
 
     const deployment_name = deployment.to_string();
 
     //TODO: Log error here
-    return weft_dir.createDirPathOpen(
+    return deployments_dir.createDirPathOpen(
         io,
         &deployment_name,
         .{ .open_options = .{ .iterate = true } },
@@ -79,7 +79,7 @@ pub fn artifact_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, depl
 
     return try std.fs.path.join(
         gpa,
-        &.{ deployment_dir_path, "artifacts", pipeline },
+        &.{ deployment_dir_path, pipeline },
     );
 }
 pub fn cache_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, remote: []const u8, cache: ?[]const u8) ![:0]const u8 {
@@ -88,27 +88,27 @@ pub fn cache_dir_path(self: @This(), gpa: std.mem.Allocator, io: std.Io, remote:
 
     return try std.fs.path.joinZ(gpa, if (cache) |c| &.{
         project_path,
-        ".weft",
-        "caches",
+        "weft",
+        "cache",
         remote,
         c,
     } else &.{
         project_path,
-        ".weft",
-        "caches",
+        "weft",
+        "cache",
         remote,
     });
 }
 
 pub fn latest_deployment_id(self: @This(), io: std.Io) !?Deployment.Id {
-    var weft_dir = self.open_weft_dir(io) catch |err|
+    var deployments_dir = self.open_deployments_dir(io) catch |err|
         if (err == error.FileNotFound)
             return null
         else
             return err;
-    defer weft_dir.close(io);
+    defer deployments_dir.close(io);
 
-    var iter = weft_dir.iterate();
+    var iter = deployments_dir.iterate();
     var latest: ?Deployment.Id = null;
     while (try iter.next(io)) |entry| {
         if (entry.kind != .directory)
@@ -130,10 +130,10 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
     if (query.len < 2)
         return error.QueryTooShort;
 
-    var weft_dir = try self.open_weft_dir(io);
-    defer weft_dir.close(io);
+    var deployments_dir = try self.open_deployments_dir(io);
+    defer deployments_dir.close(io);
 
-    var iter = weft_dir.iterate();
+    var iter = deployments_dir.iterate();
     var match: ?Deployment.Id = null;
     var count: usize = 0;
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+
 const Glob = @import("Glob.zig");
 
 const max_gitignore_size = 1 << 10;
@@ -10,7 +11,8 @@ const ignore_files = [_][]const u8{
 };
 
 const default_ignore = [_]Glob{
-    .parse(".weft", null),
+    .parse("weft/do", null),
+    .parse("weft/cache", null),
     .parse(".git", null),
     .parse(".jj", null),
 };
@@ -32,9 +34,9 @@ pub fn init(
     try self.add_ignores(arena.allocator(), io, self.root, ".");
     return self;
 }
-pub fn deinit(self: *@This(), arena: *std.heap.ArenaAllocator) void {
+pub fn deinit(self: *@This(), io: std.Io, arena: *std.heap.ArenaAllocator) void {
     self.ignore_list.deinit(arena.allocator());
-    self.walker.deinit();
+    self.walker.deinit(io);
 }
 
 const Entry = union(enum) {

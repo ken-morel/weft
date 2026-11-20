@@ -65,7 +65,7 @@ fn get_config_caches(alloc: std.mem.Allocator, config: Weft) ![]const []const u8
 }
 
 fn local_cache_exists(io: std.Io, project: Project, alloc: std.mem.Allocator, remote: []const u8, cache: []const u8) !bool {
-    const rel_path = try std.fs.path.join(alloc, &.{ ".weft", "cache", remote, cache });
+    const rel_path = try std.fs.path.join(alloc, &.{ "weft", "cache", remote, cache });
     defer alloc.free(rel_path);
 
     var dir = project.dir.openDir(io, rel_path, .{}) catch |err| {
@@ -82,7 +82,7 @@ fn get_local_caches(alloc: std.mem.Allocator, io: std.Io, project: Project, remo
     var list: std.ArrayList([]const u8) = .empty;
     defer list.deinit(alloc);
 
-    const rel_path = try std.fs.path.join(alloc, &.{ ".weft", "cache", remote });
+    const rel_path = try std.fs.path.join(alloc, &.{ "weft", "cache", remote });
     defer alloc.free(rel_path);
 
     var dir = project.dir.openDir(io, rel_path, .{ .iterate = true }) catch |err| {
