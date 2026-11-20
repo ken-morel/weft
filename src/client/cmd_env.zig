@@ -117,9 +117,9 @@ fn ensure_packages(
             offset = logs.end_offset;
             try view.set_task(io, "local", name, mode, .{ .log_offset = logs.end_offset });
             break :logs logs.more;
-        } else false;
+        } else 0;
 
-        if (more)
+        if (more > 0)
             continue;
 
         if (item.status) |s| {

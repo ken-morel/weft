@@ -1,0 +1,50 @@
+.{
+    .workspace = "weft",
+    .remotes = .{
+        .{ "local", null, "local" },
+    },
+    .sources = .{
+        .{ "site", "site/" },
+    },
+    .environments = .{
+        .{
+            .name = "bun",
+            .pkgs = .{
+                "qkydg77xf2s395md9fq0a6djjpq7fzh4-bun-1.4.2",
+            },
+        },
+    },
+    .pipelines = .{
+        .{
+            .name = "site-fetch",
+            .in = .{"-site"},
+            .run = .{ .file = "site-build" },
+            .keep = .{
+                .{ "web-modules", "node_modules/" },
+            },
+            .env = .{ .uses = .{"bun"} },
+        },
+        .{
+            .name = "site-build",
+            .in = .{"-site"},
+            .keep = .{
+                .{ "web-modules", "node_modules/" },
+            },
+            .tune = .{
+                .net = .{ .private = true },
+            },
+            .env = .{ .uses = .{"bun"} },
+        },
+        .{
+            .name = "site-run",
+            .in = .{"site-build"},
+            .sibling = .{ .then = .kill },
+            .env = .{
+                .uses = .{"bun"},
+                .vars = .{
+                    .{ "PORT", "6080" },
+                },
+            },
+        },
+    },
+}

@@ -124,8 +124,8 @@ pub fn run(
                 try stdout.writeStreamingAll(io, logs.data);
                 offset = logs.end_offset;
                 break :logs logs.more;
-            } else false;
-            if (more)
+            } else 0;
+            if (more > 0)
                 continue;
             if (status) |s| switch (s) {
                 .done, .failed, .killed, .skipped, .frozen => break,

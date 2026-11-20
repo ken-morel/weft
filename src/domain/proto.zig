@@ -145,7 +145,7 @@ pub const task = struct {
         pub const Logs = struct {
             data: []const u8,
             end_offset: u64,
-            more: bool,
+            more: usize,
         };
         pub const TaskUsage = struct {
             cpu_usec: u64 = 0,

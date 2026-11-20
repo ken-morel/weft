@@ -64,7 +64,7 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(pr
                 break :read_logs .{
                     .data = &.{},
                     .end_offset = size,
-                    .more = false,
+                    .more = 0,
                 };
 
             const to_read = @min(size - offset, 3 << 10);
@@ -75,7 +75,7 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(pr
             break :read_logs .{
                 .data = buff,
                 .end_offset = end_offset,
-                .more = end_offset < size,
+                .more = size -| end_offset,
             };
         } else null;
 

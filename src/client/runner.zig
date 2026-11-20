@@ -254,8 +254,8 @@ fn poll_batch(
             const more = if (poll_res.logs) |logs|
                 logs.more
             else
-                false;
-            if (more)
+                0;
+            if (more > 0)
                 try next_pending.append(alloc, .{
                     .task = poll_res.task,
                     .logs_offset = next_offset,
