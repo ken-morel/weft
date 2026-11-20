@@ -210,7 +210,7 @@ pub const TaskSiblingsIterator = struct {
                 if (!std.mem.eql(u8, tid.workspace, self.task.id.workspace) or
                     !std.mem.eql(u8, tid.pipeline, self.task.id.pipeline))
                     continue;
-                if (self.skip_self and tid.deployment.raw == self.task.id.deployment.raw)
+                if (self.skip_self and tid.deployment.eq(self.task.id.deployment))
                     continue;
 
                 var sibling = self.task.*;

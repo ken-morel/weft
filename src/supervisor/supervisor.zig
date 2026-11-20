@@ -889,7 +889,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         try env_map.put("IN", if (isolate.mount) "/in" else try alloc.print("{s}in", .{rootfs_path}));
         try env_map.put("OUT", if (isolate.mount) "/out" else try alloc.print("{s}out", .{rootfs_path}));
         try env_map.put("WEFT_PIPELINE", spec.task_id.pipeline);
-        try env_map.put("WEFT_DEPLOYMENT", try spec.task_id.deployment.to_string_alloc(alloc));
+        try env_map.put("WEFT_DEPLOYMENT", try alloc.dupe(u8, &spec.task_id.deployment.to_string()));
 
         const base_path = if (isolate.mount)
             "/bin"

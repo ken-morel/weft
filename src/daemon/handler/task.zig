@@ -110,8 +110,8 @@ pub fn kill(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.kill.Res) {
     return .{};
 }
 
-fn _cmp_deployment_desc(_: void, a: Deployment.Id, b: Deployment.Id) bool {
-    return a.raw > b.raw;
+fn _cmp_deployment_gt(_: void, a: Deployment.Id, b: Deployment.Id) bool {
+    return a.gt(b);
 }
 
 fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
@@ -149,12 +149,12 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
             if (entry.kind != .directory)
                 continue;
             const dep_id = try Deployment.Id.parse(entry.name);
-            if (dep_id.raw == spec.task_id.deployment.raw)
+            if (dep_id.eq(spec.task_id.deployment))
                 continue;
             try ids.append(alloc, dep_id);
         }
 
-        std.mem.sort(Deployment.Id, ids.items, {}, _cmp_deployment_desc);
+        std.mem.sort(Deployment.Id, ids.items, {}, _cmp_deployment_gt);
 
         if (ids.items.len > keep_count)
             for (ids.items[keep_count..]) |old_id| {
@@ -196,12 +196,12 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
             if (entry.kind != .directory)
                 continue;
             const dep_id = try Deployment.Id.parse(entry.name);
-            if (dep_id.raw == spec.task_id.deployment.raw)
+            if (dep_id.eq(spec.task_id.deployment))
                 continue;
             try ids.append(alloc, dep_id);
         }
 
-        std.mem.sort(Deployment.Id, ids.items, {}, _cmp_deployment_desc);
+        std.mem.sort(Deployment.Id, ids.items, {}, _cmp_deployment_gt);
 
         if (ids.items.len > keep_artifacts)
             for (ids.items[keep_artifacts..]) |old_id| {

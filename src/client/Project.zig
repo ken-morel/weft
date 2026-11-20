@@ -62,8 +62,7 @@ pub fn open_deployment_dir(self: @This(), io: std.Io, deployment: Deployment.Id)
 
     const deployment_name = deployment.to_string();
 
-    //TODO: Log error here
-    return deployments_dir.createDirPathOpen(
+    return try deployments_dir.createDirPathOpen(
         io,
         &deployment_name,
         .{ .open_options = .{ .iterate = true } },
@@ -115,7 +114,7 @@ pub fn latest_deployment_id(self: @This(), io: std.Io) !?Deployment.Id {
             continue;
         const id = Deployment.Id.parse(entry.name) catch continue;
         if (latest) |curr| {
-            if (id.raw > curr.raw)
+            if (id.gt(curr))
                 latest = id;
         } else latest = id;
     }
@@ -141,7 +140,7 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
         if (entry.kind != .directory)
             continue;
         const id = Deployment.Id.parse(entry.name) catch continue;
-        if (std.mem.endsWith(u8, entry.name, query) or std.mem.startsWith(u8, entry.name, query)) {
+        if (std.mem.endsWith(u8, entry.name, query)) {
             match = id;
             count += 1;
         }
@@ -153,6 +152,24 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
         return error.AmbiguousDeploymentId;
 
     return match orelse unreachable;
+}
+pub fn unique_run_id_chars(self: @This(), io: std.Io, dep: Deployment.Id) u8 {
+    var deployments_dir = try self.open_deployments_dir(io);
+    defer deployments_dir.close(io);
+
+    const dep_str = dep.to_string();
+    var pos = 6;
+
+    var iter = deployments_dir.iterate();
+
+    while (try iter.next(io)) |entry| {
+        if (entry.kind != .directory or std.mem.eql(entry.name, &dep_str))
+            continue;
+        _ = Deployment.Id.parse(entry.name) catch continue;
+        while (std.mem.endsWith(u8, entry.name, dep_str[pos..]))
+            pos -= 1;
+    }
+    return dep_str.len - pos;
 }
 
 pub fn load_deployment_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {

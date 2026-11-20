@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const Deployment = @import("../client/Deployment.zig");
+const Task = @import("../daemon/Task.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
-const Task = @import("../daemon/Task.zig");
 const zoto = @import("zoto.zig");
 
 prev_ticks: ?CpuTicks = null,
@@ -580,7 +580,7 @@ fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
             const already_added = existing: for (list.items) |existing| {
                 if (std.mem.eql(u8, existing.task.id.workspace, tid.workspace) and
                     std.mem.eql(u8, existing.task.id.pipeline, tid.pipeline) and
-                    existing.task.id.deployment.raw == tid.deployment.raw)
+                    existing.task.id.deployment.eq(tid.deployment))
                     break :existing true;
             } else false;
             if (already_added)

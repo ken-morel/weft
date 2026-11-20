@@ -3,9 +3,51 @@ const log = std.log.scoped;
 
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
-pub const Id = @import("DeploymentId.zig");
+const crockford32 = @import("../util/crockford32.zig");
 const Project = @import("Project.zig");
 pub const Step = @import("Step.zig");
+
+pub const Id = bitpack struct(u40) {
+    raw: u40,
+    const epoch_ms: u64 = 1_783_974_723_000;
+
+    pub fn now(io: std.Io) !@This() {
+        const wall_ms = @as(u64, @intCast(std.Io.Clock.now(.real, io).toMilliseconds()));
+        const ms_since_epoch = wall_ms -| epoch_ms;
+        const ticks: u40 = @truncate(ms_since_epoch / 250);
+        var salt: [2]u8 = undefined;
+        try io.randomSecure(&salt);
+        const salt_u10: u40 = std.mem.readInt(u16, &salt, .little) & 0x3FF;
+
+        return @fromBackingInt((ticks << 10) | salt_u10);
+    }
+
+    pub fn to_string(self: @This()) [8]u8 {
+        return crockford32.encode(u40, @backingInt(self));
+    }
+
+    pub fn parse(str: []const u8) !@This() {
+        return @fromBackingInt(try crockford32.decode(u40, str));
+    }
+
+    pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+        try writer.writeAll(&self.to_string());
+    }
+
+    pub fn formatNumber(self: @This(), writer: *std.Io.Writer, num: std.fmt.Number) !void {
+        _ = num;
+        return self.format(writer);
+    }
+    pub inline fn gt(a: @This(), b: @This()) bool {
+        return @backingInt(a) > @backingInt(b);
+    }
+    pub inline fn lt(a: @This(), b: @This()) bool {
+        return @backingInt(a) < @backingInt(b);
+    }
+    pub inline fn eq(a: @This(), b: @This()) bool {
+        return @backingInt(a) == @backingInt(b);
+    }
+};
 
 id: Id,
 
