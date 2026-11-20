@@ -64,15 +64,16 @@ pub fn push_dir(
 
     var status: transfer.Status = .init;
 
-    var group: std.Io.Group = .init;
-    try spawn(io, &group, transfer.push, .{ gpa, io, conn, dir_path, true, &status });
-
     {
+        var group: std.Io.Group = .init;
+        try spawn(io, &group, transfer.push, .{ gpa, io, conn, dir_path, true, &status });
+
         errdefer group.cancel(io);
-        while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
+        while (!status.done) : (try io.sleep(.fromMilliseconds(200), .awake))
             try view.set_transfer(io, artifact, remote_name, status.compressed, .pushing, progress(&status), status.bytes_sent, status.speed);
+
+        try group.await(io);
     }
-    try group.await(io);
     if (status.err) |err|
         return err;
 

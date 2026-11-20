@@ -19,6 +19,8 @@ pub const Remote = struct {
 
 pub const Config = struct {
     remotes: []const Remote = &.{},
+    compress: bool = true,
+    decompress: bool = true,
 };
 
 config_dir: std.Io.Dir,

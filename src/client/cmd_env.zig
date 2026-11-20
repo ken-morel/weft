@@ -284,9 +284,14 @@ pub fn run(
     else
         &.{shell};
 
+    const argv_env = try gpa.alloc([]const u8, argv.len + 1);
+    defer gpa.free(argv_env);
+    @memcpy(argv_env[1..], argv);
+    argv_env[0] = "env";
+
     l.info("running command", .{});
     var child = try std.process.spawn(io, .{
-        .argv = argv,
+        .argv = argv_env,
         .stdin = .inherit,
         .stdout = .inherit,
         .stderr = .inherit,

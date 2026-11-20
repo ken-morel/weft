@@ -55,7 +55,6 @@ pub fn run(
 
     var depl_buf = dep_id.to_string();
     var view: View = .init(gpa, term, &depl_buf);
-    view.auto_update = true;
     defer view.deinit();
 
     const status: View.TransferItem.Status = if (direction == .pull) .pulling else .pushing;

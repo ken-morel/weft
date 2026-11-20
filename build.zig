@@ -21,11 +21,13 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const build_fast_but_big = optimize == .debug;
+
     const exe = b.addExecutable(.{
         .name = "weft",
         .root_module = weft,
-        .use_lld = true,
-        .use_llvm = true,
+        .use_lld = !build_fast_but_big,
+        .use_llvm = !build_fast_but_big,
         .linkage = .static,
     });
 
