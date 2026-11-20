@@ -55,6 +55,8 @@ pub fn run_deployment(
         .term = term,
         .view = &view,
         .clients = clients,
+        .compress = inst.config.compress,
+        .decompress = inst.config.decompress,
     };
     defer fetcher.deinit(io);
 
@@ -482,6 +484,8 @@ pub fn run_task(
         .term = term,
         .view = &view,
         .clients = clients,
+        .compress = inst.config.compress,
+        .decompress = inst.config.decompress,
     };
     defer fetcher.deinit(io);
 

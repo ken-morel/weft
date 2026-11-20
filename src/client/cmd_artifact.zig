@@ -79,9 +79,9 @@ pub fn run(
                 l.err("artifact '{s}' cannot be read: {any}", .{ name, err });
             return err;
         };
-        try transfer.push_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name);
+        try transfer.push_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name, inst.config.compress);
     } else {
-        transfer.pull_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name) catch |err| {
+        transfer.pull_dir(gpa, io, &client.conn, task_id, artifact_path, &view, remote_name, name, inst.config.decompress) catch |err| {
             if (err == error.ArtifactNotFound)
                 l.err("artifact '{s}' not found on remote '{s}'", .{ name, remote_name });
             return err;

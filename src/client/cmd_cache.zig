@@ -180,6 +180,7 @@ pub fn pull(
             &view,
             target.remote,
             cache_name,
+            inst.config.decompress,
         ) catch |err| {
             if (err == error.FileNotFound or err == error.ArtifactNotFound) {
                 l.err("cache '{s}' not found on remote '{s}'", .{ cache_name, target.remote });
@@ -270,6 +271,7 @@ pub fn push(
             &view,
             dst.remote,
             dst_cache_name,
+            inst.config.compress,
         );
 
         try view.set_transfer(io, dst_cache_name, dst.remote, null, .ready, 1.0, null, null);
@@ -306,6 +308,7 @@ pub fn push(
                 &view,
                 dst.remote,
                 c_name,
+                inst.config.compress,
             );
 
             try view.set_transfer(io, c_name, dst.remote, null, .ready, 1.0, null, null);

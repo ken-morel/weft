@@ -16,6 +16,7 @@ pub fn pull_dir(
     view: *View,
     remote_name: []const u8,
     artifact: []const u8,
+    decompress: bool,
 ) !void {
     const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(conn_buffer);
@@ -31,7 +32,7 @@ pub fn pull_dir(
 
     var group: std.Io.Group = .init;
 
-    try spawn(io, &group, transfer.pull, .{ gpa, io, conn, dir_path, true, &status });
+    try spawn(io, &group, transfer.pull, .{ gpa, io, conn, dir_path, decompress, &status });
 
     {
         errdefer group.cancel(io);
@@ -55,6 +56,7 @@ pub fn push_dir(
     view: *View,
     remote_name: []const u8,
     artifact: []const u8,
+    compress: bool,
 ) !void {
     const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(conn_buffer);
@@ -66,7 +68,7 @@ pub fn push_dir(
 
     {
         var group: std.Io.Group = .init;
-        try spawn(io, &group, transfer.push, .{ gpa, io, conn, dir_path, true, &status });
+        try spawn(io, &group, transfer.push, .{ gpa, io, conn, dir_path, compress, &status });
 
         errdefer group.cancel(io);
         while (!status.done) : (try io.sleep(.fromMilliseconds(200), .awake))
@@ -90,6 +92,7 @@ pub fn pull_cache(
     view: *View,
     remote_name: []const u8,
     cache_name: []const u8,
+    decompress: bool,
 ) !void {
     const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(conn_buffer);
@@ -104,12 +107,12 @@ pub fn pull_cache(
     var status: transfer.Status = .init;
     var group: std.Io.Group = .init;
 
-    try spawn(io, &group, transfer.pull, .{ gpa, io, conn, dir_path, true, &status });
+    try spawn(io, &group, transfer.pull, .{ gpa, io, conn, dir_path, decompress, &status });
 
     {
         errdefer group.cancel(io);
 
-        while (!status.done) : (try io.sleep(.fromMilliseconds(100), .awake))
+        while (!status.done) : (try io.sleep(.fromMilliseconds(200), .awake))
             try view.set_transfer(
                 io,
                 cache_name,
@@ -138,6 +141,7 @@ pub fn push_cache(
     view: *View,
     remote_name: []const u8,
     cache_name: []const u8,
+    compress: bool,
 ) !void {
     const conn_buffer = try gpa.alloc(u8, Connection.max_packet_size);
     defer gpa.free(conn_buffer);
@@ -147,7 +151,7 @@ pub fn push_cache(
 
     var status: transfer.Status = .init;
     var group: std.Io.Group = .init;
-    try spawn(io, &group, transfer.push, .{ gpa, io, conn, dir_path, true, &status });
+    try spawn(io, &group, transfer.push, .{ gpa, io, conn, dir_path, compress, &status });
 
     {
         errdefer group.cancel(io);

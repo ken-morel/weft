@@ -27,6 +27,8 @@ project: *const Project,
 depl: *std.Io.Mutex,
 group: std.Io.Group = .init,
 clients: *Client.Manager,
+compress: bool,
+decompress: bool,
 
 pub fn deinit(self: *@This(), io: std.Io) void {
     self.group.cancel(io);
@@ -158,6 +160,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
         self.view,
         remote.name,
         artifact,
+        self.compress,
     );
 }
 
@@ -198,6 +201,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         self.view,
         remote.name,
         artifact,
+        self.decompress,
     );
 }
 
