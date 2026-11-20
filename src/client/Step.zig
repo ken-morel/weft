@@ -5,6 +5,7 @@ const Deployment = @import("Deployment.zig");
 mode: []const u8,
 group: []const u8,
 pipeline: []const u8,
+barrier: bool = false,
 
 pub fn is_valid_name(str: []const u8) bool {
     return str.len > 0 and

@@ -318,6 +318,7 @@ fn poll_item(
         },
         .done => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
+            try deployment.add_done(gpa, pipeline_name);
             const pipeline = deployment.config.get_pipeline(pipeline_name);
             if (pipeline) |p| {
                 const is_target = for (deployment.targets) |target| {
@@ -325,7 +326,7 @@ fn poll_item(
                         break true;
                 } else false;
 
-                for (p.out orelse &.{p.name}) |output| {
+                for (p.out) |output| {
                     try deployment.add_artifact(gpa, .{
                         .remote = remote_name,
                         .pipeline = p.name,
@@ -357,6 +358,7 @@ fn poll_item(
         },
         .skipped => {
             deployment.remove_running(gpa, remote_name, pipeline_name);
+            try deployment.add_done(gpa, pipeline_name);
             try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .skipped });
         },
         .killed => {

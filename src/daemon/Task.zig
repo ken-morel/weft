@@ -429,10 +429,7 @@ pub const Spec = struct {
                 return error.ScriptTooLarge;
             };
         const env = try resolve_env_leaky(gpa, ara, io, mode, config.environments, dotenv, pipeline.environ());
-        const outputs: []const []const u8 = if (pipeline.out) |o|
-            o
-        else
-            try ara.dupe([]const u8, &.{pipeline.name});
+        const outputs = pipeline.out;
 
         var keep: std.ArrayList(Weft.Keep) = try .initCapacity(ara, pipeline.keep.len);
         for (pipeline.keep) |k|

@@ -423,12 +423,20 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
             try cmd_check.run(gpa, io, project, if (inst) |*i| i else null);
         },
         .do => |cmd| {
-            const targets: []Step = try gpa.alloc(Step, cmd.targets.len);
-            defer gpa.free(targets);
+            var targets: std.ArrayList(Step) = try .initCapacity(gpa, cmd.targets.len);
+            defer targets.deinit(gpa);
             var last_mode: []const u8 = "default";
-            for (cmd.targets, targets) |name, *tgt| {
-                tgt.* = try .parse_target(name, last_mode);
+            var pending_barrier = false;
+            for (cmd.targets) |name| {
+                if (std.mem.eql(u8, name, "-")) {
+                    pending_barrier = true;
+                    continue;
+                }
+                var tgt = try Step.parse_target(name, last_mode);
+                tgt.barrier = pending_barrier;
+                pending_barrier = false;
                 last_mode = tgt.mode;
+                targets.appendAssumeCapacity(tgt);
             }
 
             const installation: ClientInstall = try .init(gpa, alloc, io, &environ_map);
@@ -438,7 +446,7 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
 
             return cmd_do.run(gpa, io, &term, project, installation, .{
                 .start = .{
-                    .targets = targets,
+                    .targets = targets.items,
                 },
             }, &environ_map);
         },

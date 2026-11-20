@@ -54,6 +54,7 @@ id: Id,
 config: Weft,
 artifacts: []Artifact = &.{},
 sources: [][]const u8 = &.{},
+done: [][]const u8 = &.{},
 running: []Step = &.{},
 failed: []Failed = &.{},
 targets: []Step = &.{},
@@ -77,27 +78,23 @@ pub fn get_artifact(self: @This(), output: []const u8) ?Artifact {
     } else null;
 }
 
-/// This function will be removed
-pub fn get_pipeline_artifact(self: @This(), pipeline: ?[]const u8, output: ?[]const u8) ?Artifact {
-    return for (self.artifacts) |art| {
-        if (pipeline) |p|
-            if (std.mem.eql(u8, p, art.pipeline)) {
-                if (output) |o|
-                    if (std.mem.eql(u8, art.name, o))
-                        break art
-                    else
-                        continue
-                else
-                    break art;
-            } else if (output) |o|
-                if (std.mem.eql(u8, o, art.name))
-                    break art;
-    } else null;
+pub fn is_done(self: @This(), pipeline: []const u8) bool {
+    return for (self.done) |name| {
+        if (std.mem.eql(u8, name, pipeline))
+            break true;
+    } else false;
+}
+
+pub fn add_done(self: *@This(), gpa: std.mem.Allocator, pipeline: []const u8) !void {
+    if (self.is_done(pipeline))
+        return;
+    self.done = try gpa.realloc(self.done, self.done.len + 1);
+    self.done[self.done.len - 1] = try gpa.dupe(u8, pipeline);
 }
 
 pub fn next_target(self: @This()) ?Step {
     return for (self.targets) |target| {
-        if (self.get_pipeline_artifact(target.pipeline, null)) |_|
+        if (self.is_done(target.pipeline))
             continue
         else
             break target;
@@ -105,10 +102,14 @@ pub fn next_target(self: @This()) ?Step {
 }
 
 pub fn next_step(self: @This(), term: *Term) !?Step {
+    var prev_done = true;
     return target: for (self.targets) |*target| {
-        if (self.get_pipeline_artifact(target.pipeline, null)) |_|
+        if (target.barrier and !prev_done)
+            break :target null;
+        if (self.is_done(target.pipeline))
             continue :target;
 
+        prev_done = false;
         break switch (try self.resolve_step(term, target.pipeline, 0)) {
             .waits, .running => continue :target,
             .needs => |n| break :target .{
@@ -145,10 +146,8 @@ pub fn resolve_step(self: @This(), term: *Term, pipeline_name: []const u8, depth
     if (depth >= resolve_pipeline_max_depth)
         return error.CyclicPipeline;
     const pipeline = self.config.get_pipeline(pipeline_name) orelse return error.InvalidPipeline;
-    const outs: []const []const u8 = pipeline.out orelse &.{pipeline.name};
-    for (outs) |output|
-        if (self.get_artifact(output)) |_|
-            return .done;
+    if (self.is_done(pipeline.name))
+        return .done;
     if (self.get_running(pipeline.name)) |_|
         return .running;
 

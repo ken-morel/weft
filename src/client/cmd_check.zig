@@ -170,11 +170,9 @@ pub fn run(
             };
 
     for (config.pipelines, 0..) |p1, idx| {
-        const p1_outs: []const []const u8 = p1.out orelse &.{p1.name};
         for (config.pipelines[idx + 1 ..]) |p2| {
-            const p2_outs: []const []const u8 = p2.out orelse &.{p2.name};
-            for (p1_outs) |out1| {
-                for (p2_outs) |out2| {
+            for (p1.out) |out1| {
+                for (p2.out) |out2| {
                     if (std.mem.eql(u8, out1, out2)) {
                         l.err("pipelines '{s}' and '{s}' both produce output '{s}'", .{ p1.name, p2.name, out1 });
                         errors += 1;
@@ -210,8 +208,7 @@ pub fn run(
                 }
             } else {
                 const produced = produced: for (config.pipelines) |*other| {
-                    const outs: []const []const u8 = other.out orelse &.{other.name};
-                    for (outs) |raw_out| {
+                    for (other.out) |raw_out| {
                         const out = Weft.strip_mode(null, raw_out) orelse raw_out;
                         if (std.mem.eql(u8, out, input))
                             break :produced true;
