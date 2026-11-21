@@ -225,9 +225,11 @@ const Argz = union(enum) {
             pub const doc = "Kill a deployment or a specific pipeline in a deployment";
             pub const doc_step = "The target spec to kill can be <pipeline> or <remote>.<pipeline>";
             pub const doc_deployment = "The deployment id (defaults to latest)";
+            pub const doc_workspace = "The workspace name(expects a project if not specified)";
 
             step: []const u8,
             deployment: ?[]const u8 = null,
+            workspace: ?[]const u8 = null,
         },
         logs: struct {
             pub const doc = "Get the logs for a running/completed pipeline";

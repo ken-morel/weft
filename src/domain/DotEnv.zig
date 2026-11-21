@@ -7,7 +7,6 @@ pub fn load_leaky(ara: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !@This() 
     defer iter_dir.close(io);
     var registers: std.StringHashMapUnmanaged(std.StringHashMapUnmanaged([]const u8)) = .empty;
 
-    // damn, 2KB of stack space
     var iter = iter_dir.iterate();
     while (try iter.next(io)) |entry| {
         const name = if (std.mem.eql(u8, entry.name, ".env"))

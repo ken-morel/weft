@@ -31,7 +31,6 @@ pub fn resolve_deployment_id(self: @This(), io: std.Io, spec: ?[]const u8) !Depl
 }
 
 pub fn get_config_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io) !Weft {
-    @setEvalBranchQuota(100_000);
     const content = self.dir.readFileAllocOptions(
         io,
         "weft/weft.zon",
@@ -153,7 +152,7 @@ pub fn find_deployment_id(self: @This(), io: std.Io, query: []const u8) !Deploym
 
     return match orelse unreachable;
 }
-pub fn unique_run_id_chars(self: @This(), io: std.Io, dep: Deployment.Id) u8 {
+pub fn unique_deployment_id_chars(self: @This(), io: std.Io, dep: Deployment.Id) u8 {
     var deployments_dir = try self.open_deployments_dir(io);
     defer deployments_dir.close(io);
 
@@ -174,7 +173,6 @@ pub fn unique_run_id_chars(self: @This(), io: std.Io, dep: Deployment.Id) u8 {
 
 pub fn load_deployment_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, id: Deployment.Id) !Deployment {
     const l = log(.load_deployment);
-    @setEvalBranchQuota(100_000);
     var dep_dir = try self.open_deployment_dir(io, id);
     defer dep_dir.close(io);
 
