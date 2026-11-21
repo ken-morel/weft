@@ -298,7 +298,7 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, template: ?[]const u8) !void 
     write_config: {
         var config = try Config.from_template(template);
 
-        if (read_config_leaky(alloc, io)) |c| {
+        if (read_config(alloc, io)) |c| {
             config.port = c.port;
         } else |_| {}
 
@@ -373,7 +373,7 @@ pub fn setup_bin(gpa: std.mem.Allocator, io: std.Io) !void {
     }
 }
 
-pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
+pub fn read_config(gpa: std.mem.Allocator, io: std.Io) !Config {
     const cwd = std.Io.Dir.cwd();
 
     var file = cwd.openFile(io, paths.weft_config_file, .{}) catch |err| {
@@ -392,16 +392,17 @@ pub fn read_config_leaky(ara: std.mem.Allocator, io: std.Io) !Config {
     var buff: [4 << 10]u8 = undefined;
     var reader = file.reader(io, &buff);
     const content: [:0]const u8 = try reader.interface.allocRemainingAlignedSentinel(
-        ara,
+        gpa,
         .unlimited,
         .of(u8),
         0,
     );
+    defer gpa.free(content);
 
     var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
-    return std.zon.parse.fromSlice(Config, .{
-        .arena = ara,
-        .gpa = ara,
+    return std.zon.parse.fromSliceNoAlloc(Config, .{
+        .arena = gpa,
+        .gpa = gpa,
         .source = content,
         .diagnostics = &diag,
     }) catch |err| err: {

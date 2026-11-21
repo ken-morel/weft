@@ -210,7 +210,7 @@ pub fn run(
                 }
             } else {
                 const produced = produced: for (config.pipelines) |*other| {
-                    const outs: []const []const u8 = other.out orelse &.{other.name};
+                    const outs = other.out orelse &.{other.name};
                     for (outs) |raw_out| {
                         const out = Weft.strip_mode(null, raw_out) orelse raw_out;
                         if (std.mem.eql(u8, out, input))

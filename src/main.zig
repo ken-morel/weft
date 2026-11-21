@@ -93,10 +93,7 @@ const Argz = union(enum) {
             pub const doc = "Register an authorized client public key";
             key: []const u8,
         },
-        ipc: union(enum) {
-            pub const hidden = true;
-            reload: struct {},
-        },
+        reload: struct {},
     },
 
     supervisor: union(enum) {
@@ -387,10 +384,8 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                 try DaemonInstall.add_key(io, key);
                 clinternal.reload(io);
             },
-            .ipc => |i| switch (i) {
-                .reload => {
-                    clinternal.reload(io);
-                },
+            .reload => {
+                clinternal.reload(io);
             },
         },
         .supervisor => |s| if (include_daemon) switch (s) {

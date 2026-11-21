@@ -36,7 +36,7 @@ pub fn init(gpa: std.mem.Allocator, io: std.Io, install: DaemonInstall) !@This()
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
     const alloc = arena.allocator();
-    const config = try DaemonInstall.read_config_leaky(alloc, io);
+    const config = try DaemonInstall.read_config(alloc, io);
 
     var server = try Server.init(
         io,
@@ -76,9 +76,8 @@ pub fn reload(self: *@This()) !void {
     defer self.keys_lock.unlock(self.io);
     self.gpa.free(self.keys);
     self.keys = new_keys;
-    l.info("reloaded {d} client keys", .{new_keys.len});
-    //LEAK: The previous config ain't freed
-    self.config = try DaemonInstall.read_config_leaky(self.arena.allocator(), self.io);
+    self.config = try DaemonInstall.read_config(self.arena.allocator(), self.io);
+    l.info("Daemon reloaded", .{});
 }
 
 pub fn run_client_server(self: *@This()) !void {

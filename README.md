@@ -4,16 +4,10 @@ Weft is a deployment and task orchestration tool for Linux written in Zig. A sin
 
 The primary goal of Weft is to make reproducible, multi-stage deployments practical even on constrained targets such as $0.30 TierHive instances, low-memory VPS hosts, unprivileged LXC or OpenVZ containers, and ephemeral environments like Google Colab.
 
-- Tasks run directly under a built-in Linux supervisor rather than a container runtime like Docker or Podman, avoiding background daemon bloat and image registry overhead while adapting isolation to what the host kernel permits.
-- Pipeline environments can provision packages directly from Nix package repositories without requiring NixOS or a Nix daemon on the target machine.
-- Remotes can be reached over direct TCP connections, through local stdio proxy commands, or via dynamic address-provider scripts (`~<script>`, such as port forwarders) when deploying to machines without public IP addresses.
-- Client-to-daemon communication is authenticated using Ed25519 keypairs and encrypted end-to-end with XChaCha20-Poly1305 AEAD. On first use, the client generates a private key in `$XDG_CONFIG_HOME/weft/key` (or `~/.config/weft/key`). Remote daemons maintain a registry of authorized client public keys, verifying the client's signature and protocol version hash during a Diffie-Hellman key exchange before accepting commands or transferring data.
 
 ---
 
 ## 1. Installation and CLI Reference
-
-All CLI commands accept arguments either positionally (in the order shown below) or as named flags (`-<field> <value>`), with `--` ending flag parsing so trailing arguments and flags pass through verbatim. Commands that render live terminal UIs (`do`, `resume`, `env`, `task spawn`, `remote monitor`, `artifact pull/push`, `cache pull/push`) automatically detect when `stdout` is redirected to a file or piped into another process, stripping ANSI escape sequences and redrawing footers to emit clean, append-only plain text streams.
 
 ### Installation
 
@@ -72,7 +66,10 @@ The compiled binary is output to `zig-out/bin/weft`.
   Runs the daemon in the foreground. Normally invoked by the host's service manager after installation.
 
 - `weft daemon register <key>`  
-  Adds a 64-character hex Ed25519 public key to `/etc/weft/keys` and notifies the running local daemon over IPC to reload its authorized keys without restarting.
+  Adds a 64-character hex Ed25519 public key to `/etc/weft/keys` and notifies the running local daemon over `weft daemon reload`.
+
+- `weft daemon reload`
+  Query the daemon via ipc to reload `/etc/weft/keys` and `/etc/weft/weft.zon` without restarting.
 
 #### `weft init`
 
@@ -400,6 +397,7 @@ Client-specific configuration and external remote endpoints reside in `~/.config
     .remotes = .{
         .{ "hetzner", "195.201.10.42:9338" },
         .{ "colab", "!remote colab" },
+        .{ "gcloud", "~remote gcloud" },
         .{ "local", "127.0.0.1:9338" },
     },
 }
@@ -455,7 +453,10 @@ pub const Retention = struct {
 
 ## 3. The Weft Daemon
 
+Client-to-daemon communication is authenticated using Ed25519 keypairs and encrypted end-to-end with XChaCha20-Poly1305 AEAD, in sum, inspired from ssh key and allowed_keys.
+
 ### Daemon Configuration and Templates (`/etc/weft/weft.zon`)
+
 
 When `weft daemon install [isolate[-scale]]` runs, it generates `/etc/weft/weft.zon`, serialized from `DaemonInstall.Config` (`src/daemon/DaemonInstall.zig`):
 
