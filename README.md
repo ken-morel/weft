@@ -63,7 +63,7 @@ The binary is output to `zig-out/bin/weft`.
   - Each deployment is assigned an 8-character lowercase Crockford Base32 ID (30-bit 250ms timestamp + 10-bit random salt) and recorded under `weft/do/<deployment>/deployment.zon`.
 - `weft resume [deployment]`  
   Resumes an interrupted or failed deployment from `weft/do/`, skipping steps already marked done and retrying failed or pending steps.
-  - `deployment` accepts a full 8-character ID or a unique prefix/suffix (minimum 2 characters), defaulting to the latest deployment.
+  - `deployment` accepts a full 8-character ID or a unique suffix (minimum 2 characters), defaulting to the latest deployment.
 
 #### `weft env`
 
@@ -84,9 +84,9 @@ The binary is output to `zig-out/bin/weft`.
 #### `weft artifact`
 
 - `weft artifact pull <name> [remote] [deployment]`  
-  Downloads artifact `<name>` from `<remote>` (default `local`) into `weft/do/<deployment>/<name>/` and records `local` as holding it.
+  Downloads artifact `<name>` from `<remote>` (default `local`) into `weft/do/<deployment>/<name>/`.
 - `weft artifact push <name> [remote] [deployment]`  
-  Uploads artifact or source `<name>` from `weft/do/<deployment>/<name>/` to `<remote>` (default `local`) and records `<remote>` as holding it.
+  Uploads artifact or source `<name>` from `weft/do/<deployment>/<name>/` to `<remote>` (default `local`).
 - `weft artifact register <name> [remote] [deployment]`  
   Records `<remote>` (default `local`) as holding `<name>` in `deployment.zon` without transferring files, and prints the local artifact directory path to `stdout`.
 - `weft artifact path <name> [deployment]`  

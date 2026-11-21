@@ -106,13 +106,6 @@ pub fn resolve_single_remote_leaky(
     }
 }
 
-/// Where and how to reach a daemon.
-///   `ip`       connect directly over TCP; any number of connections may be open.
-///   `stdio`    `!cmd`: the command's stdin/stdout *is* the connection. Binds the process,
-///              so only one connection per command can be held at a time.
-///   `provided` `~cmd`: the command prints an address on the first line of its stdout and keeps
-///              running (e.g. a port forwarder). The printed address is resolved again, so
-///              it may itself be an `ip`, a `stdio` or another `provided` address.
 pub const Address = union(enum) {
     ip: std.Io.net.IpAddress,
     stdio: []const []const u8,
