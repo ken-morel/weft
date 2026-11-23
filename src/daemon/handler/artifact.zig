@@ -3,6 +3,7 @@ const log = std.log.scoped;
 
 const paths = @import("../../domain/paths.zig");
 const proto = @import("../../domain/proto.zig");
+const Task = @import("../../domain/Task.zig");
 const zoto = @import("../../util/zoto.zig");
 const Connection = @import("../../wire/Connection.zig");
 const Packer = @import("../../wire/Packer.zig");
@@ -12,9 +13,8 @@ const clinternal = @import("../clinternal.zig");
 const Daemon = @import("../Daemon.zig");
 const DaemonInstall = @import("../DaemonInstall.zig");
 const Server = @import("../Server.zig");
-const Task = @import("../Task.zig");
 
-pub fn has(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.has.Res) {
+pub fn has(daemon: *Daemon, conn: *Connection) proto.R(proto.artifact.has.Res) {
     const l = log(.handle_artifact_has);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -36,7 +36,7 @@ pub fn has(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.has.Res)
         err;
 }
 
-pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.pull.Res) {
+pub fn pull(daemon: *Daemon, conn: *Connection) proto.R(proto.artifact.pull.Res) {
     const l = log(.handle_artifact_pull);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -56,7 +56,7 @@ pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.pull.Re
     return .{};
 }
 
-pub fn push(daemon: *Daemon, conn: *Connection) proto.Res(proto.artifact.push.Res) {
+pub fn push(daemon: *Daemon, conn: *Connection) proto.R(proto.artifact.push.Res) {
     const l = log(.handle_artifact_push);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);

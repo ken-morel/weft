@@ -2,6 +2,7 @@ const std = @import("std");
 const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
+const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Client = @import("Client.zig");
@@ -47,7 +48,7 @@ pub fn run(
     const artifact_path = try project.artifact_dir_path(gpa, io, dep_id, name);
     defer gpa.free(artifact_path);
 
-    const task_id: proto.task.Id = .{
+    const task_id: Task.Id = .{
         .deployment = dep_id,
         .pipeline = name,
         .workspace = config.workspace,

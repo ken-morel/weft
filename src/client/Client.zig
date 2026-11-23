@@ -75,7 +75,6 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
     switch (challenge_msg.status) {
         .ok => {},
         .unauthorized => return error.ClientUnauthorized,
-        .proto_mismatch => return error.ProtocolMismatch,
     }
 
     const sign_data = Crypt.make_sign_data(&challenge_msg.challenge, &challenge_msg.server_temp_pub);

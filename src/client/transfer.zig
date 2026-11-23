@@ -2,6 +2,7 @@ const std = @import("std");
 
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
+const Task = @import("../domain/Task.zig");
 const sizes = @import("../util/sizes.zig");
 const Connection = @import("../wire/Connection.zig");
 const transfer = @import("../wire/transfer.zig");
@@ -11,7 +12,7 @@ pub fn pull_dir(
     gpa: std.mem.Allocator,
     io: std.Io,
     conn: *Connection,
-    task_id: proto.task.Id,
+    task_id: Task.Id,
     dir_path: []const u8,
     view: *View,
     remote_name: []const u8,
@@ -43,7 +44,7 @@ pub fn pull_dir(
     if (status.err) |err|
         return err;
 
-    _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.pull.Res));
+    _ = try try conn.recv_object_buf(conn_buffer, proto.R(proto.artifact.pull.Res));
     try view.set_transfer(io, artifact, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 
@@ -51,7 +52,7 @@ pub fn push_dir(
     gpa: std.mem.Allocator,
     io: std.Io,
     conn: *Connection,
-    task_id: proto.task.Id,
+    task_id: Task.Id,
     dir_path: []const u8,
     view: *View,
     remote_name: []const u8,
@@ -79,7 +80,7 @@ pub fn push_dir(
     if (status.err) |err|
         return err;
 
-    _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.artifact.push.Res));
+    _ = try try conn.recv_object_buf(conn_buffer, proto.R(proto.artifact.push.Res));
     try view.set_transfer(io, artifact, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 
@@ -128,7 +129,7 @@ pub fn pull_cache(
     if (status.err) |err|
         return err;
 
-    _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.pull.Res));
+    _ = try try conn.recv_object_buf(conn_buffer, proto.R(proto.cache.pull.Res));
     try view.set_transfer(io, cache_name, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 
@@ -162,7 +163,7 @@ pub fn push_cache(
     if (status.err) |err|
         return err;
 
-    _ = try try conn.recv_object_buf(conn_buffer, proto.Res(proto.cache.push.Res));
+    _ = try try conn.recv_object_buf(conn_buffer, proto.R(proto.cache.push.Res));
     try view.set_transfer(io, cache_name, remote_name, status.compressed, .ready, 1.0, status.bytes_sent, status.speed);
 }
 

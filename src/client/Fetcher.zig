@@ -3,6 +3,7 @@ const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
+const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Connection = @import("../wire/Connection.zig");
@@ -54,7 +55,7 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
     defer managed_client.release(io);
     const client = managed_client.inner;
 
-    const task_id: proto.task.Id = .{
+    const task_id: Task.Id = .{
         .deployment = self.dep.id,
         .pipeline = artifact,
         .workspace = self.dep.config.workspace,
@@ -66,7 +67,7 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
     try client.conn.send_object(buffer, proto.Request, .artifact_has);
     try client.conn.send_object(buffer, proto.artifact.has.Req, .{ .id = task_id });
 
-    const reply = try try client.conn.recv_object(self.gpa, proto.Res(proto.artifact.has.Res));
+    const reply = try try client.conn.recv_object(self.gpa, proto.R(proto.artifact.has.Res));
     return reply.has;
 }
 
@@ -145,7 +146,7 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
     defer managed.release(io);
     const client = managed.inner;
 
-    const task_id: proto.task.Id = .{
+    const task_id: Task.Id = .{
         .deployment = self.dep.id,
         .pipeline = artifact,
         .workspace = self.dep.config.workspace,
@@ -186,7 +187,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
     defer managed.release(io);
     const client = managed.inner;
 
-    const task_id: proto.task.Id = .{
+    const task_id: Task.Id = .{
         .deployment = self.dep.id,
         .pipeline = artifact,
         .workspace = self.dep.config.workspace,

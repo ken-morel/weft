@@ -3,6 +3,7 @@ const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
+const Task = @import("../domain/Task.zig");
 const format_duration = @import("../util/sizes.zig").format_duration;
 const zoto = @import("../util/zoto.zig");
 const Connection = @import("../wire/Connection.zig");
@@ -12,7 +13,6 @@ const clinternal = @import("clinternal.zig");
 const Daemon = @import("Daemon.zig");
 const DaemonInstall = @import("DaemonInstall.zig");
 const Server = @import("Server.zig");
-const Task = @import("Task.zig");
 
 const handlers = struct {
     const artifact = @import("./handler/artifact.zig");

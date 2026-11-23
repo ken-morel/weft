@@ -1,9 +1,9 @@
 const std = @import("std");
 const log = std.log.scoped;
 
-const Task = @import("../daemon/Task.zig");
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
+const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Connection = @import("../wire/Connection.zig");
@@ -229,7 +229,7 @@ fn poll_batch(
 
         var count: usize = 0;
         while (count < pending.items.len) : (count += 1) {
-            const res = try client.conn.recv_object(alloc, proto.Res(proto.task.poll.Res));
+            const res = try client.conn.recv_object(alloc, proto.R(proto.task.poll.Res));
             const item = try res;
             const poll_res = item orelse break;
 
@@ -278,7 +278,7 @@ fn poll_batch(
     }
 
     try client.conn.send_object(log_buffer, proto.task.poll.Req, null);
-    if (client.conn.recv_object_buf(log_buffer, proto.Res(proto.task.poll.Res))) |res| {
+    if (client.conn.recv_object_buf(log_buffer, proto.R(proto.task.poll.Res))) |res| {
         _ = res catch {};
     } else |_| {}
 }
@@ -698,7 +698,7 @@ pub fn spawn_step(
 
         const res = client.conn.recv_object_buf(
             buffer,
-            proto.Res(proto.task.spawn.Res),
+            proto.R(proto.task.spawn.Res),
         ) catch |err| {
             fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;

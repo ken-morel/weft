@@ -1,48 +1,53 @@
 const std = @import("std");
 
-const Deployment = @import("../client/Deployment.zig");
-const Task = @import("../daemon/Task.zig");
-const proto = @import("../domain/proto.zig");
-const Weft = @import("../domain/Weft.zig");
-const Monitor = @import("../util/Monitor.zig");
-const zoto = @import("../util/zoto.zig");
+const ClientInstall = @import("client/ClientInstall.zig");
+const Deployment = @import("client/Deployment.zig");
+const DaemonInstall = @import("daemon/DaemonInstall.zig");
+const proto = @import("domain/proto.zig");
+const Task = @import("domain/Task.zig");
+const Weft = @import("domain/Weft.zig");
+const Monitor = @import("util/Monitor.zig");
+const zoto = @import("util/zoto.zig");
 
 pub const types = [_]type{
     Task.Status,
     Task.Spec,
     Task,
-    proto.task.Id,
+    Task.Id,
 
     Deployment,
     Weft,
     Monitor.Stats,
+
+    DaemonInstall.Config,
+    ClientInstall.Config,
 
     proto.Request,
     proto.DaemonMsg,
 
     proto.artifact.push.Req,
     proto.artifact.push.Res,
-    proto.Res(proto.artifact.push.Res),
+    proto.R(proto.artifact.push.Res),
 
     proto.artifact.pull.Req,
     proto.artifact.pull.Res,
-    proto.Res(proto.artifact.pull.Res),
+    proto.R(proto.artifact.pull.Res),
 
     proto.artifact.has.Req,
     proto.artifact.has.Res,
-    proto.Res(proto.artifact.has.Res),
+    proto.R(proto.artifact.has.Res),
 
     proto.task.spawn.Req,
     proto.task.spawn.Res,
-    proto.Res(proto.task.spawn.Res),
+    proto.R(proto.task.spawn.Res),
 
     proto.task.poll.Req,
     proto.task.poll.Res,
-    proto.Res(proto.task.poll.Res),
+    proto.R(proto.task.poll.Res),
 
     proto.task.kill.Req,
     proto.task.kill.Res,
-    proto.Res(proto.task.kill.Res),
+    proto.R(proto.task.kill.Res),
 
     proto.system.stats.Req,
 

@@ -96,7 +96,7 @@ pub fn serialize(writer: *std.Io.Writer, comptime T: type, value: T, comptime op
     if (opts.header)
         try writer.writeAll("ZOTO");
     if (opts.hash)
-        try writer.writeInt(u64, comptime hashType(T), endian);
+        try writeInt(writer, u64, comptime hashType(T));
     try serializeValue(writer, T, value);
 }
 pub fn serializeAlloc(gpa: std.mem.Allocator, comptime T: type, value: T, comptime opts: Options) std.Io.Writer.Error![]const u8 {
@@ -109,7 +109,7 @@ fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Wri
     const info = @typeInfo(T);
 
     switch (info) {
-        inline .int => try writer.writeInt(T, value, endian),
+        inline .int => try writeInt(writer, T, value),
         inline .float => |f| try writer.writeInt(
             @Int(.unsigned, f.bits),
             @bitCast(value),
@@ -354,12 +354,20 @@ fn readSlice(src: *[]const u8, len: usize) ![]const u8 {
 }
 
 fn readInt(src: *[]const u8, comptime IntT: type) !IntT {
-    const size = @divExact(@typeInfo(IntT).int.bits, 8);
+    const Int = comptime @typeInfo(IntT).int;
+    const size = comptime @divCeil(Int.bits, 8);
+    const I = comptime @Int(Int.signedness, size * 8);
     if (src.len < size)
         return error.BufferTooSmall;
-    const val = std.mem.readInt(IntT, src.*[0..size], .little);
+    const val = std.mem.readInt(I, src.*[0..size], .little);
     src.* = src.*[size..];
-    return val;
+    return @truncate(val);
+}
+fn writeInt(w: *std.Io.Writer, comptime IntT: type, val: IntT) !void {
+    const Int = comptime @typeInfo(IntT).int;
+    const I = comptime @Int(Int.signedness, @divCeil(Int.bits, 8) * 8);
+    const i: I = @intCast(val);
+    try w.writeInt(I, i, endian);
 }
 
 fn indent(w: *std.Io.Writer, depth: usize) !void {

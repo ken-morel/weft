@@ -1,11 +1,11 @@
 const std = @import("std");
 
 const Deployment = @import("../client/Deployment.zig");
-const Task = @import("../daemon/Task.zig");
+const Task = @import("../domain/Task.zig");
 const Weft = @import("../domain/Weft.zig");
 const zoto = @import("../util/zoto.zig");
 
-pub fn Res(comptime T: type) type {
+pub fn R(comptime T: type) type {
     return anyerror!T;
 }
 
@@ -17,6 +17,7 @@ pub const Pack = union(enum(u8)) {
         compress: bool,
         total_files: u64,
     };
+    const hash = zoto.hashType(@This());
     pull: Pull,
     push: Push,
     folder,
@@ -35,24 +36,26 @@ pub const compressed_data: u8 = 0xeb;
 
 pub const artifact = struct {
     pub const push = struct {
-        pub const Req = struct { id: task.Id };
+        pub const Req = struct { id: Task.Id };
         pub const Res = struct {};
+        pub const hash = zoto.hashType(struct { Req, Res });
     };
     pub const has = struct {
         pub const Req = struct {
-            id: task.Id,
+            id: Task.Id,
         };
         pub const Res = struct {
             has: bool,
         };
+        pub const hash = zoto.hashType(struct { Req, Res });
     };
     pub const pull = struct {
         pub const Req = struct {
-            id: task.Id,
+            id: Task.Id,
         };
         pub const Res = struct {};
+        const hash = zoto.hashType(struct { Req, Res });
     };
-    pub const Id = task.Id;
 };
 pub const cache = struct {
     pub const Id = struct {
@@ -62,83 +65,28 @@ pub const cache = struct {
     pub const push = struct {
         pub const Req = struct { id: Id };
         pub const Res = struct {};
+        const hash = zoto.hashType(struct { Req, Res });
     };
     pub const pull = struct {
         pub const Req = struct { id: Id };
         pub const Res = struct {};
+        const hash = zoto.hashType(struct { Req, Res });
     };
     pub const has = struct {
         pub const Req = struct { id: Id };
         pub const Res = struct {
             has: bool,
         };
+        const hash = zoto.hashType(struct { Req, Res });
     };
 };
 pub const task = struct {
-    pub const Id = struct {
-        workspace: []const u8,
-        deployment: Deployment.Id,
-        pipeline: []const u8,
-        pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
-            const workspace = try alloc.dupe(u8, self.workspace);
-            errdefer alloc.free(workspace);
-            const pipeline = try alloc.dupe(u8, self.pipeline);
-            errdefer alloc.free(pipeline);
-            return .{
-                .workspace = workspace,
-                .deployment = self.deployment,
-                .pipeline = pipeline,
-            };
-        }
-        pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
-            alloc.free(self.workspace);
-            alloc.free(self.pipeline);
-        }
-        pub inline fn w(self: @This()) struct { []const u8 } {
-            return .{self.workspace};
-        }
-        pub inline fn w_(self: @This(), a: []const u8) struct { []const u8, []const u8 } {
-            return .{ self.workspace, a };
-        }
-        pub inline fn wp(self: @This()) struct { []const u8, []const u8 } {
-            return .{ self.workspace, self.pipeline };
-        }
-        pub inline fn wpd(self: @This()) struct { []const u8, []const u8, Deployment.Id } {
-            return .{ self.workspace, self.pipeline, self.deployment };
-        }
-        pub inline fn wpd_(self: @This(), a: []const u8) struct { []const u8, []const u8, Deployment.Id, []const u8 } {
-            return .{ self.workspace, self.pipeline, self.deployment, a };
-        }
-        pub inline fn w_d(self: @This(), a: []const u8) struct { []const u8, []const u8, Deployment.Id } {
-            return .{ self.workspace, a, self.deployment };
-        }
-        pub fn from_task_dir(path: []const u8) ?@This() {
-            var p = path;
-            while (p.len > 0 and p[p.len - 1] == '/')
-                p = p[0 .. p.len - 1];
-
-            var it = std.mem.splitBackwardsScalar(u8, p, '/');
-            const deployment_str = it.next() orelse return null;
-            const deployment = Deployment.Id.parse(deployment_str) catch return null;
-            const pipeline = it.next() orelse return null;
-            const task_tag = it.next() orelse return null;
-            if (!std.mem.eql(u8, task_tag, "task"))
-                return null;
-            const workspace = it.next() orelse return null;
-
-            return .{
-                .workspace = workspace,
-                .pipeline = pipeline,
-                .deployment = deployment,
-            };
-        }
-    };
-
     pub const spawn = struct {
         pub const Req = struct {
             spec: Task.Spec,
         };
         pub const Res = struct {};
+        const hash = zoto.hashType(struct { Req, Res });
     };
     pub const poll = struct {
         pub const Status = ?Task.Status;
@@ -152,15 +100,16 @@ pub const task = struct {
             memory_bytes: u64 = 0,
         };
         pub const Req = ?struct {
-            task: Id,
+            task: Task.Id,
             logs_offset: ?u64,
         };
         pub const Res = ?struct {
-            task: Id,
+            task: Task.Id,
             logs: ?Logs,
             status: Status,
             usage: ?TaskUsage = null,
         };
+        const hash = zoto.hashType(struct { Req, Res });
     };
     pub const kill = struct {
         pub const Req = struct {
@@ -169,6 +118,7 @@ pub const task = struct {
             pipeline: []const u8,
         };
         pub const Res = struct {};
+        const hash = zoto.hashType(struct { Req, Res });
     };
 };
 
@@ -177,6 +127,7 @@ pub const system = struct {
         pub const Req = struct {
             from: std.Io.Timestamp,
         };
+        const hash = zoto.hashType(struct { Req, void });
     };
 };
 
@@ -194,33 +145,16 @@ pub const Request = enum(u8) {
     task_kill,
 
     system_stats,
+    const hash = zoto.hashType(@This());
 };
 
 pub const DaemonMsg = union(enum) {
     reload,
+    const hash = zoto.hashType(@This());
 };
 
-req: Request,
-daemon: DaemonMsg,
-push_req: artifact.push.Req,
-push_res: artifact.push.Res,
-pull_req: artifact.pull.Req,
-pull_res: artifact.pull.Res,
-has_req: artifact.has.Req,
-has_res: artifact.has.Res,
-cache_push_req: cache.push.Req,
-cache_push_res: cache.push.Res,
-cache_pull_req: cache.pull.Req,
-cache_pull_res: cache.pull.Res,
-cache_has_req: cache.has.Req,
-cache_has_res: cache.has.Res,
-spawn_req: task.spawn.Req,
-spawn_res: task.spawn.Res,
-poll_req: task.poll.Req,
-poll_res: task.poll.Res,
-kill_req: task.kill.Req,
-kill_res: task.kill.Res,
-stats_req: system.stats.Req,
-pack: Pack,
-
-pub const hash = zoto.hashType(@This());
+pub const hash = (Request.hash ^ DaemonMsg.hash ^ Pack.hash) ^
+    (artifact.push.hash ^ artifact.push.hash ^ artifact.has.hash) ^
+    (cache.push.hash ^ cache.pull.hash ^ cache.has.hash) ^
+    (task.spawn.hash ^ task.kill.hash ^ task.poll.hash) ^
+    (system.stats.hash);

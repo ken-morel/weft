@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const Deployment = @import("../client/Deployment.zig");
-const Task = @import("../daemon/Task.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
+const Task = @import("../domain/Task.zig");
 const zoto = @import("zoto.zig");
 
 prev_ticks: ?CpuTicks = null,
@@ -503,7 +503,7 @@ fn is_pid_alive(pid: i32) bool {
     return std.os.linux.errno(rc) != .SRCH;
 }
 
-fn collect_task_metrics(io: std.Io, tid: proto.task.Id, sup_pid: ?i32) TaskMetrics {
+fn collect_task_metrics(io: std.Io, tid: Task.Id, sup_pid: ?i32) TaskMetrics {
     var metrics: TaskMetrics = .{};
 
     var cg_path_buf: [256]u8 = undefined;

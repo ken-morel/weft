@@ -83,7 +83,7 @@ pub fn run(
         .pipeline = step.pipeline,
     });
 
-    _ = try client.conn.recv_object(alloc, proto.Res(proto.task.kill.Res)) catch |err| {
+    _ = try client.conn.recv_object(alloc, proto.R(proto.task.kill.Res)) catch |err| {
         l.err("remote failed to kill task: {any}", .{err});
         return err;
     };

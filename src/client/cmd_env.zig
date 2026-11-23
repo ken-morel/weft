@@ -1,8 +1,8 @@
 const std = @import("std");
 const log = std.log.scoped;
 
-const Task = @import("../daemon/Task.zig");
 const proto = @import("../domain/proto.zig");
+const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const Connection = @import("../wire/Connection.zig");
@@ -52,7 +52,7 @@ fn ensure_packages(
     };
 
     const dep_id: Deployment.Id = try .now(io);
-    const task_id: proto.task.Id = .{
+    const task_id: Task.Id = .{
         .workspace = "weft",
         .deployment = dep_id,
         .pipeline = name,
@@ -75,7 +75,7 @@ fn ensure_packages(
 
     const buffer = try alloc.alloc(u8, Connection.max_packet_size);
     const spec: Task.Spec = .{
-        .task_id = task_id,
+        .id = task_id,
         .script = null,
         .pkgs = pkgs,
         .mode = mode,
@@ -93,7 +93,7 @@ fn ensure_packages(
     try client.conn.send_object(buffer, proto.task.spawn.Req, .{
         .spec = spec,
     });
-    _ = try try client.conn.recv_object_buf(buffer, proto.Res(proto.task.spawn.Res));
+    _ = try try client.conn.recv_object_buf(buffer, proto.R(proto.task.spawn.Res));
 
     var req_arena: std.heap.ArenaAllocator = .init(gpa);
     defer req_arena.deinit();
@@ -108,7 +108,7 @@ fn ensure_packages(
             .logs_offset = offset,
         });
 
-        const res = try client.conn.recv_object(req_alloc, proto.Res(proto.task.poll.Res));
+        const res = try client.conn.recv_object(req_alloc, proto.R(proto.task.poll.Res));
         const item = try res orelse break null;
 
         const more = if (item.logs) |logs| logs: {
@@ -134,7 +134,7 @@ fn ensure_packages(
     };
 
     try client.conn.send_object(buffer, proto.task.poll.Req, null);
-    if (client.conn.recv_object_buf(buffer, proto.Res(proto.task.poll.Res))) |res| {
+    if (client.conn.recv_object_buf(buffer, proto.R(proto.task.poll.Res))) |res| {
         _ = res catch {};
     } else |_| {}
 

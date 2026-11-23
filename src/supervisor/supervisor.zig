@@ -1,11 +1,11 @@
 const std = @import("std");
 
 const DaemonInstall = @import("../daemon/DaemonInstall.zig");
-const Task = @import("../daemon/Task.zig");
 const domain = @import("../domain/domain.zig");
 const spawn_detach = @import("../domain/domain.zig").spawn_detach;
 const chown = domain.chown;
 const paths = @import("../domain/paths.zig");
+const Task = @import("../domain/Task.zig");
 const nix = @import("../nix/nix.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
 const zoto = @import("../util/zoto.zig");
@@ -888,8 +888,8 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         try env_map.put("TMPDIR", "/tmp");
         try env_map.put("IN", if (isolate.mount) "/in" else try alloc.print("{s}in", .{rootfs_path}));
         try env_map.put("OUT", if (isolate.mount) "/out" else try alloc.print("{s}out", .{rootfs_path}));
-        try env_map.put("WEFT_PIPELINE", spec.task_id.pipeline);
-        try env_map.put("WEFT_DEPLOYMENT", try alloc.dupe(u8, &spec.task_id.deployment.to_string()));
+        try env_map.put("WEFT_PIPELINE", spec.id.pipeline);
+        try env_map.put("WEFT_DEPLOYMENT", try alloc.dupe(u8, &spec.id.deployment.to_string()));
 
         const base_path = if (isolate.mount)
             "/bin"
@@ -900,7 +900,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
             .vars = spec.vars,
             .pkgs = spec.pkgs,
         };
-        try resolved_env.apply(gpa, &env_map, base_path, spec.mode, spec.task_id.workspace);
+        try resolved_env.apply(gpa, &env_map, base_path, spec.mode, spec.id.workspace);
 
         break :env_map env_map;
     };

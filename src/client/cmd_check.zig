@@ -1,7 +1,7 @@
 const std = @import("std");
 const log = std.log.scoped;
 
-const Task = @import("../daemon/Task.zig");
+const Task = @import("../domain/Task.zig");
 const Weft = @import("../domain/Weft.zig");
 const ClientInstall = @import("ClientInstall.zig");
 const Deployment = @import("Deployment.zig");

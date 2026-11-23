@@ -6,7 +6,6 @@ const domain = @import("../domain/domain.zig");
 const DotEnv = @import("../domain/DotEnv.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
-pub const Id = proto.task.Id;
 const Weft = @import("../domain/Weft.zig");
 const Workspace = @import("../domain/Workspace.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
@@ -25,7 +24,66 @@ pub const Status = enum {
     frozen,
 };
 
-id: proto.task.Id,
+id: Id,
+
+pub const Id = struct {
+    workspace: []const u8,
+    deployment: Deployment.Id,
+    pipeline: []const u8,
+    pub fn dupe(self: @This(), alloc: std.mem.Allocator) !@This() {
+        const workspace = try alloc.dupe(u8, self.workspace);
+        errdefer alloc.free(workspace);
+        const pipeline = try alloc.dupe(u8, self.pipeline);
+        errdefer alloc.free(pipeline);
+        return .{
+            .workspace = workspace,
+            .deployment = self.deployment,
+            .pipeline = pipeline,
+        };
+    }
+    pub fn free_duped(self: @This(), alloc: std.mem.Allocator) void {
+        alloc.free(self.workspace);
+        alloc.free(self.pipeline);
+    }
+    pub inline fn w(self: @This()) struct { []const u8 } {
+        return .{self.workspace};
+    }
+    pub inline fn w_(self: @This(), a: []const u8) struct { []const u8, []const u8 } {
+        return .{ self.workspace, a };
+    }
+    pub inline fn wp(self: @This()) struct { []const u8, []const u8 } {
+        return .{ self.workspace, self.pipeline };
+    }
+    pub inline fn wpd(self: @This()) struct { []const u8, []const u8, Deployment.Id } {
+        return .{ self.workspace, self.pipeline, self.deployment };
+    }
+    pub inline fn wpd_(self: @This(), a: []const u8) struct { []const u8, []const u8, Deployment.Id, []const u8 } {
+        return .{ self.workspace, self.pipeline, self.deployment, a };
+    }
+    pub inline fn w_d(self: @This(), a: []const u8) struct { []const u8, []const u8, Deployment.Id } {
+        return .{ self.workspace, a, self.deployment };
+    }
+    pub fn from_task_dir(path: []const u8) ?@This() {
+        var p = path;
+        while (p.len > 0 and p[p.len - 1] == '/')
+            p = p[0 .. p.len - 1];
+
+        var it = std.mem.splitBackwardsScalar(u8, p, '/');
+        const deployment_str = it.next() orelse return null;
+        const deployment = Deployment.Id.parse(deployment_str) catch return null;
+        const pipeline = it.next() orelse return null;
+        const task_tag = it.next() orelse return null;
+        if (!std.mem.eql(u8, task_tag, "task"))
+            return null;
+        const workspace = it.next() orelse return null;
+
+        return .{
+            .workspace = workspace,
+            .pipeline = pipeline,
+            .deployment = deployment,
+        };
+    }
+};
 
 pub fn get_workspace(self: @This()) Workspace {
     return .{
@@ -285,7 +343,7 @@ pub const Spec = struct {
     pub const max_size = 64 << 10;
     pub const max_script_size = 60 << 10;
 
-    task_id: proto.task.Id,
+    id: Id,
     script: ?[]const u8,
     timeout: ?u32 = null,
     vars: []const struct { []const u8, []const u8 } = &.{},
@@ -440,7 +498,7 @@ pub const Spec = struct {
                 keep.appendAssumeCapacity(.{ try ara.dupe(u8, name), try ara.dupe(u8, k.@"1") });
 
         return .{
-            .task_id = .{
+            .id = .{
                 .deployment = deployment_id,
                 .pipeline = pipeline.name,
                 .workspace = config.workspace,

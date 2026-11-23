@@ -61,7 +61,6 @@ pub const magick: [4]u8 = "weft".*;
 
 pub const ClientHello = extern struct {
     magic: [4]u8 = magick,
-    proto_hash: u64 = proto.hash,
     client_public: [Identity.public_length]u8,
     client_temp_pub: [32]u8,
     client_nonce: [24]u8,
@@ -71,7 +70,6 @@ pub const ServerChallenge = extern struct {
     pub const Status = enum(u8) {
         ok = 0,
         unauthorized = 1,
-        proto_mismatch = 2,
     };
 
     status: Status,

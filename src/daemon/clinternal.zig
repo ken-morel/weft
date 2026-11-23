@@ -3,8 +3,8 @@ const log = std.log.scoped;
 
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
+const Task = @import("../domain/Task.zig");
 const zoto = @import("../util/zoto.zig");
-const Task = @import("Task.zig");
 
 pub fn reload(io: std.Io) void {
     const l = log(.clinternal_reloadkeys);

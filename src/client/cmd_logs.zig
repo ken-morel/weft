@@ -2,6 +2,7 @@ const std = @import("std");
 const log = std.log.scoped;
 
 const proto = @import("../domain/proto.zig");
+const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const format_bytes = @import("../util/sizes.zig").format_bytes;
@@ -65,7 +66,7 @@ pub fn run(
 
     const key = try alloc.print("{s}.{s}", .{ remote_name, pipeline_name });
 
-    const task_id: proto.task.Id = .{
+    const task_id: Task.Id = .{
         .workspace = deployment.config.workspace,
         .deployment = deployment.id,
         .pipeline = pipeline_name,
@@ -107,7 +108,7 @@ pub fn run(
 
         const res = client.conn.recv_object(
             req_alloc,
-            proto.Res(proto.task.poll.Res),
+            proto.R(proto.task.poll.Res),
         ) catch |e| {
             l.err("failed to receive poll reply: {any}", .{e});
             return e;

@@ -4,6 +4,7 @@ const log = std.log.scoped;
 const Deployment = @import("../../client/Deployment.zig");
 const paths = @import("../../domain/paths.zig");
 const proto = @import("../../domain/proto.zig");
+const Task = @import("../../domain/Task.zig");
 const supervisor = @import("../../supervisor/supervisor.zig");
 const zoto = @import("../../util/zoto.zig");
 const Connection = @import("../../wire/Connection.zig");
@@ -13,9 +14,8 @@ const clinternal = @import("../clinternal.zig");
 const Daemon = @import("../Daemon.zig");
 const DaemonInstall = @import("../DaemonInstall.zig");
 const Server = @import("../Server.zig");
-const Task = @import("../Task.zig");
 
-pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(proto.task.poll.Res) {
+pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.R(proto.task.poll.Res) {
     const cwd: std.Io.Dir = .cwd();
     const gpa = daemon.gpa;
 
@@ -35,7 +35,7 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(pr
             if (err == error.FileNotFound) {
                 try conn.send_object(
                     response_buf,
-                    proto.Res(proto.task.poll.Res),
+                    proto.R(proto.task.poll.Res),
                     .{
                         .task = req.task,
                         .logs = null,
@@ -81,7 +81,7 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(pr
 
         const usage: ?proto.task.poll.TaskUsage = try task.usage(gpa, io);
 
-        try conn.send_object(response_buf, proto.Res(proto.task.poll.Res), .{
+        try conn.send_object(response_buf, proto.R(proto.task.poll.Res), .{
             .task = req.task,
             .logs = logs,
             .status = status,
@@ -92,7 +92,7 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.Res(pr
     return null;
 }
 
-pub fn kill(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.kill.Res) {
+pub fn kill(daemon: *Daemon, conn: *Connection) proto.R(proto.task.kill.Res) {
     const l = log(.handle_task_kill);
     var arena: std.heap.ArenaAllocator = .init(daemon.gpa);
     defer arena.deinit();
@@ -121,7 +121,7 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    const task: Task = .{ .id = spec.task_id };
+    const task: Task = .{ .id = spec.id };
 
     prune_tasks: {
         const keep_count: usize = if (spec.retention.archive > 0)
@@ -149,7 +149,7 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
             if (entry.kind != .directory)
                 continue;
             const dep_id = try Deployment.Id.parse(entry.name);
-            if (dep_id.eq(spec.task_id.deployment))
+            if (dep_id.eq(spec.id.deployment))
                 continue;
             try ids.append(alloc, dep_id);
         }
@@ -159,8 +159,8 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
         if (ids.items.len > keep_count)
             for (ids.items[keep_count..]) |old_id| {
                 const old_task: Task = .{ .id = .{
-                    .workspace = spec.task_id.workspace,
-                    .pipeline = spec.task_id.pipeline,
+                    .workspace = spec.id.workspace,
+                    .pipeline = spec.id.pipeline,
                     .deployment = old_id,
                 } };
                 if (try old_task.is_active(gpa, io))
@@ -196,7 +196,7 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
             if (entry.kind != .directory)
                 continue;
             const dep_id = try Deployment.Id.parse(entry.name);
-            if (dep_id.eq(spec.task_id.deployment))
+            if (dep_id.eq(spec.id.deployment))
                 continue;
             try ids.append(alloc, dep_id);
         }
@@ -213,7 +213,7 @@ fn apply_retention(gpa: std.mem.Allocator, io: std.Io, spec: Task.Spec) !void {
     }
 }
 
-pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res) {
+pub fn spawn(daemon: *Daemon, conn: *Connection) proto.R(proto.task.spawn.Res) {
     const l = log(.handle_task_spawn);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -222,7 +222,7 @@ pub fn spawn(daemon: *Daemon, conn: *Connection) proto.Res(proto.task.spawn.Res)
 
     const spec = (try conn.recv_object(alloc, proto.task.spawn.Req)).spec;
 
-    const task: Task = .{ .id = spec.task_id };
+    const task: Task = .{ .id = spec.id };
 
     l.info("spawning task {s}/{s}/{d}", .{ task.id.workspace, task.id.pipeline, task.id.deployment });
 

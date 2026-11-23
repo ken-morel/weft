@@ -3,11 +3,11 @@ const log = std.log.scoped;
 
 const paths = @import("../../domain/paths.zig");
 const proto = @import("../../domain/proto.zig");
-const transfer = @import("../../wire/transfer.zig");
 const Connection = @import("../../wire/Connection.zig");
+const transfer = @import("../../wire/transfer.zig");
 const Daemon = @import("../Daemon.zig");
 
-pub fn has(daemon: *Daemon, conn: *Connection) proto.Res(proto.cache.has.Res) {
+pub fn has(daemon: *Daemon, conn: *Connection) proto.R(proto.cache.has.Res) {
     const l = log(.handle_cache_has);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -27,7 +27,7 @@ pub fn has(daemon: *Daemon, conn: *Connection) proto.Res(proto.cache.has.Res) {
         err;
 }
 
-pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.cache.pull.Res) {
+pub fn pull(daemon: *Daemon, conn: *Connection) proto.R(proto.cache.pull.Res) {
     const l = log(.handle_cache_pull);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);
@@ -47,7 +47,7 @@ pub fn pull(daemon: *Daemon, conn: *Connection) proto.Res(proto.cache.pull.Res) 
     return .{};
 }
 
-pub fn push(daemon: *Daemon, conn: *Connection) proto.Res(proto.cache.push.Res) {
+pub fn push(daemon: *Daemon, conn: *Connection) proto.R(proto.cache.push.Res) {
     const l = log(.handle_cache_push);
     const gpa = daemon.gpa;
     var arena: std.heap.ArenaAllocator = .init(gpa);

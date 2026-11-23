@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Task = @import("../daemon/Task.zig");
+const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
 const sizes = @import("../util/sizes.zig");
 

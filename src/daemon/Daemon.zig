@@ -5,6 +5,7 @@ const domain = @import("../domain/domain.zig");
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
 const spawn = @import("../domain/spawn.zig").spawn;
+const Task = @import("../domain/Task.zig");
 const supervisor = @import("../supervisor/supervisor.zig");
 const CGroup2 = @import("../util/CGroup2.zig");
 const zoto = @import("../util/zoto.zig");
@@ -14,7 +15,6 @@ const DaemonInstall = @import("DaemonInstall.zig");
 const handler = @import("handler.zig");
 const Server = @import("Server.zig");
 const StatsServer = @import("StatsServer.zig");
-const Task = @import("Task.zig");
 
 io: std.Io,
 gpa: std.mem.Allocator,
@@ -326,20 +326,14 @@ pub fn connect(self: *@This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !
     const temp_dh = std.crypto.dh.X25519.KeyPair.generate(self.io);
     const out_nonce = try Crypt.Nonce.random(self.io);
 
-    const status: Crypt.ServerChallenge.Status = if (hello.proto_hash == proto.hash)
-        .ok
-    else
-        .proto_mismatch;
     const challenge_msg: Crypt.ServerChallenge = .{
-        .status = status,
+        .status = .ok,
         .challenge = challenge,
         .server_temp_pub = temp_dh.public_key,
         .server_nonce = out_nonce.to_bytes(),
     };
     try writer.writeAll(std.mem.asBytes(&challenge_msg));
     try writer.flush();
-    if (status != .ok)
-        return error.ProtocolMismatch;
 
     var auth: Crypt.ClientAuth = undefined;
     try reader.readSliceAll(std.mem.asBytes(&auth));
