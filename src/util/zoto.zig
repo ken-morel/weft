@@ -171,7 +171,7 @@ fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Wri
     }
 }
 
-pub fn deserialize(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type, opts: Options) DeserializeError!T {
+pub fn deserialize(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type, opts: Options) DeserializeError!T {
     if (opts.header) {
         const header = try readSlice(src, 4);
         if (!std.mem.eql(u8, header, "ZOTO"))
@@ -184,7 +184,7 @@ pub fn deserialize(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type
             return error.TypeMismatch;
     }
 
-    return try deserializeValue(alloc, src, T);
+    return try deserializeValue(ara, src, T);
 }
 
 pub const DeserializeError = std.mem.Allocator.Error || error{
@@ -196,7 +196,7 @@ pub const DeserializeError = std.mem.Allocator.Error || error{
     TypeMismatch,
 };
 
-fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
+fn deserializeValue(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
     switch (@typeInfo(T)) {
         inline .int => return try readInt(src, T),
         inline .float => |f| {
@@ -218,7 +218,7 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
         inline .optional => |o| {
             const has_value = try readByte(src);
             return if (has_value == std.math.maxInt(u8))
-                try deserializeValue(alloc, src, o.child)
+                try deserializeValue(ara, src, o.child)
             else if (has_value == std.math.minInt(u8))
                 null
             else
@@ -228,7 +228,7 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
         inline .@"struct" => |s| {
             var result: T = undefined;
             inline for (s.field_names, s.field_types) |f_name, f_type|
-                @field(result, f_name) = try deserializeValue(alloc, src, f_type);
+                @field(result, f_name) = try deserializeValue(ara, src, f_type);
             return result;
         },
 
@@ -245,7 +245,7 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
                         if (comptime f_type == anyerror)
                             @errorFromInt(try readInt(src, u16))
                         else
-                            try deserializeValue(alloc, src, f_type),
+                            try deserializeValue(ara, src, f_type),
                     );
 
             return error.InvalidUnionTag;
@@ -254,16 +254,14 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
         inline .pointer => |p| switch (p.size) {
             inline .slice => {
                 const len = try readInt(src, u64);
-
-                // u8 are always aligned and thus zero-copy easily
                 if (p.child == u8)
                     return try readSlice(src, len)
-                else if (alloc) |alloc_| {
+                else if (ara) |alloc_| {
                     var slice = try alloc_.alloc(p.child, len);
                     errdefer alloc_.free(slice);
 
                     for (0..len) |i|
-                        slice[i] = try deserializeValue(alloc, src, p.child);
+                        slice[i] = try deserializeValue(ara, src, p.child);
 
                     return slice;
                 } else if (comptime !hasPointers(p.child)) {
@@ -273,11 +271,11 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
                 } else return error.AllocationRequired;
             },
             inline .one => {
-                if (alloc) |alloc_| {
+                if (ara) |alloc_| {
                     const ptr = try alloc_.create(p.child);
                     errdefer alloc_.destroy(ptr);
 
-                    ptr.* = try deserializeValue(alloc, src, p.child);
+                    ptr.* = try deserializeValue(ara, src, p.child);
                     return ptr;
                 } else if (comptime !hasPointers(p.child)) { //BUG: check this
                     const raw_bytes = try readSlice(src, @sizeOf(p.child));
@@ -290,7 +288,7 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
         inline .array => |a| {
             var arr: T = undefined;
             for (0..a.len) |i| {
-                arr[i] = try deserializeValue(alloc, src, a.child);
+                arr[i] = try deserializeValue(ara, src, a.child);
             }
             return arr;
         },
@@ -303,7 +301,7 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
         inline .error_union => |eu| {
             const is_payload = try readByte(src);
             if (is_payload != 0)
-                return try deserializeValue(alloc, src, eu.payload);
+                return try deserializeValue(ara, src, eu.payload);
             const err: eu.error_set = @errorCast(@errorFromInt(try readInt(src, u16)));
             return @as(T, err);
         },
