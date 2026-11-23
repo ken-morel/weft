@@ -157,6 +157,12 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
                 };
                 try conn.send_object(response_buf, @TypeOf(res), res);
             },
+            _ => {
+                const hash = request.hash();
+                const req = request.req();
+                l.err("Received invalid {any} request with hash {d}", .{ req, hash });
+                return error.ProtocolMismatch;
+            },
         }
 
         if (request != .system_stats) {

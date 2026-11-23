@@ -49,10 +49,11 @@ pub fn hashType(comptime T: type) u64 {
 
         .@"enum" => |e| {
             h = (h ^ hashType(e.tag_type)) *% prime;
-            for (e.field_names, e.field_values) |f_name, f_value| {
-                for (f_name) |char|
+            //BUG: f_value is truncated to a u64; may lead to hard to find errors with larger types
+            inline for (e.field_names, e.field_values) |f_name, f_value| {
+                inline for (f_name) |char|
                     h = (h ^ char) *% prime;
-                h = (h ^ @as(u64, f_value)) *% prime;
+                h = (h ^ @as(u64, @truncate(f_value))) *% prime;
             }
         },
 

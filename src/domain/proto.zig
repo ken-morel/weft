@@ -131,30 +131,59 @@ pub const system = struct {
     };
 };
 
-pub const Request = enum(u8) {
-    artifact_push,
-    artifact_pull,
-    artifact_has,
+pub const Request = enum(RR) {
+    const RT = u4; // request type
+    const RH = u64; // request schema hash
+    const RR = @Int(.unsigned, @bitSizeOf(RT) + @bitSizeOf(RH));
 
-    cache_push,
-    cache_pull,
-    cache_has,
+    pub const Type = enum(RT) {
+        artifact_push,
+        artifact_pull,
+        artifact_has,
 
-    task_spawn,
-    task_poll,
-    task_kill,
+        cache_push,
+        cache_pull,
+        cache_has,
 
-    system_stats,
-    const hash = zoto.hashType(@This());
+        task_spawn,
+        task_poll,
+        task_kill,
+
+        system_stats,
+        _,
+    };
+
+    // request
+
+    fn z(comptime h: u64, comptime v: Type) RR {
+        return (@as(RR, @truncate(h)) << @bitSizeOf(RT)) + @backingInt(v);
+    }
+
+    artifact_push = z(artifact.push.hash, .artifact_push),
+    artifact_pull = z(artifact.pull.hash, .artifact_pull),
+    artifact_has = z(artifact.has.hash, .artifact_has),
+
+    cache_push = z(cache.push.hash, .cache_push),
+    cache_pull = z(cache.pull.hash, .cache_pull),
+    cache_has = z(cache.has.hash, .cache_has),
+
+    task_spawn = z(task.spawn.hash, .task_spawn),
+    task_poll = z(task.poll.hash, .task_poll),
+    task_kill = z(task.kill.hash, .task_kill),
+
+    system_stats = z(system.stats.hash, .system_stats),
+    _,
+
+    pub fn hash(self: @This()) RH {
+        return @truncate(@backingInt(self) >> @bitSizeOf(RT));
+    }
+    pub fn req(self: @This()) Type {
+        return @fromBackingInt(@as(RT, @truncate(@backingInt(self))));
+    }
 };
 
 pub const DaemonMsg = union(enum) {
     reload,
+
     const hash = zoto.hashType(@This());
 };
-
-pub const hash = (Request.hash ^ DaemonMsg.hash ^ Pack.hash) ^
-    (artifact.push.hash ^ artifact.push.hash ^ artifact.has.hash) ^
-    (cache.push.hash ^ cache.pull.hash ^ cache.has.hash) ^
-    (task.spawn.hash ^ task.kill.hash ^ task.poll.hash) ^
-    (system.stats.hash);

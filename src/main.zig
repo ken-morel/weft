@@ -356,10 +356,9 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
     switch (parsed) {
         .version => {
             const version_str = std.fmt.comptimePrint(
-                "Weft v{s}#{s}.{s}",
+                "Weft v{s}.{s}",
                 .{ // so that we can inspect this directly from binary
                     comptime build.version_str,
-                    comptime &std.fmt.hex(proto.hash),
                     comptime @tagName(builtin.mode),
                 },
             );
