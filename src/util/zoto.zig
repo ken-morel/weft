@@ -135,7 +135,8 @@ fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Wri
                     @field(value, f_name),
                 );
         },
-        inline .@"enum" => try writer.writeByte(@intCast(@backingInt(value))),
+
+        inline .@"enum" => try writeInt(writer, std.meta.BackingInt(T), @backingInt(value)),
         inline .@"union" => {
             try writer.writeByte(@intCast(@backingInt(std.meta.activeTag(value))));
             switch (value) {
@@ -231,8 +232,7 @@ fn deserializeValue(alloc: ?std.mem.Allocator, src: *[]const u8, comptime T: typ
             return result;
         },
 
-        inline .@"enum" => return @fromBackingInt(@intCast(try readByte(src))),
-
+        inline .@"enum" => return @fromBackingInt(try readInt(src, std.meta.BackingInt(T))),
         inline .@"union" => |u| {
             const tag_id = try readByte(src);
             const tag_type = u.tag_type orelse @compileError("Union must be tagged for zoto: " ++ @typeName(T));
