@@ -132,6 +132,7 @@ pub const Address = union(enum) {
 
     pub fn resolve_leaky(gpa: std.mem.Allocator, ara: std.mem.Allocator, io: std.Io, addr_str: []const u8, inst: ?ClientInstall, proj: ?Project) !@This() {
         const l = log(.remote_address_resolve);
+        l.debug("resolving remote address '{s}'", .{addr_str});
         if (addr_str.len > 0 and (addr_str[0] == '!' or addr_str[0] == '~')) {
             const cmd = try parse_cmd(gpa, addr_str[1..]);
             if (cmd.len == 0) {
@@ -153,6 +154,7 @@ pub const Address = union(enum) {
                 l.err("Could not resolve location of script '{s}' from remote address", .{cmd[0]});
                 return error.ScriptNotFound;
             };
+            l.debug("resolved {s} script '{s}'", .{ if (addr_str[0] == '!') "stdio" else "provider", cmd[0] });
             return if (addr_str[0] == '!')
                 .{ .stdio = cmd }
             else
@@ -167,6 +169,7 @@ pub const Address = union(enum) {
                 host,
                 port,
             ) catch blk: {
+                l.debug("looking up hostname '{s}:{d}'", .{ host, port });
                 var results: [16]std.Io.net.HostName.LookupResult = undefined;
                 var queue: std.Io.Queue(std.Io.net.HostName.LookupResult) = .init(&results);
                 const host_name: std.Io.net.HostName = try .init(host);
@@ -174,7 +177,10 @@ pub const Address = union(enum) {
 
                 break :blk result: while (queue.getOne(io)) |result|
                     switch (result) {
-                        .address => |addr| break :result addr,
+                        .address => |addr| {
+                            l.debug("resolved '{s}:{d}' to {any}", .{ host, port, addr });
+                            break :result addr;
+                        },
                         .canonical_name => {},
                     }
                 else |err| switch (err) {

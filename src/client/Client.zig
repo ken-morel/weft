@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const Project = @import("../client/Project.zig");
 const Server = @import("../daemon/Server.zig");
@@ -31,6 +32,7 @@ buffer: []u8,
 transport: Transport,
 
 fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identity: Identity) !*@This() {
+    const l = log(.client_handshake);
     const self = try gpa.create(@This());
     errdefer gpa.destroy(self);
     const buffer = try gpa.alloc(u8, 8 << 10);
@@ -67,11 +69,13 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
         .client_nonce = out_nonce.to_bytes(),
     };
 
+    l.debug("sending client hello", .{});
     try writer.writeAll(std.mem.asBytes(&hello));
     try writer.flush();
 
     var challenge_msg: Crypt.ServerChallenge = undefined;
     try reader.readSliceAll(std.mem.asBytes(&challenge_msg));
+    l.debug("received server challenge (status: {s})", .{@tagName(challenge_msg.status)});
     switch (challenge_msg.status) {
         .ok => {},
         .unauthorized => return error.ClientUnauthorized,
@@ -83,6 +87,7 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
     const auth: Crypt.ClientAuth = .{
         .signature = sig.toBytes(),
     };
+    l.debug("sending client auth", .{});
     try writer.writeAll(std.mem.asBytes(&auth));
     try writer.flush();
 
@@ -100,16 +105,19 @@ fn create_take(gpa: std.mem.Allocator, io: std.Io, transport: Transport, identit
         .write_crypt = .init(&shared_secret, out_nonce),
         .read_crypt = .init(&shared_secret, in_nonce),
     };
+    l.debug("handshake complete", .{});
     return self;
 }
 
 fn connect(gpa: std.mem.Allocator, io: std.Io, addr: Remote.Address, identity: Identity, env: ?*std.process.Environ.Map) !*@This() {
+    const l = log(.client_connect);
     const transport: Transport = transport: switch (addr) {
         .provided => return error.UnresolvedAddress,
         .stdio => |cmd| {
             if (cmd.len == 0)
                 return error.EmptyCommand;
 
+            l.debug("spawning stdio transport: {s}", .{cmd[0]});
             const child = try std.process.spawn(io, .{
                 .argv = cmd,
                 .stdin = .pipe,
@@ -117,6 +125,7 @@ fn connect(gpa: std.mem.Allocator, io: std.Io, addr: Remote.Address, identity: I
                 .stderr = .inherit,
                 .environ_map = env,
             });
+            l.debug("stdio transport spawned", .{});
             break :transport .{
                 .stdio = .{
                     .child = child,
@@ -126,10 +135,12 @@ fn connect(gpa: std.mem.Allocator, io: std.Io, addr: Remote.Address, identity: I
             };
         },
         .ip => |ip| {
+            l.debug("connecting via TCP to {any}", .{ip});
             const stream = try ip.connect(io, .{
                 .mode = .stream,
                 .protocol = .tcp,
             });
+            l.debug("TCP connection established", .{});
             break :transport .{
                 .net = .{
                     .stream = stream,
@@ -150,6 +161,7 @@ fn connect(gpa: std.mem.Allocator, io: std.Io, addr: Remote.Address, identity: I
 }
 
 pub fn destroy(self: *@This(), alloc: std.mem.Allocator, io: std.Io) void {
+    log(.client_connect).debug("closing {s} transport", .{@tagName(self.transport)});
     switch (self.transport) {
         .net => |*n| n.stream.close(io),
         .stdio => |*s| s.child.kill(io),
@@ -224,7 +236,10 @@ pub const Manager = struct {
         var current = addr;
         const resolved: Remote.Address = for (0..max_resolve_depth) |_| {
             switch (current) {
-                .provided => |cmd| current = try self.resolve_provided(io, cmd),
+                .provided => |cmd| {
+                    log(.client_connect).debug("resolving provider '{s}'", .{cmd[0]});
+                    current = try self.resolve_provided(io, cmd);
+                },
                 .ip, .stdio => break current,
             }
         } else {
@@ -240,8 +255,10 @@ pub const Manager = struct {
         defer self.provider_lock.unlock(io);
 
         const provider: *Provider = for (self.providers.items) |p| {
-            if (Remote.Address.cmd_eql(p.cmd, cmd))
+            if (Remote.Address.cmd_eql(p.cmd, cmd)) {
+                l.debug("reusing cached address provider '{s}'", .{cmd[0]});
                 break p;
+            }
         } else provider: {
             if (cmd.len == 0)
                 return error.EmptyCommand;
@@ -253,6 +270,7 @@ pub const Manager = struct {
             const ara = new_provider.arena.allocator();
 
             new_provider.cmd = try Remote.Address.dupe_cmd(ara, cmd);
+            l.debug("spawning address provider '{s}'", .{cmd[0]});
             new_provider.child = try std.process.spawn(io, .{
                 .argv = new_provider.cmd,
                 .stdin = .ignore,
@@ -264,6 +282,7 @@ pub const Manager = struct {
 
             var buf: [1 << 9]u8 = undefined;
             var reader = (new_provider.child.stdout orelse unreachable).reader(io, &buf);
+            l.debug("waiting for address line from provider '{s}'", .{cmd[0]});
             const line = reader.interface.takeDelimiterExclusive(
                 '\n',
             ) catch |err| {
@@ -271,7 +290,7 @@ pub const Manager = struct {
                 return error.ProviderNoAddress;
             };
             const addr_str = std.mem.trim(u8, line, " \t\r");
-            l.debug("address provider '{s}' returned '{s}'", .{ cmd[0], addr_str }); //debug
+            l.debug("address provider '{s}' returned '{s}'", .{ cmd[0], addr_str });
 
             new_provider.resolved = try Remote.Address.resolve_leaky(ara, ara, io, addr_str, self.inst, self.project);
             try self.providers.append(self.gpa, new_provider);
@@ -281,21 +300,27 @@ pub const Manager = struct {
     }
 
     fn connect_resolved(self: *@This(), io: std.Io, addr: Remote.Address, block: bool) !?*Managed {
+        const l = log(.client_connect);
         try self.lock.lock(io);
         if (addr == .stdio) {
             for (self.clients.items) |m|
                 if (m.address.cmp(addr)) {
                     self.lock.unlock(io);
+                    l.debug("reusing stdio connection for '{s}' (blocking={})", .{ addr.stdio[0], block });
                     if (block) {
                         try m.lock.lock(io);
                         return m;
-                    } else return if (m.lock.tryLock())
-                        m
-                    else
-                        null;
+                    } else if (m.lock.tryLock())
+                        return m
+                    else {
+                        l.debug("stdio connection for '{s}' is busy", .{addr.stdio[0]});
+                        return null;
+                    }
                 };
         }
         defer self.lock.unlock(io);
+
+        l.debug("creating new {s} connection", .{@tagName(addr)});
 
         const client: *Client = try Client.connect(
             self.gpa,

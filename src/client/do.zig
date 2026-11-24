@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped;
 
 const Term = @import("../domain/Term.zig");
 const Connection = @import("../wire/Connection.zig");
@@ -27,6 +28,7 @@ pub fn run(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     var alloc = arena.allocator();
+    const l = log(.cmd_do);
 
     var deployment = switch (do) {
         .start => |start| blk: {
@@ -34,9 +36,11 @@ pub fn run(
             const config = try project.get_config_leaky(alloc, io);
             const deployment = try Deployment.init(io, config, owned_targets);
             try deployment.save(io, project);
+            l.info("starting deployment {s}", .{&deployment.id.to_string()});
             break :blk deployment;
         },
         .retry => |id| blk: {
+            l.info("resuming deployment {s}", .{&id.to_string()});
             var deployment = try project.load_deployment_leaky(gpa, alloc, io, id);
             deployment.config = try project.get_config_leaky(alloc, io);
             break :blk deployment;

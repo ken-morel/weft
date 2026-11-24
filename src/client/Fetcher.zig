@@ -51,6 +51,8 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
+    const l = log(.artifact_fetch);
+    l.debug("checking artifact '{s}' on remote '{s}'", .{ artifact, remote.name });
     const managed_client = try self.clients.connect_blocking(io, remote.address);
     defer managed_client.release(io);
     const client = managed_client.inner;
@@ -68,6 +70,7 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
     try client.conn.send_object(buffer, proto.artifact.has.Req, .{ .id = task_id });
 
     const reply = try try client.conn.recv_object(self.gpa, proto.R(proto.artifact.has.Res));
+    l.debug("remote '{s}' has artifact '{s}': {}", .{ remote.name, artifact, reply.has });
     return reply.has;
 }
 
@@ -136,6 +139,8 @@ pub fn upload(self: *@This(), io: std.Io, remote: *const Remote, artifact: []con
 }
 
 pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !void {
+    const l = log(.artifact_push);
+    l.debug("pushing artifact '{s}' to remote '{s}'", .{ artifact, remote.name });
     try self.view.set_transfer(io, artifact, remote.name, null, .pushing, 0.0, null, null);
     defer self.view.set_transfer(io, artifact, remote.name, null, .ready, 1.0, null, null) catch {};
 
@@ -163,9 +168,11 @@ pub fn push_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact
         artifact,
         self.compress,
     );
+    l.debug("finished pushing artifact '{s}' to remote '{s}'", .{ artifact, remote.name });
 }
 
 pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
+    const l = log(.artifact_pull);
     const remote: *const Remote = remote: {
         try self.depl.lock(io);
         defer self.depl.unlock(io);
@@ -177,6 +184,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         } else return error.ArtifactNotFound;
     };
 
+    l.debug("pulling artifact '{s}' from remote '{s}'", .{ artifact, remote.name });
     try self.view.set_transfer(io, artifact, remote.name, null, .pulling, 0.0, null, null);
     defer self.view.set_transfer(io, artifact, remote.name, null, .ready, 1.0, null, null) catch {};
 
@@ -204,6 +212,7 @@ pub fn pull_artifact(self: *@This(), io: std.Io, artifact: []const u8) !void {
         artifact,
         self.decompress,
     );
+    l.debug("finished pulling artifact '{s}' from remote '{s}'", .{ artifact, remote.name });
 }
 
 pub fn spawn_fetch(self: *@This(), io: std.Io, artifact: []const u8) !void {

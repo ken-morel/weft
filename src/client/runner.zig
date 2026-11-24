@@ -180,10 +180,15 @@ fn poll_remote(
     fetcher: ?*Fetcher,
 ) void {
     const alloc = poll_arena.allocator();
-    const managed = (clients.connect_nonblocking(io, remote.address) catch return) orelse return;
+    const l = log(.poll);
+    const managed = (clients.connect_nonblocking(io, remote.address) catch return) orelse {
+        l.debug("remote '{s}' connection busy, skipping poll", .{remote_name});
+        return;
+    };
     defer managed.release(io);
     const client = managed.inner;
 
+    l.debug("polling {d} task(s) on remote '{s}'", .{ batch.len, remote_name });
     client.conn.send_object(log_buffer, proto.Request, .task_poll) catch return;
 
     poll_batch(
@@ -421,6 +426,8 @@ pub fn run_task(
         return error.InvalidRemote;
     }
 
+    l.info("spawning task '{s}' on remote '{s}' (mode: {s})", .{ step.pipeline, step.remote, step.mode });
+
     const res_status = try deployment.resolve_step(term, step.pipeline, 0);
     const reports_need = switch (res_status) {
         .needs, .needs_failed, .waits => true,
@@ -634,6 +641,8 @@ pub fn spawn_step(
         return error.InvalidRemote;
     }
 
+    l.info("spawning task '{s}' on remote '{s}' (mode: {s})", .{ step.pipeline, step.remote, step.mode });
+
     const script_content = switch (pipeline.run orelse @as(Weft.Pipeline.Run, .{ .file = pipeline.name })) {
         .script => |script_str| inline_script: {
             if (script_str.len == 0) {
@@ -678,6 +687,8 @@ pub fn spawn_step(
         script_content,
     );
 
+    if (spec.inputs.len > 0)
+        l.debug("uploading {d} input(s) for '{s}' to '{s}'", .{ spec.inputs.len, step.pipeline, step.remote });
     for (spec.inputs) |input|
         try fetcher.upload(io, remote, input);
 
@@ -687,6 +698,7 @@ pub fn spawn_step(
     try view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .preparing });
 
     spawn_task: {
+        l.debug("connecting to '{s}' to spawn '{s}'", .{ step.remote, step.pipeline });
         const managed = try fetcher.clients.connect_blocking(io, remote.address);
         defer managed.release(io);
         const client = managed.inner;
@@ -704,9 +716,10 @@ pub fn spawn_step(
             return;
         };
 
-        if (res) |_|
-            try view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .running })
-        else |err| {
+        if (res) |_| {
+            l.debug("task '{s}' spawned on '{s}'", .{ step.pipeline, step.remote });
+            try view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .running });
+        } else |err| {
             fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
             return;
         }
