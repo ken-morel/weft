@@ -27,6 +27,12 @@ jobs:
           strip zig-out/bin/weft
           tar -czf weft-linux-x86_64.tar.gz -C zig-out/bin weft
 
+      - name: Move nightly tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          git tag -f nightly "${GITHUB_SHA}"
+          git push -f origin refs/tags/nightly
+
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
