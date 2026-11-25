@@ -161,62 +161,70 @@ A project is defined by `weft/weft.zon`, pipeline scripts in `weft/`, and option
             └── <cache>/    # Pulled workspace caches
 ```
 
-### Root Schema (`src/domain/Weft.zig`)
+### Root Schema (`weft/weft.zon`)
 
-Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `deployment.zon`) use **ZOTON** (valid ZON syntax parsed via `src/util/zoton.zig`, supporting `zoton.Map`, `zoton.NamedMap`, closed error sets, and error unions). Keys containing characters such as `-` or `.` use standard ZON identifier quoting (`.@"my-pipeline" = .{ ... }`).
+Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `deployment.zon`) use **ZOTON** (valid ZON syntax parsed via `src/util/zoton.zig`, supporting keyed maps, closed error sets, and error unions). Keys containing characters such as `-` or `.` use standard ZON identifier quoting (`.@"my-pipeline" = .{ ... }`).
 
 ```zig
-modes: []const []const u8 = &.{"default"},
-environments: zoton.NamedMap(.name, Env) = .{},
-workspace: []const u8,
-sources: ?zoton.Map([]const u8) = null,
-
-pipelines: zoton.NamedMap(.name, Pipeline) = .{},
-remotes: zoton.NamedMap(.name, Remote) = .{
-    .items = &.{.{ .name = "local", .groups = "local" }},
-},
-retention: Retention = .{
-    .archive = 10,
-    .artifacts = 2,
-},
+.{
+    .workspace = "myapp",
+    .modes = .{ "default", "prod" },
+    .retention = .{ .archive = 10, .artifacts = 2 },
+    .sources = .{
+        .backend = "backend/",
+        .web = "web/",
+    },
+    .environments = .{
+        .bun = .{ .pkgs = .{"qkydg77xf2s395md9fq0a6djjpq7fzh4-bun-1.4.2"} },
+    },
+    .pipelines = .{
+        .@"web-build" = .{
+            .on = .{"build"},
+            .in = .{"-web"},
+            .keep = .{ .@"web-modules" = "node_modules/" },
+            .env = .{ .uses = .{"bun"} },
+        },
+    },
+    .remotes = .{
+        .local = .{ .groups = "build run" },
+        .prod = .{ .address = "195.201.10.42:9338", .groups = "run" },
+    },
+}
 ```
 
-- `workspace`: Project identifier used by remote daemons to namespace state on disk. Must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
-- `modes`: Valid execution modes accepted in `<mode>:<remote>.<pipeline>` targets and `<mode>:<item>` conditional configuration entries.
-- `sources`: Optional map of source names to project-relative directories (e.g. `.sources = .{ .backend = "backend/", .web = "web/" }`). When `null`, defaults to `.{ .src = "." }`.
-- `retention`: Number of recent deployments for which a remote daemon retains harvested output directories (`artifacts`, default `2`) and task status/log records (`archive`, default `10`). Enforced automatically whenever a new task is spawned.
+- `workspace` (`[]const u8`, required): Project identifier used by remote daemons to namespace state on disk. Must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
+- `modes` (`[]const []const u8`, default `.{"default"}`): Valid execution modes accepted in `<mode>:<remote>.<pipeline>` targets and `<mode>:<item>` conditional configuration entries.
+- `sources` (optional map of `<name> = "<relative_dir>"`): When omitted or `null`, defaults to `.{ .src = "." }`.
+- `environments` (map of `<name> = .{ ... }`, default `.{}`): Reusable package/variable bundles referenced from pipeline `.env.uses`.
+- `pipelines` (map of `<name> = .{ ... }`, default `.{}`): Task definitions.
+- `remotes` (map of `<name> = .{ ... }`, default `.{ .local = .{ .groups = "local" } }`): Target hosts.
+- `retention` (default `.{ .archive = 10, .artifacts = 2 }`): Number of recent deployments for which a remote daemon retains harvested output directories (`artifacts`) and task status/log records (`archive`). Enforced automatically whenever a new task is spawned.
 
 ---
 
 ### `.pipelines`
 
-`.pipelines` is a `zoton.NamedMap(.name, Pipeline)`: each pipeline is declared as a field under `.pipelines = .{ .<name> = .{ ... } }`, and the field name is assigned to `Pipeline.name` automatically. Pipeline names must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
+Each entry under `.pipelines` is declared as `.<name> = .{ ... }`; the key is the pipeline's identifier (do not specify a `.name` field inside the entry). Pipeline names must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
 
 ```zig
-pub const Pipeline = struct {
-    const Input = []const u8;
-    const Output = []const u8;
-
-    name: []const u8,
-    in: []const Input = &.{},
-    out: ?[]const Output = null,
-    run: ?Run = null,
-    tune: Tune = .{},
-    timeout: ?u32 = null,
-    retries: u16 = 10,
-    restart: bool = false,
-    retention: ?Retention = null,
-
-    sibling: HandleSibling = .{ .then = .ignore },
-    keep: zoton.Map([]const u8) = .{},
-    on: ?[]const []const u8 = null,
-
-    env: struct {
-        uses: []const []const u8 = &.{},
-        vars: zoton.Map(?[]const u8) = .{},
-        pkgs: []const []const u8 = &.{},
-    } = .{},
-};
+.{
+    .in = .{},                            // []const []const u8
+    .out = null,                          // ?[]const []const u8
+    .run = null,                          // ?Run (.{ .script = ... }, .{ .file = ... }, .nothing)
+    .tune = .{},                          // Tune
+    .timeout = null,                      // ?u32 (seconds)
+    .retries = 10,                        // u16
+    .restart = false,                     // bool
+    .retention = null,                    // ?Retention
+    .sibling = .{ .then = .ignore },      // HandleSibling
+    .keep = .{},                          // map of <cache_name> = "<relative_path>"
+    .on = null,                           // ?[]const []const u8
+    .env = .{
+        .uses = .{},                      // []const []const u8
+        .vars = .{},                      // map of <KEY> = "<value>" | null
+        .pkgs = .{},                      // []const []const u8
+    },
+}
 ```
 
 #### `.in` and `.out`
@@ -282,19 +290,39 @@ Determines how the supervisor handles existing active tasks for the same `<works
   - `.fail`: Fails the new task immediately.
   - `.skip`: Marks the new task `.skipped` and exits without running the script.
 
-#### `.env` and `.env` Files
+#### `.env`, `.environments`, and `.env` Files
+
+Top-level `.environments` entries are declared as `.<name> = .{ .uses = ..., .pkgs = ..., .vars = ... }` (without a `.name` field):
 
 ```zig
-env: struct {
-    uses: []const []const u8 = &.{},
-    vars: zoton.Map(?[]const u8) = .{},
-    pkgs: []const []const u8 = &.{},
-} = .{},
+.environments = .{
+    .db = .{
+        .vars = .{
+            .DATABASE_URL = "postgresql://postgres:@localhost:6100/myapp",
+        },
+    },
+    .bun = .{
+        .pkgs = .{"qkydg77xf2s395md9fq0a6djjpq7fzh4-bun-1.4.2"},
+    },
+},
 ```
 
-- `uses`: Names of top-level `.environments` entries (`zoton.NamedMap(.name, Env)`) to inherit (supports up to 100 levels of nesting and `<mode>:` prefixes).
+Each pipeline's `.env` uses the same fields:
+
+```zig
+.env = .{
+    .uses = .{ "db", "bun" },
+    .pkgs = .{},
+    .vars = .{
+        .PORT = "8080",
+        .DATABASE_URL = null,
+    },
+},
+```
+
+- `uses`: Names of top-level `.environments` entries to inherit (supports up to 100 levels of nesting and `<mode>:` prefixes).
 - `pkgs`: Nix store package names (`"<hash>-<name>-<version>"`) to unpack and prepend to `PATH` (supports `<mode>:` prefixes).
-- `vars`: Map of variable names to values or `null` (`.vars = .{ .PORT = "8080", .DATABASE_URL = null }`; keys support `<mode>:` prefixes). When the value is `null`, Weft resolves `<KEY>` from project `.env` files in the following order:
+- `vars`: Map of variable names to values or `null` (keys support `<mode>:` prefixes). When the value is `null`, Weft resolves `<KEY>` from project `.env` files in the following order:
   1. `.env.<pipeline_or_env_name>` in the project root
   2. `.env` in the project root
   3. Inherited parent environments listed in `uses`
