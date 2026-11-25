@@ -180,15 +180,10 @@ fn poll_remote(
     fetcher: ?*Fetcher,
 ) void {
     const alloc = poll_arena.allocator();
-    const l = log(.poll);
-    const managed = (clients.connect_nonblocking(io, remote.address) catch return) orelse {
-        l.debug("remote '{s}' connection busy, skipping poll", .{remote_name});
-        return;
-    };
+    const managed = (clients.connect_nonblocking(io, remote.address) catch return) orelse return;
     defer managed.release(io);
     const client = managed.inner;
 
-    l.debug("polling {d} task(s) on remote '{s}'", .{ batch.len, remote_name });
     client.conn.send_object(log_buffer, proto.Request, .task_poll) catch return;
 
     poll_batch(
@@ -703,7 +698,6 @@ pub fn spawn_step(
     try view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .preparing });
 
     spawn_task: {
-        l.debug("connecting to '{s}' to spawn '{s}'", .{ step.remote, step.pipeline });
         const managed = try fetcher.clients.connect_blocking(io, remote.address);
         defer managed.release(io);
         const client = managed.inner;

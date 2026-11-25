@@ -1,13 +1,12 @@
 #!/bin/bash
 
-set -eu
+set -euo pipefail
 
-cp -r $IN/-site/* ./
+cp -r "$IN/-site/." ./
 
 if [[ "$WEFT_PIPELINE" == *"fetch"* ]]; then
     bun install
 else
-    bun install --offline --frozen-lockfile || true
-    bun run build
-    cp -r build/* $OUT/site-build/
+    bun run --bun build
+    cp -r build/. "$OUT/site-build/"
 fi

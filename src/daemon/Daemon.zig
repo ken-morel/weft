@@ -101,7 +101,6 @@ pub fn run_client_server(self: *@This()) !void {
                 continue :req;
             };
 
-        l.debug("accepted client connection", .{});
         _ = try spawn(self.io, &group, handler.handle, .{ self, &permits, stream });
     }
 }
@@ -306,7 +305,6 @@ pub fn connect(self: *@This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !
     const l = log(.client_server);
     var hello: Crypt.ClientHello = undefined;
     try reader.readSliceAll(std.mem.asBytes(&hello));
-    l.debug("received client hello", .{});
     if (!std.mem.eql(u8, &hello.magic, &Crypt.magick))
         return error.InvalidProtocol;
 
@@ -336,7 +334,6 @@ pub fn connect(self: *@This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !
     };
     try writer.writeAll(std.mem.asBytes(&challenge_msg));
     try writer.flush();
-    l.debug("sent server challenge", .{});
 
     var auth: Crypt.ClientAuth = undefined;
     try reader.readSliceAll(std.mem.asBytes(&auth));
@@ -344,7 +341,6 @@ pub fn connect(self: *@This(), reader: *std.Io.Reader, writer: *std.Io.Writer) !
     const sign_data = Crypt.make_sign_data(&challenge, &temp_dh.public_key);
     Crypt.Identity.verify(hello.client_public, &sign_data, auth.signature) catch
         return error.AuthenticationFailed;
-    l.debug("client authenticated", .{});
 
     const shared_secret = try std.crypto.dh.X25519.scalarmult(
         temp_dh.secret_key,

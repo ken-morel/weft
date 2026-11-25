@@ -514,6 +514,27 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
     log.info("task completed and outputs harvested", .{});
 }
 
+fn bring_up_loopback() !void {
+    const linux = std.os.linux;
+    const sock_rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM | linux.SOCK.CLOEXEC, 0);
+    if (linux.errno(sock_rc) != .SUCCESS)
+        return error.LoopbackSocketFailed;
+    const fd: linux.fd_t = @intCast(sock_rc);
+    defer _ = linux.close(fd);
+
+    var ifr: linux.ifreq = std.mem.zeroes(linux.ifreq);
+    @memcpy(ifr.ifrn.name[0..2], "lo");
+
+    if (linux.errno(linux.ioctl(fd, linux.SIOCGIFFLAGS, @intFromPtr(&ifr))) != .SUCCESS)
+        return error.LoopbackGetFlagsFailed;
+
+    ifr.ifru.flags.UP = true;
+    ifr.ifru.flags.RUNNING = true;
+
+    if (linux.errno(linux.ioctl(fd, linux.SIOCSIFFLAGS, @intFromPtr(&ifr))) != .SUCCESS)
+        return error.LoopbackSetFlagsFailed;
+}
+
 pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonInstall.Isolate) !void {
     reset_signals_mask: {
         const empty_mask = std.os.linux.sigemptyset();
@@ -551,6 +572,8 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
 
         if (std.os.linux.errno(std.os.linux.unshare(flags)) != .SUCCESS)
             return error.UnshareFailed;
+        if (isolate.net and spec.tune.net.private)
+            try bring_up_loopback();
         l.debug("unshared namespaces", .{}); //debug
 
         try mount.isolate();
@@ -792,6 +815,7 @@ pub fn spawner(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: DaemonIn
         if (isolate.net and spec.tune.net.private) {
             if (std.os.linux.errno(std.os.linux.unshare(std.os.linux.CLONE.NEWNET)) != .SUCCESS)
                 return error.UnshareFailed;
+            try bring_up_loopback();
         }
 
         try cwd.createDirPath(io, "/nix");

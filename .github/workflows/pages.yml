@@ -3,7 +3,7 @@ name: Pages
 on:
   push:
     branches: [dev]
-    paths: ['site/**', '.github/workflows/pages.yml']
+    paths: ['site/**', 'weft/**', 'action.yml', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -18,27 +18,29 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: site
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: ./
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: site/package-lock.json
+          version: nightly
+          daemon: kvm-small
+          cache-nix: true
+          cache-keep: true
 
-      - run: npm ci
-      - run: npm run check
-      - run: npm run build
-        env:
-          BASE_PATH: /${{ github.event.repository.name }}
+      - name: Check Weft workspace
+        run: weft check
+
+      - name: Test and build site with Weft
+        run: weft do site-fetch - site-test - pages:site-build
+
+      - name: Locate site-build artifact
+        id: artifact
+        run: echo "path=$(weft artifact path site-build)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/build
+          path: ${{ steps.artifact.outputs.path }}
 
   deploy:
     needs: build

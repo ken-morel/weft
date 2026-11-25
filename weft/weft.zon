@@ -1,48 +1,63 @@
 .{
     .workspace = "weft",
+    .modes = .{ "default", "pages" },
     .remotes = .{
-        .{ "local", null, "local" },
+        .local = .{ .groups = "local" },
     },
     .sources = .{
-        .{ "site", "site/" },
+        .site = "site/",
     },
     .environments = .{
-        .{
-            .name = "bun",
+        .bun = .{
             .pkgs = .{
                 "qkydg77xf2s395md9fq0a6djjpq7fzh4-bun-1.4.2",
             },
         },
     },
     .pipelines = .{
-        .{
-            .name = "site-fetch",
+        .@"site-fetch" = .{
             .in = .{"-site"},
+            .out = .{},
             .run = .{ .file = "site-build" },
             .keep = .{
-                .{ "web-modules", "node_modules/" },
+                .@"web-modules" = "node_modules/",
             },
             .env = .{ .uses = .{"bun"} },
         },
-        .{
-            .name = "site-build",
+        .@"site-test" = .{
             .in = .{"-site"},
+            .out = .{},
             .keep = .{
-                .{ "web-modules", "node_modules/" },
+                .@"web-modules" = "node_modules/",
             },
             .tune = .{
                 .net = .{ .private = true },
             },
             .env = .{ .uses = .{"bun"} },
         },
-        .{
-            .name = "site-run",
+        .@"site-build" = .{
+            .in = .{"-site"},
+            .keep = .{
+                .@"web-modules" = "node_modules/",
+            },
+            .tune = .{
+                .net = .{ .private = true },
+            },
+            .env = .{
+                .uses = .{"bun"},
+                .vars = .{
+                    .@"pages:BASE_PATH" = "/weft",
+                },
+            },
+        },
+        .@"site-run" = .{
             .in = .{"site-build"},
+            .out = .{},
             .sibling = .{ .then = .kill },
             .env = .{
                 .uses = .{"bun"},
                 .vars = .{
-                    .{ "PORT", "6080" },
+                    .PORT = "6080",
                 },
             },
         },

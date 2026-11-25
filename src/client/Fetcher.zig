@@ -51,8 +51,6 @@ pub fn deinit(self: *@This(), io: std.Io) void {
 }
 
 pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact: []const u8) !bool {
-    const l = log(.artifact_fetch);
-    l.debug("checking artifact '{s}' on remote '{s}'", .{ artifact, remote.name });
     const managed_client = try self.clients.connect_blocking(io, remote.address);
     defer managed_client.release(io);
     const client = managed_client.inner;
@@ -70,7 +68,6 @@ pub fn has_artifact(self: *@This(), io: std.Io, remote: *const Remote, artifact:
     try client.conn.send_object(buffer, proto.artifact.has.Req, .{ .id = task_id });
 
     const reply = try try client.conn.recv_object(self.gpa, proto.R(proto.artifact.has.Res));
-    l.debug("remote '{s}' has artifact '{s}': {}", .{ remote.name, artifact, reply.has });
     return reply.has;
 }
 

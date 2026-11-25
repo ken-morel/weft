@@ -58,10 +58,8 @@ fn _run(daemon: *Daemon, stream: std.Io.net.Stream) !void {
     while (true) {
         var req_buffer: [1 << 5]u8 = undefined;
         const request = conn.recv_object_buf(&req_buffer, proto.Request) catch |err| {
-            if (err == error.EndOfStream) {
-                l.debug("client disconnected", .{});
+            if (err == error.EndOfStream)
                 return;
-            }
             return if (err == error.BufferTooSmall)
                 error.InvalidRequest
             else

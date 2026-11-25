@@ -26,10 +26,22 @@ sudo chmod +x /usr/local/bin/weft
 
 #### GitHub Actions
 
+Supports Linux `x86_64` and `aarch64` runners.
+
 ```yaml
 - uses: ken-morel/weft@nightly
   with:
-    version: nightly
+    version: nightly         # Release tag (default: nightly)
+    daemon: kvm-small        # Optional: install & start local daemon (e.g. kvm, kvm-small, lxc, vz, default)
+    client-key: ${{ secrets.WEFT_CLIENT_KEY }}     # Optional: 64-char hex or base64 of ~/.config/weft/key
+    client-config: |         # Optional: ~/.config/weft/config.zon
+      .{ .remotes = .{ .local = "127.0.0.1:9338", .prod = "195.201.10.42:9338" } }
+    daemon-config: |         # Optional: /etc/weft/weft.zon
+      .{ .port = 9338 }
+    authorized-keys: |       # Optional: newline-separated 64-char hex Ed25519 public keys
+      ...
+    cache-nix: true          # Optional: cache /var/lib/weft/nix/store
+    cache-keep: true         # Optional: 'true' (auto-detect from weft/weft.zon) or workspace name(s)
 ```
 
 #### Building from Source

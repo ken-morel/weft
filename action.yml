@@ -1,18 +1,273 @@
 name: "Setup Weft"
-description: "Downloads and installs the pre-built Weft binary"
+description: "Install Weft, optionally configure client/daemon, authorize keys, and cache Nix store and workspace keep directories"
+
 inputs:
   version:
     description: "Release tag to install (e.g. nightly or a specific release tag like v0.1.0)"
     required: false
     default: "nightly"
+  daemon:
+    description: "Daemon install template (e.g. kvm, kvm-small, lxc, vz, or default). Omit to skip installing the local daemon."
+    required: false
+    default: ""
+  client-config:
+    description: "Contents of the client configuration file (~/.config/weft/config.zon)"
+    required: false
+    default: ""
+  client-key:
+    description: "Client Ed25519 private key seed (64-char hex or base64 of the 32-byte key file) written to ~/.config/weft/key"
+    required: false
+    default: ""
+  daemon-config:
+    description: "Contents of the daemon configuration file (/etc/weft/weft.zon)"
+    required: false
+    default: ""
+  authorized-keys:
+    description: "Newline-separated 64-character hex Ed25519 client public keys to authorize on the daemon (/etc/weft/keys)"
+    required: false
+    default: ""
+  cache-nix:
+    description: "Cache Weft's Nix store (/var/lib/weft/nix/store) across workflow runs (true/false)"
+    required: false
+    default: "false"
+  cache-keep:
+    description: "Cache workspace keep directories (/var/lib/weft/workspace/<ws>/keep). Set to 'true' to auto-detect the workspace from weft/weft.zon, or pass workspace name(s) separated by commas or newlines."
+    required: false
+    default: ""
+  cache-key-prefix:
+    description: "Prefix for GitHub Actions cache keys"
+    required: false
+    default: "weft"
+
+outputs:
+  arch:
+    description: "Detected Linux architecture (x86_64 or aarch64)"
+    value: ${{ steps.install.outputs.arch }}
+  public-key:
+    description: "Client 64-character hex Ed25519 public key"
+    value: ${{ steps.client.outputs.public-key }}
+
 runs:
   using: "composite"
   steps:
     - name: Download and install Weft
+      id: install
       shell: bash
+      env:
+        WEFT_VERSION: ${{ inputs.version }}
       run: |
-        echo "Installing Weft (${{ inputs.version }})..."
-        curl -fsSL "https://github.com/ken-morel/weft/releases/download/${{ inputs.version }}/weft-linux-x86_64.tar.gz" | sudo tar -xz -C /usr/local/bin
+        set -euo pipefail
+
+        OS="$(uname -s)"
+        if [ "$OS" != "Linux" ]; then
+          echo "::error::Weft only supports Linux runners (detected: ${OS})"
+          exit 1
+        fi
+
+        case "$(uname -m)" in
+          x86_64|amd64) ARCH="x86_64" ;;
+          aarch64|arm64) ARCH="aarch64" ;;
+          *)
+            echo "::error::Unsupported architecture: $(uname -m)"
+            exit 1
+            ;;
+        esac
+
+        echo "arch=${ARCH}" >> "$GITHUB_OUTPUT"
+        echo "Installing Weft (${WEFT_VERSION}, linux-${ARCH})..."
+        curl -fsSL "https://github.com/ken-morel/weft/releases/download/${WEFT_VERSION}/weft-linux-${ARCH}.tar.gz" \
+          | sudo tar -xz -C /usr/local/bin
         sudo chmod +x /usr/local/bin/weft
         weft version
         echo "Weft installed successfully to /usr/local/bin/weft"
+
+    - name: Configure Weft client
+      id: client
+      shell: bash
+      env:
+        CLIENT_KEY: ${{ inputs.client-key }}
+        CLIENT_CONFIG: ${{ inputs.client-config }}
+      run: |
+        set -euo pipefail
+
+        CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/weft"
+        mkdir -p "$CONFIG_DIR"
+
+        if [ -n "$CLIENT_KEY" ]; then
+          TRIMMED="$(printf '%s' "$CLIENT_KEY" | tr -d '[:space:]')"
+          umask 077
+          if [[ "$TRIMMED" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            if command -v xxd >/dev/null 2>&1; then
+              printf '%s' "$TRIMMED" | xxd -r -p > "$CONFIG_DIR/key"
+            elif command -v python3 >/dev/null 2>&1; then
+              python3 -c 'import sys; sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))' "$TRIMMED" > "$CONFIG_DIR/key"
+            else
+              printf "$(printf '%s' "$TRIMMED" | sed 's/../\\x&/g')" > "$CONFIG_DIR/key"
+            fi
+          else
+            printf '%s' "$TRIMMED" | base64 -d > "$CONFIG_DIR/key"
+          fi
+          chmod 600 "$CONFIG_DIR/key"
+          KEY_SIZE="$(wc -c < "$CONFIG_DIR/key")"
+          if [ "$KEY_SIZE" -ne 32 ]; then
+            rm -f "$CONFIG_DIR/key"
+            echo "::error::client-key must decode to exactly 32 bytes (got ${KEY_SIZE}). Provide a 64-char hex string or base64-encoded 32-byte key."
+            exit 1
+          fi
+          echo "Configured client key at ${CONFIG_DIR}/key"
+        fi
+
+        if [ -n "$CLIENT_CONFIG" ]; then
+          printf '%s\n' "$CLIENT_CONFIG" > "$CONFIG_DIR/config.zon"
+          echo "Configured client config at ${CONFIG_DIR}/config.zon"
+        fi
+
+        PUBKEY="$(weft key)"
+        echo "public-key=${PUBKEY}" >> "$GITHUB_OUTPUT"
+
+    - name: Prepare Weft cache directories
+      id: prep-cache
+      if: ${{ inputs.cache-nix == 'true' || (inputs.cache-keep != '' && inputs.cache-keep != 'false') }}
+      shell: bash
+      env:
+        CACHE_NIX: ${{ inputs.cache-nix }}
+        CACHE_KEEP: ${{ inputs.cache-keep }}
+      run: |
+        set -euo pipefail
+
+        RUNNER_UID="$(id -u)"
+        RUNNER_GID="$(id -g)"
+
+        if [ "$CACHE_NIX" = "true" ]; then
+          sudo mkdir -p /var/lib/weft/nix/store
+          sudo chown "${RUNNER_UID}:${RUNNER_GID}" /var/lib/weft/nix /var/lib/weft/nix/store
+        fi
+
+        if [ -n "$CACHE_KEEP" ] && [ "$CACHE_KEEP" != "false" ]; then
+          WORKSPACES=()
+          if [ "$CACHE_KEEP" = "true" ]; then
+            if [ ! -f "weft/weft.zon" ]; then
+              echo "::error::cache-keep=true requires weft/weft.zon in the working directory. Run actions/checkout first or pass explicit workspace name(s) in cache-keep."
+              exit 1
+            fi
+            WS="$(sed -nE 's/^[[:space:]]*\.workspace[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' weft/weft.zon | head -n1)"
+            if [ -z "$WS" ]; then
+              echo "::error::Could not detect .workspace in weft/weft.zon. Pass explicit workspace name(s) in cache-keep."
+              exit 1
+            fi
+            WORKSPACES+=("$WS")
+          else
+            while IFS= read -r token; do
+              token="${token#"${token%%[![:space:]]*}"}"
+              token="${token%"${token##*[![:space:]]}"}"
+              [ -z "$token" ] && continue
+              if [[ ! "$token" =~ ^[A-Za-z][A-Za-z0-9-]*$ ]]; then
+                echo "::error::Invalid workspace name in cache-keep: '${token}'"
+                exit 1
+              fi
+              WORKSPACES+=("$token")
+            done < <(printf '%s\n' "$CACHE_KEEP" | tr ',' '\n')
+          fi
+
+          KEEP_PATHS=""
+          WS_SLUG=""
+          for ws in "${WORKSPACES[@]}"; do
+            WS_DIR="/var/lib/weft/workspace/${ws}"
+            sudo mkdir -p "${WS_DIR}/keep"
+            sudo chown "${RUNNER_UID}:${RUNNER_GID}" "${WS_DIR}" "${WS_DIR}/keep"
+            if [ ! -f "${WS_DIR}/uid" ]; then
+              printf '%s\n' "$RUNNER_UID" | sudo tee "${WS_DIR}/uid" >/dev/null
+            fi
+            KEEP_PATHS+="${WS_DIR}/keep"$'\n'
+            if [ -n "$WS_SLUG" ]; then
+              WS_SLUG+="-${ws}"
+            else
+              WS_SLUG="${ws}"
+            fi
+          done
+
+          {
+            echo "keep-paths<<EOF_KEEP_PATHS"
+            printf '%s' "$KEEP_PATHS"
+            echo "EOF_KEEP_PATHS"
+          } >> "$GITHUB_OUTPUT"
+          echo "workspaces=${WS_SLUG}" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Cache Weft Nix store
+      if: ${{ inputs.cache-nix == 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: /var/lib/weft/nix/store
+        key: ${{ inputs.cache-key-prefix }}-nix-${{ steps.install.outputs.arch }}-${{ hashFiles('weft/weft.zon') || github.sha }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-nix-${{ steps.install.outputs.arch }}-
+
+    - name: Cache Weft workspace keep directories
+      if: ${{ steps.prep-cache.outputs.keep-paths != '' }}
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.prep-cache.outputs.keep-paths }}
+        key: ${{ inputs.cache-key-prefix }}-keep-${{ steps.install.outputs.arch }}-${{ steps.prep-cache.outputs.workspaces }}-${{ github.ref_name }}-${{ github.sha }}
+        restore-keys: |
+          ${{ inputs.cache-key-prefix }}-keep-${{ steps.install.outputs.arch }}-${{ steps.prep-cache.outputs.workspaces }}-${{ github.ref_name }}-
+          ${{ inputs.cache-key-prefix }}-keep-${{ steps.install.outputs.arch }}-${{ steps.prep-cache.outputs.workspaces }}-
+
+    - name: Install and configure Weft daemon
+      if: ${{ inputs.daemon != '' || inputs.daemon-config != '' || inputs.authorized-keys != '' }}
+      shell: bash
+      env:
+        DAEMON_TEMPLATE: ${{ inputs.daemon }}
+        DAEMON_CONFIG: ${{ inputs.daemon-config }}
+        AUTHORIZED_KEYS: ${{ inputs.authorized-keys }}
+        CLIENT_PUBKEY: ${{ steps.client.outputs.public-key }}
+      run: |
+        set -euo pipefail
+
+        sudo mkdir -p /etc/weft
+
+        if [ -n "$DAEMON_TEMPLATE" ]; then
+          if [ "$DAEMON_TEMPLATE" = "default" ] || [ "$DAEMON_TEMPLATE" = "true" ]; then
+            sudo weft daemon install
+          else
+            sudo weft daemon install "$DAEMON_TEMPLATE"
+          fi
+        fi
+
+        if [ -n "$DAEMON_CONFIG" ]; then
+          printf '%s\n' "$DAEMON_CONFIG" | sudo tee /etc/weft/weft.zon >/dev/null
+          sudo chmod 600 /etc/weft/weft.zon
+          echo "Configured daemon config at /etc/weft/weft.zon"
+
+          if [ -n "$DAEMON_TEMPLATE" ]; then
+            if [ -d /run/systemd/system ]; then
+              sudo systemctl restart weft.service
+            elif [ -d /run/runit/runsvdir ]; then
+              sudo sv restart weft
+            elif [ -d /run/openrc ]; then
+              sudo rc-service weft restart
+            else
+              sudo weft daemon reload
+            fi
+          fi
+        fi
+
+        if [ -n "$DAEMON_TEMPLATE" ]; then
+          for _ in $(seq 1 50); do
+            [ -S /run/weft/weft.pipe ] && break
+            sleep 0.1
+          done
+          sudo weft daemon register "$CLIENT_PUBKEY"
+          echo "Registered runner client key with local daemon"
+        fi
+
+        if [ -n "$AUTHORIZED_KEYS" ]; then
+          while IFS= read -r line; do
+            line="${line%%#*}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "$line" ] && continue
+            sudo weft daemon register "$line"
+          done <<< "$AUTHORIZED_KEYS"
+          echo "Configured authorized daemon keys"
+        fi

@@ -7,6 +7,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Strip debug symbols from the binary");
 
     const options = b.addOptions();
     options.addOption([]const u8, "version_str", @import("build.zig.zon").version);
@@ -16,6 +17,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = strip,
         .imports = &.{
             .{ .name = "build", .module = options.createModule() },
         },
