@@ -4,6 +4,7 @@ const log = std.log.scoped;
 const DotEnv = @import("../domain/DotEnv.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
+const zoton = @import("../util/zoton.zig");
 const Deployment = @import("Deployment.zig");
 
 dir: std.Io.Dir,
@@ -43,13 +44,7 @@ pub fn get_config_leaky(self: @This(), ara: std.mem.Allocator, io: std.Io) !Weft
             return error.ConfigNotFound
         else
             return err;
-    var diag: std.zon.parse.Diagnostics = .{
-        .errors = &.{undefined},
-    };
-    return std.zon.parse.fromSlice(Weft, .{ .gpa = ara, .arena = ara, .source = content, .diagnostics = &diag }) catch |err| {
-        diag.log("weft/weft.zon");
-        return err;
-    };
+    return try zoton.deserialize_leaky(ara, ara, content, Weft);
 }
 
 pub inline fn open_deployments_dir(self: @This(), io: std.Io) !std.Io.Dir {
@@ -184,10 +179,7 @@ pub fn load_deployment_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem
         return err;
     };
 
-    var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
-
-    //TODO: Log diagnostics and errors here
-    return try std.zon.parse.fromSlice(Deployment, .{ .gpa = gpa, .arena = ara, .source = content, .diagnostics = &diag });
+    return try zoton.deserialize_leaky(gpa, ara, content, Deployment);
 }
 
 pub fn locate_script_in_dir(io: std.Io, dir: std.Io.Dir, gpa: std.mem.Allocator, name: []const u8) !?[:0]const u8 {

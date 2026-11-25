@@ -1,4 +1,7 @@
 const std = @import("std");
+const log = std.log.scoped;
+
+pub const n = @import("zoton.zig");
 
 const endian: std.lang.Endian = .little;
 
@@ -80,7 +83,10 @@ pub fn hashType(comptime T: type) u64 {
             for (fields) |f| {
                 for (f) |char|
                     h = (h ^ char) *% prime;
+                h = (h ^ @as(u64, 0)) *% prime;
             }
+        } else {
+            h = (h ^ 0xA0EE) *% prime;
         },
 
         .error_union => |eu| {
@@ -93,17 +99,18 @@ pub fn hashType(comptime T: type) u64 {
     return h;
 }
 
-pub fn serialize(writer: *std.Io.Writer, comptime T: type, value: T, comptime opts: Options) std.Io.Writer.Error!void {
+pub fn serialize(writer: *std.Io.Writer, comptime T: type, value: T, opts: Options) std.Io.Writer.Error!void {
     if (opts.header)
         try writer.writeAll("ZOTO");
     if (opts.hash)
         try writeInt(writer, u64, comptime hashType(T));
     try serializeValue(writer, T, value);
 }
-pub fn serializeAlloc(gpa: std.mem.Allocator, comptime T: type, value: T, comptime opts: Options) std.Io.Writer.Error![]const u8 {
+pub fn serializeAlloc(gpa: std.mem.Allocator, comptime T: type, value: T, opts: Options) (std.Io.Writer.Error || std.mem.Allocator.Error)![]const u8 {
     var allocating: std.Io.Writer.Allocating = .init(gpa);
+    errdefer allocating.deinit();
     try serialize(&allocating.writer, T, value, opts);
-    return allocating.written();
+    return try allocating.toOwnedSlice();
 }
 
 fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Writer.Error!void {
@@ -158,7 +165,10 @@ fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Wri
         },
         inline .array => |a| for (value) |item|
             try serializeValue(writer, a.child, item),
-        inline .error_set => try serializeValue(writer, u16, @intFromError(value)),
+        inline .error_set => |es| if (es.error_names != null)
+            try serializeValue(writer, []const u8, @errorName(value))
+        else
+            try serializeValue(writer, u16, @intFromError(value)),
         inline .error_union => |eu| if (value) |payload| {
             try writer.writeByte(1);
             try serializeValue(writer, eu.payload, payload);
@@ -172,16 +182,25 @@ fn serializeValue(writer: *std.Io.Writer, comptime T: type, value: T) std.Io.Wri
 }
 
 pub fn deserialize(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type, opts: Options) DeserializeError!T {
+    const l = log(.zoto);
     if (opts.header) {
         const header = try readSlice(src, 4);
-        if (!std.mem.eql(u8, header, "ZOTO"))
+        if (!std.mem.eql(u8, header, "ZOTO")) {
+            l.err("invalid zoto header for {s}", .{@typeName(T)});
             return error.InvalidHeader;
+        }
     }
 
     if (opts.hash) {
         const actual_hash = try readInt(src, u64);
-        if (actual_hash != comptime hashType(T))
+        if (actual_hash != comptime hashType(T)) {
+            l.err("type hash mismatch for {s}: expected 0x{x:0>16}, got 0x{x:0>16}", .{
+                @typeName(T),
+                comptime hashType(T),
+                actual_hash,
+            });
             return error.TypeMismatch;
+        }
     }
 
     return try deserializeValue(ara, src, T);
@@ -191,12 +210,28 @@ pub const DeserializeError = std.mem.Allocator.Error || error{
     BufferTooSmall,
     InvalidUnionTag,
     InvalidByte,
+    InvalidError,
     AllocationRequired,
     InvalidHeader,
     TypeMismatch,
 };
 
+fn deserialize_error_set(src: *[]const u8, comptime E: type) DeserializeError!struct { err: E } {
+    const l = log(.zoto);
+    return if (@typeInfo(E).error_set.error_names) |fields| blk: {
+        const name = try deserializeValue(null, src, []const u8);
+        break :blk inline for (fields) |f| {
+            if (std.mem.eql(u8, name, f))
+                break .{ .err = @field(E, f) };
+        } else {
+            l.err("unknown error '{s}' for {s}", .{ name, @typeName(E) });
+            break :blk error.InvalidError;
+        };
+    } else .{ .err = @errorFromInt(try readInt(src, u16)) };
+}
+
 fn deserializeValue(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type) DeserializeError!T {
+    const l = log(.zoto);
     switch (@typeInfo(T)) {
         inline .int => return try readInt(src, T),
         inline .float => |f| {
@@ -211,24 +246,34 @@ fn deserializeValue(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type)
                 true
             else if (val == std.math.minInt(u8))
                 false
-            else
-                error.InvalidByte;
+            else {
+                l.err("invalid bool byte 0x{x:0>2}", .{val});
+                return error.InvalidByte;
+            };
         },
 
         inline .optional => |o| {
             const has_value = try readByte(src);
             return if (has_value == std.math.maxInt(u8))
-                try deserializeValue(ara, src, o.child)
+                if (comptime @typeInfo(o.child) == .error_set)
+                    @as(T, (try deserialize_error_set(src, o.child)).err)
+                else
+                    try deserializeValue(ara, src, o.child)
             else if (has_value == std.math.minInt(u8))
                 null
-            else
-                error.InvalidByte;
+            else {
+                l.err("invalid optional byte 0x{x:0>2} for {s}", .{ has_value, @typeName(T) });
+                return error.InvalidByte;
+            };
         },
 
         inline .@"struct" => |s| {
             var result: T = undefined;
             inline for (s.field_names, s.field_types) |f_name, f_type|
-                @field(result, f_name) = try deserializeValue(ara, src, f_type);
+                @field(result, f_name) = if (comptime @typeInfo(f_type) == .error_set)
+                    (try deserialize_error_set(src, f_type)).err
+                else
+                    try deserializeValue(ara, src, f_type);
             return result;
         },
 
@@ -242,12 +287,13 @@ fn deserializeValue(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type)
                     return @unionInit(
                         T,
                         f_name,
-                        if (comptime f_type == anyerror)
-                            @errorFromInt(try readInt(src, u16))
+                        if (comptime @typeInfo(f_type) == .error_set)
+                            (try deserialize_error_set(src, f_type)).err
                         else
                             try deserializeValue(ara, src, f_type),
                     );
 
+            l.err("invalid union tag {d} for {s}", .{ tag_id, @typeName(T) });
             return error.InvalidUnionTag;
         },
 
@@ -261,26 +307,38 @@ fn deserializeValue(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type)
                     errdefer alloc_.free(slice);
 
                     for (0..len) |i|
-                        slice[i] = try deserializeValue(ara, src, p.child);
+                        slice[i] = if (comptime @typeInfo(p.child) == .error_set)
+                            (try deserialize_error_set(src, p.child)).err
+                        else
+                            try deserializeValue(ara, src, p.child);
 
                     return slice;
                 } else if (comptime !hasPointers(p.child)) {
                     const raw_bytes = try readSlice(src, len * @sizeOf(p.child));
                     const typed_ptr: [*]const p.child = @ptrCast(@alignCast(raw_bytes.ptr));
                     return @constCast(typed_ptr[0..len]);
-                } else return error.AllocationRequired;
+                } else {
+                    l.err("allocator required to deserialize {s}", .{@typeName(T)});
+                    return error.AllocationRequired;
+                }
             },
             inline .one => {
                 if (ara) |alloc_| {
                     const ptr = try alloc_.create(p.child);
                     errdefer alloc_.destroy(ptr);
 
-                    ptr.* = try deserializeValue(ara, src, p.child);
+                    ptr.* = if (comptime @typeInfo(p.child) == .error_set)
+                        (try deserialize_error_set(src, p.child)).err
+                    else
+                        try deserializeValue(ara, src, p.child);
                     return ptr;
-                } else if (comptime !hasPointers(p.child)) { //BUG: check this
+                } else if (comptime !hasPointers(p.child)) {
                     const raw_bytes = try readSlice(src, @sizeOf(p.child));
                     return @as(*const p.child, @ptrCast(@alignCast(raw_bytes.ptr)));
-                } else return error.AllocationRequired;
+                } else {
+                    l.err("allocator required to deserialize {s}", .{@typeName(T)});
+                    return error.AllocationRequired;
+                }
             },
             else => @compileError("Unsupported pointer size for zoto: " ++ @typeName(T)),
         },
@@ -288,22 +346,24 @@ fn deserializeValue(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type)
         inline .array => |a| {
             var arr: T = undefined;
             for (0..a.len) |i| {
-                arr[i] = try deserializeValue(ara, src, a.child);
+                arr[i] = if (comptime @typeInfo(a.child) == .error_set)
+                    (try deserialize_error_set(src, a.child)).err
+                else
+                    try deserializeValue(ara, src, a.child);
             }
             return arr;
         },
 
-        inline .error_set => {
-            const err: T = @errorCast(@errorFromInt(try readInt(src, u16)));
-            return err;
-        },
-
         inline .error_union => |eu| {
             const is_payload = try readByte(src);
-            if (is_payload != 0)
-                return try deserializeValue(ara, src, eu.payload);
-            const err: eu.error_set = @errorCast(@errorFromInt(try readInt(src, u16)));
-            return @as(T, err);
+            return if (is_payload == 1)
+                @as(T, try deserializeValue(ara, src, eu.payload))
+            else if (is_payload == 0)
+                @as(T, (try deserialize_error_set(src, eu.error_set)).err)
+            else {
+                l.err("invalid error_union byte 0x{x:0>2} for {s}", .{ is_payload, @typeName(T) });
+                return error.InvalidByte;
+            };
         },
 
         inline .void => return {},
@@ -314,7 +374,7 @@ fn deserializeValue(ara: ?std.mem.Allocator, src: *[]const u8, comptime T: type)
 fn hasPointers(comptime T: type) bool {
     const info = @typeInfo(T);
     return switch (info) {
-        .pointer => true,
+        .pointer, .error_set, .error_union => true,
         .@"struct" => |s| inline for (s.field_types) |f_type| {
             if (hasPointers(f_type))
                 break true;
@@ -367,138 +427,4 @@ fn writeInt(w: *std.Io.Writer, comptime IntT: type, val: IntT) !void {
     const I = comptime @Int(Int.signedness, @divCeil(Int.bits, 8) * 8);
     const i: I = @intCast(val);
     try w.writeInt(I, i, endian);
-}
-
-fn indent(w: *std.Io.Writer, depth: usize) !void {
-    var i: usize = 0;
-    while (i < depth) : (i += 1)
-        try w.writeAll("  ");
-}
-
-fn print_string(val: []const u8, out: *std.Io.Writer, depth: usize) !void {
-    if (std.mem.indexOfScalar(u8, val, '\n')) |_| {
-        var lines = std.mem.splitScalar(u8, val, '\n');
-        try out.writeByte('\n');
-        while (lines.next()) |line| {
-            try indent(out, depth + 1);
-            try out.print("\\\\{s}\n", .{line});
-        }
-        try indent(out, depth);
-    } else try out.print("\"{f}\"", .{std.zig.fmtString(val)});
-}
-
-pub fn print_value(comptime T: type, val: T, out: *std.Io.Writer, depth: usize, is_root: bool) !void {
-    const info = @typeInfo(T);
-    switch (info) {
-        .void => try out.writeAll("void"),
-        .bool => try out.print("{}", .{val}),
-        .int => try out.print("{d}", .{val}),
-        .float => try out.print("{d}", .{val}),
-        .@"enum" => try out.print(".{s}", .{@tagName(val)}),
-        .error_set => try out.print("error.{s}", .{@errorName(val)}),
-        .error_union => if (val) |payload|
-            try print_value(@TypeOf(payload), payload, out, depth, is_root)
-        else |err|
-            try out.print("error.{s}", .{@errorName(err)}),
-        .optional => if (val) |payload|
-            try print_value(@TypeOf(payload), payload, out, depth, false)
-        else
-            try out.writeAll("null"),
-        .pointer => |p| switch (p.size) {
-            .slice => {
-                if (p.child == u8)
-                    try print_string(val, out, depth)
-                else if (val.len == 0)
-                    try out.writeAll("&.{}")
-                else if (val.len == 1) {
-                    try out.writeAll("&.{");
-                    try print_value(p.child, val[0], out, depth + 1, false);
-                    try out.writeAll("}");
-                } else {
-                    try out.writeAll("&.{\n");
-                    for (val) |item| {
-                        try indent(out, depth + 1);
-                        try print_value(p.child, item, out, depth + 1, false);
-                        try out.writeAll(",\n");
-                    }
-                    try indent(out, depth);
-                    try out.writeAll("}");
-                }
-            },
-            .one => {
-                try out.writeByte('&');
-                try print_value(p.child, val.*, out, depth, false);
-            },
-            else => try out.writeAll("unsupported pointer"),
-        },
-        .array => |a| {
-            if (a.child == u8)
-                try print_string(&val, out, depth)
-            else if (val.len == 0)
-                try out.writeAll(".{}")
-            else if (val.len == 1) {
-                try out.writeAll(".{");
-                try print_value(a.child, val[0], out, depth + 1, false);
-                try out.writeAll("}");
-            } else {
-                try out.writeAll(".{\n");
-                for (val) |item| {
-                    try indent(out, depth + 1);
-                    try print_value(a.child, item, out, depth + 1, false);
-                    try out.writeAll(",\n");
-                }
-                try indent(out, depth);
-                try out.writeAll("}");
-            }
-        },
-        .@"struct" => |s| {
-            const prefix = if (is_root) "" else ".";
-            if (s.is_tuple) {
-                if (s.field_names.len == 0) {
-                    try out.print("{s}{{}}", .{prefix});
-                    return;
-                }
-                try out.print("{s}{{\n", .{prefix});
-                inline for (s.field_names, s.field_types) |f_name, f_type| {
-                    try indent(out, depth + 1);
-                    try print_value(f_type, @field(val, f_name), out, depth + 1, false);
-                    try out.writeAll(",\n");
-                }
-                try indent(out, depth);
-                try out.writeAll("}");
-            } else {
-                if (s.field_names.len == 0) {
-                    try out.print("{s}{{}}", .{prefix});
-                    return;
-                }
-                try out.print("{s}{{\n", .{prefix});
-                inline for (s.field_names, s.field_types) |f_name, f_type| {
-                    try indent(out, depth + 1);
-                    try out.print(".{s} = ", .{f_name});
-                    try print_value(f_type, @field(val, f_name), out, depth + 1, false);
-                    try out.writeAll(",\n");
-                }
-                try indent(out, depth);
-                try out.writeAll("}");
-            }
-        },
-        .@"union" => |u| {
-            if (u.tag_type == null) {
-                try out.writeAll("untagged-union");
-                return;
-            }
-            switch (val) {
-                inline else => |payload, tag| {
-                    if (@TypeOf(payload) == void) {
-                        try out.print(".{{ .{s} }}", .{@tagName(tag)});
-                    } else {
-                        try out.print(".{{ .{s} = ", .{@tagName(tag)});
-                        try print_value(@TypeOf(payload), payload, out, depth, false);
-                        try out.writeAll(" }");
-                    }
-                },
-            }
-        },
-        else => try out.writeAll("unreachable"),
-    }
 }

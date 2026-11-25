@@ -13,15 +13,32 @@ const zoto = @import("../util/zoto.zig");
 
 const Task = @This();
 
-pub const Status = enum {
+pub const Status = union(enum) {
     preparing,
     running,
     harvesting,
     done,
     skipped,
-    failed,
+    failed: TaskError!u16,
     killed,
     frozen,
+    not_found,
+    pub const TaskError = error{ TaskSpawnFailed, TaskTimedOut, TaskSpawnError, TaskSpawnRemoteError };
+    pub inline fn eq(a: @This(), b: @This()) bool {
+        return if (@backingInt(a) != @backingInt(b))
+            false
+        else if (a != .failed)
+            true
+        else if (a.failed) |as|
+            if (b.failed) |bs|
+                bs == as
+            else |_|
+                false
+        else |ae| if (b.failed) |_|
+            false
+        else |be|
+            ae == be;
+    }
 };
 
 id: Id,

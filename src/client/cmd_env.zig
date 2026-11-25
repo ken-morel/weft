@@ -141,8 +141,9 @@ fn ensure_packages(
     try view.update(io);
     try term.flush();
 
-    if (final_status != .done)
-        return error.EnvSetupFailed;
+    if (final_status) |f|
+        if (f != .done)
+            return error.EnvSetupFailed;
 }
 
 fn resolve_envs_leaky(

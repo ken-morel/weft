@@ -24,7 +24,7 @@ const Step = @import("client/Step.zig");
 const clinternal = @import("daemon/clinternal.zig");
 const Daemon = @import("daemon/Daemon.zig");
 const DaemonInstall = @import("daemon/DaemonInstall.zig");
-const decode = @import("decode.zig");
+const cmd_zoto = @import("cmd_zoto.zig");
 const proto = @import("domain/proto.zig");
 const Task = @import("domain/Task.zig");
 const Term = @import("domain/Term.zig");
@@ -37,12 +37,16 @@ const sizes = @import("util/sizes.zig");
 
 const include_daemon = builtin.target.os.tag == .linux;
 
+pub var log_level: std.atomic.Value(u8) = .init(@intFromEnum(std.log.default_level));
+
 pub fn logger(
     comptime level: std.log.Level,
     comptime scope: @EnumLiteral(),
     comptime format: []const u8,
     args: anytype,
 ) void {
+    if (@intFromEnum(level) > log_level.load(.monotonic))
+        return;
     const io = std.Options.debug_io;
     const prev = io.swapCancelProtection(.blocked);
     defer _ = io.swapCancelProtection(prev);
@@ -290,10 +294,31 @@ const Argz = union(enum) {
             pkg: []const u8,
         },
     },
-    decode: struct {
-        pub const doc = "Decode and pretty print a zoto-encoded binary file or stdin";
-        pub const doc_file = "The file to decode. Default to '-' for stdin";
-        file: []const u8 = "-",
+    zoto: union(enum) {
+        pub const doc = "Inspect, encode, and edit zoto binary files via ZOTON (Zoto Object Notation)";
+        decode: struct {
+            pub const doc = "Decode a zoto binary file or stdin to ZOTON text";
+            pub const doc_file = "Input zoto file (default '-' for stdin)";
+            pub const doc_out = "Output file (default '-' for stdout)";
+            file: []const u8 = "-",
+            out: []const u8 = "-",
+        },
+        encode: struct {
+            pub const doc = "Encode a ZOTON text file or stdin to zoto binary";
+            pub const doc_file = "Input ZOTON file (default '-' for stdin)";
+            pub const doc_out = "Output file (default '-' for stdout)";
+            pub const doc_type = "Override zoto type name (otherwise read from '// zoto: <type>' header)";
+            pub const doc_header = "Override whether to write the 4-byte ZOTO header";
+            file: []const u8 = "-",
+            out: []const u8 = "-",
+            type: ?[]const u8 = null,
+            header: ?bool = null,
+        },
+        edit: struct {
+            pub const doc = "Edit a zoto binary file (or '-' for stdin->stdout) as ZOTON in $VISUAL/$EDITOR";
+            pub const doc_file = "Zoto file to edit, or '-' to read from stdin and write to stdout";
+            file: []const u8 = "-",
+        },
     },
     argz_help: argz.Help("weft", Argz),
     nop: struct {
@@ -776,19 +801,10 @@ pub fn main(minimal: std.process.Init.Minimal) !void {
                     term.println("sig: \"{s}\"", .{sig});
             },
         },
-        .decode => |d| {
-            const content = if (std.mem.eql(u8, d.file, "-")) in: {
-                var buf: [4096]u8 = undefined;
-                var allocating: std.Io.Writer.Allocating = .init(gpa);
-                defer allocating.deinit();
-
-                var stdin_reader = std.Io.File.stdin().readerStreaming(io, &buf);
-                _ = try allocating.writer.sendFileReadingAll(&stdin_reader, .unlimited);
-                break :in try allocating.toOwnedSlice();
-            } else try std.Io.Dir.cwd().readFileAlloc(io, d.file, gpa, .unlimited);
-            defer gpa.free(content);
-
-            try decode.decode_and_print(alloc, content, term.writer());
+        .zoto => |z| switch (z) {
+            .decode => |d| try cmd_zoto.run_decode(gpa, io, d.file, d.out),
+            .encode => |e| try cmd_zoto.run_encode(gpa, io, e.file, e.out, e.type, e.header),
+            .edit => |e| try cmd_zoto.run_edit(gpa, io, e.file, &environ_map),
         },
         .argz_help => |cmd| cmd.handle(),
         .nop => {},

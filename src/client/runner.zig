@@ -297,11 +297,12 @@ fn fail_step(
     project: Project,
     step: Deployment.Step,
     msg: []const u8,
+    code: Task.Status.TaskError!u16,
 ) void {
     depl.lock(io) catch return;
     defer depl.unlock(io);
     dep.remove_running(gpa, step.remote, step.pipeline);
-    view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .failed, .err = msg }) catch {};
+    view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .{ .failed = code }, .err = msg }) catch {};
     dep.save(io, project) catch {};
 }
 
@@ -346,19 +347,22 @@ fn poll_item(
 
             try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .done });
         },
-        .failed => {
-            const code = 1; //TODO: restore this when actually fetching the code
+        .failed => |code| {
             deployment.remove_running(gpa, remote_name, pipeline_name);
-            const err_msg = try gpa.print("task failed with exit code {d}", .{code});
+            const err_msg = if (code) |c|
+                try gpa.print("task failed with exit code {d}", .{c})
+            else |e|
+                try gpa.print("task failed with error {any}", .{e});
+
             defer gpa.free(err_msg);
-            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .failed, .err = err_msg });
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .{ .failed = code }, .err = err_msg });
 
             if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
                 try deployment.add_failed(gpa, .{
                     .retries_left = pipeline.retries,
                     .remote = remote_name,
                     .pipeline = pipeline.name,
-                    .status = .{ .term = code },
+                    .status = code,
                 });
         },
         .skipped => {
@@ -375,24 +379,25 @@ fn poll_item(
                     .retries_left = pipeline.retries,
                     .remote = remote_name,
                     .pipeline = pipeline.name,
-                    .status = .stopped,
+                    .status = error.TaskKilled,
                 });
         },
-    } else {
-        if (view.get_task(io, remote_name, pipeline_name)) |t|
-            if (t.status == .preparing)
-                return; // spawn still in flight; keep polling
+        .not_found => {
+            if (view.get_task(io, remote_name, pipeline_name)) |t|
+                if (t.status == .preparing)
+                    return;
 
-        deployment.remove_running(gpa, remote_name, pipeline_name);
-        try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .failed, .err = "task not found on remote" });
-        if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
-            try deployment.add_failed(gpa, .{
-                .retries_left = 0,
-                .remote = remote_name,
-                .pipeline = pipeline.name,
-                .status = .not_found,
-            });
-    }
+            deployment.remove_running(gpa, remote_name, pipeline_name);
+            try view.set_task(io, remote_name, pipeline_name, "?", .{ .status = .not_found, .err = "task not found on remote" });
+            if (deployment.config.get_pipeline(pipeline_name)) |pipeline|
+                try deployment.add_failed(gpa, .{
+                    .retries_left = 0,
+                    .remote = remote_name,
+                    .pipeline = pipeline.name,
+                    .status = error.TaskNotFound,
+                });
+        },
+    };
     try deployment.save(io, project);
 }
 
@@ -631,7 +636,7 @@ pub fn spawn_step(
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const alloc = arena.allocator();
-    errdefer fail_step(gpa, io, depl, dep, view, project, step, "failed to spawn task");
+    errdefer fail_step(gpa, io, depl, dep, view, project, step, "failed to spawn task", error.TaskSpawnError);
 
     if (!dep.config.has_mode(step.mode))
         return error.InvalidMode;
@@ -712,7 +717,7 @@ pub fn spawn_step(
             buffer,
             proto.R(proto.task.spawn.Res),
         ) catch |err| {
-            fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
+            fail_step(gpa, io, depl, dep, view, project, step, @errorName(err), error.TaskSpawnRemoteError);
             return;
         };
 
@@ -720,7 +725,7 @@ pub fn spawn_step(
             l.debug("task '{s}' spawned on '{s}'", .{ step.pipeline, step.remote });
             try view.set_task(io, step.remote, step.pipeline, step.mode, .{ .status = .running });
         } else |err| {
-            fail_step(gpa, io, depl, dep, view, project, step, @errorName(err));
+            fail_step(gpa, io, depl, dep, view, project, step, @errorName(err), error.TaskSpawnRemoteError);
             return;
         }
         break :spawn_task;

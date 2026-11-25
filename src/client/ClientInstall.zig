@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const zoton = @import("../util/zoton.zig");
+
 const build = @import("build");
 
 const Term = @import("../domain/Term.zig");
@@ -76,7 +78,7 @@ pub fn ensure_config(io: std.Io, dir: std.Io.Dir) !void {
 
     var buf: [1 << 5]u8 = undefined;
     var writer = file.writer(io, &buf);
-    try std.zon.stringify.serialize(Config{}, .{}, &writer.interface);
+    try zoton.serialize(&writer.interface, Config, .{});
     try writer.flush();
 }
 
@@ -92,17 +94,7 @@ pub fn read_config_leaky(self: @This(), gpa: std.mem.Allocator, ara: std.mem.All
                     return err;
         } else return e;
     };
-    var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
-    return std.zon.parse.fromSlice(Config, .{
-        .arena = ara,
-        .gpa = gpa,
-        .source = content,
-        .diagnostics = &diag,
-    }) catch |err| {
-        if (err == error.ParseZon)
-            diag.log(filename);
-        return err;
-    };
+    return try zoton.deserialize_leaky(gpa, ara, content, Config);
 }
 
 pub fn locate_script(self: @This(), gpa: std.mem.Allocator, io: std.Io, name: []const u8) !?[:0]const u8 {

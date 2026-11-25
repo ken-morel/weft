@@ -226,7 +226,7 @@ fn recover_active_tasks(self: *@This()) !void {
         };
 
         switch (status) {
-            .done, .skipped, .failed, .killed => {
+            .done, .skipped, .failed, .killed, .not_found => {
                 l.info("removing dead active symlink '{s}' (status: {s})", .{ entry.name, @tagName(status) });
                 active_dir.deleteFile(self.io, entry.name) catch {};
             },

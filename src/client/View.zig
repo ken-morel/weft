@@ -1,4 +1,5 @@
 const std = @import("std");
+const root = @import("root");
 
 const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
@@ -22,7 +23,7 @@ pub const TaskItem = struct {
     pub fn is_active(self: @This()) bool {
         return switch (self.status) {
             .preparing, .running, .harvesting, .frozen => true,
-            .done, .skipped, .failed, .killed => false,
+            .done, .skipped, .failed, .killed, .not_found => false,
         };
     }
 };
@@ -59,16 +60,29 @@ transfers: std.ArrayList(TransferItem) = .empty,
 mutex: std.Io.Mutex = .init,
 render_mutex: std.Io.Mutex = .init,
 dirty: std.atomic.Value(bool) = .init(false),
+prev_log_level: ?u8 = null,
 
 pub fn init(gpa: std.mem.Allocator, term: *Term, header: ?[]const u8) @This() {
+    var prev_log_level: ?u8 = null;
+    if (term.is_tty and @hasDecl(root, "log_level")) {
+        const info_lvl = @backingInt(std.log.Level.info);
+        if (root.log_level.load(.monotonic) > info_lvl) {
+            prev_log_level = root.log_level.swap(info_lvl, .monotonic);
+        }
+    }
     return .{
         .gpa = gpa,
         .term = term,
         .header = header,
+        .prev_log_level = prev_log_level,
     };
 }
 
 pub fn deinit(self: *@This()) void {
+    if (self.prev_log_level) |prev| {
+        if (@hasDecl(root, "log_level"))
+            root.log_level.store(prev, .monotonic);
+    }
     self.term.flush() catch {};
     for (self.tasks.items) |t| {
         self.gpa.free(t.remote);
@@ -253,8 +267,9 @@ fn render_dirty(self: *@This(), io: std.Io) !void {
 
 fn render_unlocked(self: *@This(), io: std.Io) !void {
     for (self.tasks.items) |*t| {
-        if (t.reported != null and t.reported == t.status)
-            continue;
+        if (t.reported) |r|
+            if (r.eq(t.status))
+                continue;
 
         var key_buf: [128]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{s}.{s}", .{ t.mode, t.remote, t.pipeline }) catch t.pipeline;
@@ -280,6 +295,7 @@ fn render_unlocked(self: *@This(), io: std.Io) !void {
                 "{}#killed"
             else
                 "}#killed", " {s} ({d}ms, CPU: {d}ms)", .{ key, duration_ms, t.cpu_ms orelse 0 }),
+            .not_found => self.term.write_event(color, "#not_found", " {s}", .{key}),
             .preparing, .harvesting, .frozen => {},
         }
         t.reported = t.status;

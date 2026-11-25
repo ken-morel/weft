@@ -144,7 +144,7 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
 
     const spec = try task.read_spec(gpa, alloc, io);
     try task.write_status(gpa, io, .preparing);
-    errdefer task.write_status(gpa, io, .failed) catch {};
+    errdefer task.write_status(gpa, io, .{ .failed = error.TaskSpawnFailed }) catch {};
 
     if (spec.pkgs.len > 0) {
         log.info("preparing {d} nix package(s)...", .{spec.pkgs.len});
@@ -456,19 +456,25 @@ pub fn supervise(gpa: std.mem.Allocator, io: std.Io, task: Task, isolate: Daemon
                 }
             }
         };
-        if (killed) {
-            log.info("task killed", .{});
-            try task.write_status(gpa, io, .killed);
-            return;
-        }
-        switch (term) {
-            .exited => |code| log.info("task exited with code {d}", .{code}),
-            .signal => |sig| log.err("task terminated by signal {s}", .{@tagName(sig)}),
-            .stopped => |sig| log.err("task stopped by signal {s}", .{@tagName(sig)}),
-            .unknown => |code| log.err("task terminated with unknown status {d}", .{code}),
-        }
-        if (timed_out or term != .exited or term.exited != 0) {
-            try task.write_status(gpa, io, .failed);
+
+        handle_killed: {
+            // :-)
+            defer switch (term) {
+                .exited => |code| log.info("task exited with code {d}", .{code}),
+                .signal => |sig| log.err("task terminated by signal {s}", .{@tagName(sig)}),
+                .stopped => |sig| log.err("task stopped by signal {s}", .{@tagName(sig)}),
+                .unknown => |code| log.err("task terminated with unknown status {d}", .{code}),
+            };
+            if (killed) {
+                log.info("task killed", .{});
+                try task.write_status(gpa, io, .killed);
+            } else if (timed_out) {
+                try task.write_status(gpa, io, .{
+                    .failed = error.TaskTimedOut,
+                });
+            } else if (term != .exited or term.exited != 0) {
+                try task.write_status(gpa, io, .{ .failed = term.exited });
+            } else break :handle_killed;
             return;
         }
     }

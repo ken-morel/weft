@@ -507,6 +507,7 @@ fn collect_task_metrics(io: std.Io, tid: Task.Id, sup_pid: ?i32) TaskMetrics {
     var metrics: TaskMetrics = .{};
 
     var cg_path_buf: [256]u8 = undefined;
+
     const cg_path = std.fmt.bufPrint(&cg_path_buf, "/sys/fs/cgroup/weft/{s}--{s}--{s}", .{
         tid.workspace,
         tid.pipeline,
@@ -601,7 +602,7 @@ fn fetch_services(gpa: std.mem.Allocator, io: std.Io) ![]const Stats.Service {
             const status = zoto.deserialize(null, &slice, Task.Status, .{ .header = true }) catch continue;
             switch (status) {
                 .preparing, .running, .harvesting, .frozen => {},
-                .done, .skipped, .failed, .killed => continue,
+                .done, .skipped, .failed, .killed, .not_found => continue,
             }
 
             var pid_path_buf: [256]u8 = undefined;

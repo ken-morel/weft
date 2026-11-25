@@ -159,8 +159,9 @@ pub fn run(
             io,
             try alloc.print("- {s}", .{key}),
         ),
-    } else {
-        l.err("Task {s} not found", .{key});
-        return error.TaskNotFound;
-    }
+        .not_found => try stdout.writeStreamingAll(
+            io,
+            try alloc.print("#.not_found {s}", .{key}),
+        ),
+    };
 }

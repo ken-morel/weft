@@ -4,6 +4,7 @@ const log = std.log.scoped;
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const crockford32 = @import("../util/crockford32.zig");
+const zoton = @import("../util/zoton.zig");
 const Project = @import("Project.zig");
 pub const Step = @import("Step.zig");
 
@@ -68,7 +69,7 @@ pub const Failed = struct {
     retries_left: u16,
     remote: []const u8,
     pipeline: []const u8,
-    status: union(enum) { not_found, term: u16, stopped },
+    status: anyerror!u16,
 };
 
 pub fn get_artifact(self: @This(), output: []const u8) ?Artifact {
@@ -279,7 +280,7 @@ pub fn save(self: @This(), io: std.Io, proj: Project) !void {
     });
     defer atomic.deinit(io);
     var writer = atomic.file.writer(io, &buffer);
-    try std.zon.stringify.serializeArbitraryDepth(self, .{}, &writer.interface);
+    try zoton.serialize(&writer.interface, @This(), self);
     try writer.flush();
     try atomic.replace(io);
 }

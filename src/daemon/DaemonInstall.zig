@@ -7,6 +7,7 @@ const domain = @import("../domain/domain.zig");
 const read_only_user_permissions = domain.read_only_user_permissions;
 const paths = @import("../domain/paths.zig");
 const proto = @import("../domain/proto.zig");
+const zoton = @import("../util/zoton.zig");
 
 pub const Isolate = bitpack struct(u8) {
     cgroups: bool,
@@ -312,7 +313,7 @@ pub fn install(gpa: std.mem.Allocator, io: std.Io, template: ?[]const u8) !void 
         var write_buffer: [4 << 10]u8 = undefined;
         var config_writer = config_file.file.writer(io, &write_buffer);
 
-        try std.zon.stringify.serialize(config, .{}, &config_writer.interface);
+        try zoton.serialize(&config_writer.interface, Config, config);
         try config_writer.interface.flush();
 
         try config_file.replace(io);
@@ -399,17 +400,9 @@ pub fn read_config(gpa: std.mem.Allocator, io: std.Io) !Config {
     );
     defer gpa.free(content);
 
-    var diag: std.zon.parse.Diagnostics = .{ .errors = &.{undefined} };
-    return std.zon.parse.fromSliceNoAlloc(Config, .{
-        .arena = gpa,
-        .gpa = gpa,
-        .source = content,
-        .diagnostics = &diag,
-    }) catch |err| err: {
-        if (err == error.ParseZon)
-            diag.log(paths.weft_config_file);
-        break :err err;
-    };
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+    return try zoton.deserialize_leaky(gpa, arena.allocator(), content, Config);
 }
 
 pub fn get_keys(gpa: std.mem.Allocator, io: std.Io) ![][32]u8 {

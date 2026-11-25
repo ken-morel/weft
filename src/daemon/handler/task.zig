@@ -39,7 +39,7 @@ pub fn poll(daemon: *Daemon, conn: *Connection, response_buf: []u8) proto.R(prot
                     .{
                         .task = req.task,
                         .logs = null,
-                        .status = null,
+                        .status = .not_found,
                         .usage = null,
                     },
                 );
