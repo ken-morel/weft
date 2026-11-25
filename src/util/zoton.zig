@@ -273,8 +273,7 @@ pub fn serialize_value(comptime T: type, val: T, out: *std.Io.Writer, depth: usi
                 try out.writeAll(".{ .ok = ");
                 try serialize_value(eu.payload, payload, out, depth);
                 try out.writeAll(" }");
-            } else |err|
-                try out.print(".{{ .err = .{f} }}", .{std.zig.fmtId(@errorName(err))});
+            } else |err| try out.print(".{{ .err = .{f} }}", .{std.zig.fmtId(@errorName(err))});
         } else if (val) |payload|
             try serialize_value(eu.payload, payload, out, depth)
         else |err|
