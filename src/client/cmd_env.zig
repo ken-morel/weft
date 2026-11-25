@@ -183,7 +183,7 @@ fn resolve_envs_leaky(
             ara,
             io,
             mode,
-            config.environments,
+            config.environments.items,
             project.env,
             target_env,
         );

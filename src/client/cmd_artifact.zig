@@ -123,7 +123,7 @@ pub fn register(
 
     var deployment = try project.load_deployment_leaky(gpa, alloc, io, dep_id);
     try deployment.add_artifact(alloc, .{
-        .remote = remote.@"0",
+        .remote = remote.name,
         .pipeline = if (config.get_producer(name)) |producer| producer.name else name,
         .name = name,
     });

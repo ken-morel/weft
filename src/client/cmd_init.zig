@@ -20,7 +20,7 @@ pub fn run(gpa: std.mem.Allocator, io: std.Io) !void {
             \\.{{
             \\    .workspace = "{s}",
             \\    .remotes = .{{
-            \\        .{{ "local", null, "local" }},
+            \\        .local = .{{ .groups = "local" }},
             \\    }},
             \\    .pipelines = .{{}},
             \\}}

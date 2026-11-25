@@ -99,11 +99,75 @@ pub fn Map(comptime V: type) type {
     };
 }
 
+pub fn NamedMap(comptime key_field: @EnumLiteral(), comptime V: type) type {
+    const key_name = @tagName(key_field);
+    const info = @typeInfo(V);
+    if (info != .@"struct" or info.@"struct".is_tuple)
+        @compileError("zoton.NamedMap requires a non-tuple struct type, got " ++ @typeName(V));
+    if (!@hasField(V, key_name))
+        @compileError("zoton.NamedMap key field '" ++ key_name ++ "' does not exist on " ++ @typeName(V));
+    if (@FieldType(V, key_name) != []const u8)
+        @compileError("zoton.NamedMap key field '" ++ key_name ++ "' on " ++ @typeName(V) ++ " must be []const u8");
+
+    return struct {
+        items: []const V = &.{},
+
+        pub fn get(self: @This(), key: []const u8) ?*const V {
+            return for (self.items) |*item| {
+                if (std.mem.eql(u8, @field(item.*, key_name), key))
+                    break item;
+            } else null;
+        }
+
+        pub fn zoton_serialize(self: @This(), out: *std.Io.Writer, depth: usize) std.Io.Writer.Error!void {
+            if (self.items.len == 0)
+                try out.writeAll(".{}")
+            else {
+                try out.writeAll(".{\n");
+                for (self.items) |item| {
+                    try indent(out, depth + 1);
+                    try out.print(".{f} = ", .{std.zig.fmtId(@field(item, key_name))});
+                    try serialize_struct(V, item, out, depth + 1, key_name);
+                    try out.writeAll(",\n");
+                }
+                try indent(out, depth);
+                try out.writeAll("}");
+            }
+        }
+
+        pub fn zoton_deserialize_leaky(
+            ara: std.mem.Allocator,
+            ctx: Context,
+            node_idx: std.zig.Zoir.Node.Index,
+        ) Error!@This() {
+            return switch (node_idx.get(ctx.zoir)) {
+                .empty_literal => .{},
+                .struct_literal => |sl| map: {
+                    const entries = try ara.alloc(V, sl.names.len);
+                    for (sl.names, 0..) |nts, i| {
+                        const key = try ara.dupe(u8, nts.get(ctx.zoir));
+                        entries[i] = try parse_struct_leaky(ara, ctx, sl.vals.at(@intCast(i)), V, key_name, key);
+                    }
+                    break :map .{ .items = entries };
+                },
+                else => |node| {
+                    ctx.log_err(node_idx, "expected map struct literal for {s}, found {s}", .{ @typeName(@This()), @tagName(node) });
+                    return error.InvalidType;
+                },
+            };
+        }
+    };
+}
+
 fn has_decl(comptime T: type, comptime name: []const u8) bool {
     return switch (@typeInfo(T)) {
         .@"struct", .@"union", .@"enum" => @hasDecl(T, name),
         else => false,
     };
+}
+
+fn is_hidden_field(comptime name: []const u8) bool {
+    return std.mem.startsWith(u8, name, "__");
 }
 
 pub fn indent(out: *std.Io.Writer, depth: usize) std.Io.Writer.Error!void {
@@ -144,6 +208,46 @@ fn is_ambiguous_error_union_payload(comptime P: type) bool {
 
 pub fn serialize(out: *std.Io.Writer, comptime T: type, val: T) std.Io.Writer.Error!void {
     try serialize_value(T, val, out, 0);
+}
+
+fn serialize_struct(
+    comptime T: type,
+    val: T,
+    out: *std.Io.Writer,
+    depth: usize,
+    comptime omit_field: ?[]const u8,
+) std.Io.Writer.Error!void {
+    const s = @typeInfo(T).@"struct";
+    const visible_count = comptime count: {
+        var n: usize = 0;
+        for (s.field_names) |f_name| {
+            if (is_hidden_field(f_name))
+                continue;
+            if (omit_field) |omit|
+                if (std.mem.eql(u8, f_name, omit))
+                    continue;
+            n += 1;
+        }
+        break :count n;
+    };
+
+    if (visible_count == 0)
+        try out.writeAll(".{}")
+    else {
+        try out.writeAll(".{\n");
+        inline for (s.field_names, s.field_types) |f_name, f_type| {
+            const skip = comptime is_hidden_field(f_name) or
+                (if (omit_field) |omit| std.mem.eql(u8, f_name, omit) else false);
+            if (!skip) {
+                try indent(out, depth + 1);
+                try out.print(".{f} = ", .{std.zig.fmtId(f_name)});
+                try serialize_value(f_type, @field(val, f_name), out, depth + 1);
+                try out.writeAll(",\n");
+            }
+        }
+        try indent(out, depth);
+        try out.writeAll("}");
+    }
 }
 
 pub fn serialize_value(comptime T: type, val: T, out: *std.Io.Writer, depth: usize) std.Io.Writer.Error!void {
@@ -219,28 +323,20 @@ pub fn serialize_value(comptime T: type, val: T, out: *std.Io.Writer, depth: usi
             try indent(out, depth);
             try out.writeAll("}");
         },
-        .@"struct" => |s| if (s.field_names.len == 0)
-            try out.writeAll(".{}")
-        else if (s.is_tuple) {
-            try out.writeAll(".{\n");
-            inline for (s.field_names, s.field_types) |f_name, f_type| {
-                try indent(out, depth + 1);
-                try serialize_value(f_type, @field(val, f_name), out, depth + 1);
-                try out.writeAll(",\n");
+        .@"struct" => |s| if (s.is_tuple) {
+            if (s.field_names.len == 0)
+                try out.writeAll(".{}")
+            else {
+                try out.writeAll(".{\n");
+                inline for (s.field_names, s.field_types) |f_name, f_type| {
+                    try indent(out, depth + 1);
+                    try serialize_value(f_type, @field(val, f_name), out, depth + 1);
+                    try out.writeAll(",\n");
+                }
+                try indent(out, depth);
+                try out.writeAll("}");
             }
-            try indent(out, depth);
-            try out.writeAll("}");
-        } else {
-            try out.writeAll(".{\n");
-            inline for (s.field_names, s.field_types) |f_name, f_type| {
-                try indent(out, depth + 1);
-                try out.print(".{f} = ", .{std.zig.fmtId(f_name)});
-                try serialize_value(f_type, @field(val, f_name), out, depth + 1);
-                try out.writeAll(",\n");
-            }
-            try indent(out, depth);
-            try out.writeAll("}");
-        },
+        } else try serialize_struct(T, val, out, depth, null),
         .@"union" => |u| {
             if (u.tag_type == null)
                 @compileError("Union must be tagged for zoton: " ++ @typeName(T));
@@ -303,6 +399,89 @@ fn error_set_from_zoir(ctx: Context, node_idx: std.zig.Zoir.Node.Index, comptime
         },
         else => |node| {
             ctx.log_err(node_idx, "expected error literal for {s}, found {s}", .{ @typeName(E), @tagName(node) });
+            return error.InvalidType;
+        },
+    };
+}
+
+fn parse_struct_leaky(
+    ara: std.mem.Allocator,
+    ctx: Context,
+    node_idx: std.zig.Zoir.Node.Index,
+    comptime T: type,
+    comptime inject_field: ?[]const u8,
+    inject_val: ?[]const u8,
+) Error!T {
+    const s = @typeInfo(T).@"struct";
+    const zoir = ctx.zoir;
+    const node = node_idx.get(zoir);
+
+    inline for (s.field_names, s.field_types, s.field_attrs) |f_name, f_type, f_attr| {
+        if (comptime is_hidden_field(f_name)) {
+            if (comptime f_attr.defaultValue(f_type) == null)
+                @compileError("zoton: '__'-prefixed field '" ++ f_name ++ "' in " ++ @typeName(T) ++ " must have a default value");
+        }
+    }
+
+    return switch (node) {
+        .empty_literal => res: {
+            var res: T = undefined;
+            inline for (s.field_names, s.field_types, s.field_attrs) |f_name, f_type, f_attr| {
+                const is_injected = comptime if (inject_field) |inj| std.mem.eql(u8, f_name, inj) else false;
+                if (is_injected)
+                    @field(res, f_name) = inject_val orelse unreachable
+                else if (comptime is_hidden_field(f_name))
+                    @field(res, f_name) = comptime f_attr.defaultValue(f_type) orelse unreachable
+                else
+                    @field(res, f_name) = f_attr.defaultValue(f_type) orelse {
+                        ctx.log_err(node_idx, "missing required field '.{s}' in {s}", .{ f_name, @typeName(T) });
+                        return error.MissingField;
+                    };
+            }
+            break :res res;
+        },
+        .struct_literal => |sl| res: {
+            for (sl.names, 0..) |nts, i| {
+                const name = nts.get(zoir);
+                const known = inline for (s.field_names) |f_name| {
+                    const forbidden = comptime is_hidden_field(f_name) or
+                        (if (inject_field) |inj| std.mem.eql(u8, f_name, inj) else false);
+                    if (!forbidden and std.mem.eql(u8, name, f_name))
+                        break true;
+                } else false;
+                if (!known) {
+                    ctx.log_err(sl.vals.at(@intCast(i)), "unknown field '.{s}' in {s}", .{ name, @typeName(T) });
+                    return error.UnknownField;
+                }
+            }
+            var res: T = undefined;
+            inline for (s.field_names, s.field_types, s.field_attrs) |f_name, f_type, f_attr| {
+                const is_injected = comptime if (inject_field) |inj| std.mem.eql(u8, f_name, inj) else false;
+                if (is_injected)
+                    @field(res, f_name) = inject_val orelse unreachable
+                else if (comptime is_hidden_field(f_name))
+                    @field(res, f_name) = comptime f_attr.defaultValue(f_type) orelse unreachable
+                else {
+                    const found_idx: ?u32 = idx: for (sl.names, 0..) |nts, i| {
+                        if (std.mem.eql(u8, nts.get(zoir), f_name))
+                            break :idx @intCast(i);
+                    } else null;
+                    @field(res, f_name) = if (found_idx) |i|
+                        if (comptime @typeInfo(f_type) == .error_set)
+                            (try error_set_from_zoir(ctx, sl.vals.at(i), f_type)).err
+                        else
+                            try from_zoir_leaky(ara, ctx, sl.vals.at(i), f_type)
+                    else
+                        f_attr.defaultValue(f_type) orelse {
+                            ctx.log_err(node_idx, "missing required field '.{s}' in {s}", .{ f_name, @typeName(T) });
+                            return error.MissingField;
+                        };
+                }
+            }
+            break :res res;
+        },
+        else => {
+            ctx.log_err(node_idx, "expected struct {s}, found {s}", .{ @typeName(T), @tagName(node) });
             return error.InvalidType;
         },
     };
@@ -504,52 +683,7 @@ fn from_zoir_leaky(
                 ctx.log_err(node_idx, "expected tuple {s}, found {s}", .{ @typeName(T), @tagName(node) });
                 return error.InvalidType;
             },
-        } else switch (node) {
-            .empty_literal => res: {
-                var res: T = undefined;
-                inline for (s.field_names, s.field_types, s.field_attrs) |f_name, f_type, f_attr|
-                    @field(res, f_name) = f_attr.defaultValue(f_type) orelse {
-                        ctx.log_err(node_idx, "missing required field '.{s}' in {s}", .{ f_name, @typeName(T) });
-                        return error.MissingField;
-                    };
-                break :res res;
-            },
-            .struct_literal => |sl| res: {
-                for (sl.names, 0..) |nts, i| {
-                    const name = nts.get(zoir);
-                    const known = inline for (s.field_names) |f_name| {
-                        if (std.mem.eql(u8, name, f_name))
-                            break true;
-                    } else false;
-                    if (!known) {
-                        ctx.log_err(sl.vals.at(@intCast(i)), "unknown field '.{s}' in {s}", .{ name, @typeName(T) });
-                        return error.UnknownField;
-                    }
-                }
-                var res: T = undefined;
-                inline for (s.field_names, s.field_types, s.field_attrs) |f_name, f_type, f_attr| {
-                    const found_idx: ?u32 = idx: for (sl.names, 0..) |nts, i| {
-                        if (std.mem.eql(u8, nts.get(zoir), f_name))
-                            break :idx @intCast(i);
-                    } else null;
-                    @field(res, f_name) = if (found_idx) |i|
-                        if (comptime @typeInfo(f_type) == .error_set)
-                            (try error_set_from_zoir(ctx, sl.vals.at(i), f_type)).err
-                        else
-                            try from_zoir_leaky(ara, ctx, sl.vals.at(i), f_type)
-                    else
-                        f_attr.defaultValue(f_type) orelse {
-                            ctx.log_err(node_idx, "missing required field '.{s}' in {s}", .{ f_name, @typeName(T) });
-                            return error.MissingField;
-                        };
-                }
-                break :res res;
-            },
-            else => {
-                ctx.log_err(node_idx, "expected struct {s}, found {s}", .{ @typeName(T), @tagName(node) });
-                return error.InvalidType;
-            },
-        },
+        } else try parse_struct_leaky(ara, ctx, node_idx, T, null, null),
         .@"union" => |u| blk: {
             if (u.tag_type == null)
                 @compileError("Union must be tagged for zoton: " ++ @typeName(T));

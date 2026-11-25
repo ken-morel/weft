@@ -52,11 +52,21 @@ pub fn hashType(comptime T: type) u64 {
 
         .@"enum" => |e| {
             h = (h ^ hashType(e.tag_type)) *% prime;
-            //BUG: f_value is truncated to a u64; may lead to hard to find errors with larger types
+            const tag_bits = @bitSizeOf(e.tag_type);
+            const U = @Int(.unsigned, tag_bits);
             inline for (e.field_names, e.field_values) |f_name, f_value| {
                 inline for (f_name) |char|
                     h = (h ^ char) *% prime;
-                h = (h ^ @as(u64, @truncate(f_value))) *% prime;
+                h = (h ^ @as(u64, 0)) *% prime;
+                if (tag_bits > 0) {
+                    const raw: U = @bitCast(@as(e.tag_type, f_value));
+                    comptime var shift: usize = 0;
+                    inline while (shift < tag_bits) : (shift += 64) {
+                        const shifted = raw >> shift;
+                        const chunk: u64 = if (tag_bits <= 64) shifted else @truncate(shifted);
+                        h = (h ^ chunk) *% prime;
+                    }
+                }
             }
         },
 

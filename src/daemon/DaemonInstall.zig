@@ -14,7 +14,7 @@ pub const Isolate = bitpack struct(u8) {
     mount: bool,
     pid: bool,
     net: bool,
-    _pad: u4 = 0,
+    __pad: u4 = 0,
 
     pub const templates = [_]struct { []const u8, @This() }{
         .{ "kvm", .{ .cgroups = true, .mount = true, .pid = true, .net = true } },

@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Glob = @import("../util/Glob.zig");
+const zoton = @import("../util/zoton.zig");
 
 pub const Keep = struct {
     []const u8,
@@ -78,12 +79,12 @@ pub const Pipeline = struct {
     retention: ?Retention = null,
 
     sibling: HandleSibling = .{ .then = .ignore },
-    keep: []Keep = &.{},
+    keep: zoton.Map([]const u8) = .{},
     on: ?[]const []const u8 = null,
 
     env: struct {
         uses: []const []const u8 = &.{},
-        vars: []const struct { []const u8, ?[]const u8 } = &.{},
+        vars: zoton.Map(?[]const u8) = .{},
         pkgs: []const []const u8 = &.{},
     } = .{},
 
@@ -114,14 +115,14 @@ pub const Pipeline = struct {
             true;
     }
 };
-pub const Remote = struct { []const u8, ?[]const u8, []const u8 };
+pub const Remote = struct {
+    name: []const u8,
+    address: ?[]const u8 = null,
+    groups: []const u8 = "",
+};
 
 pub fn remote_has_group(remote: anytype, group: []const u8) bool {
-    const raw_groups = if (@hasField(@TypeOf(remote), "groups"))
-        remote.groups
-    else
-        remote.@"2";
-    var iter = std.mem.splitScalar(u8, raw_groups, ' ');
+    var iter = std.mem.splitScalar(u8, remote.groups, ' ');
     return while (iter.next()) |item| {
         if (item.len > 0 and std.mem.eql(u8, item, group))
             break true;
@@ -129,33 +130,32 @@ pub fn remote_has_group(remote: anytype, group: []const u8) bool {
 }
 
 modes: []const []const u8 = &.{"default"},
-environments: []const Env = &.{},
+environments: zoton.NamedMap(.name, Env) = .{},
 workspace: []const u8,
-sources: ?[]const struct { []const u8, []const u8 } = null,
+sources: ?zoton.Map([]const u8) = null,
 
-pipelines: []const Pipeline = &.{},
-remotes: []const Remote = &.{.{ "local", null, "local" }},
+pipelines: zoton.NamedMap(.name, Pipeline) = .{},
+remotes: zoton.NamedMap(.name, Remote) = .{
+    .items = &.{.{ .name = "local", .groups = "local" }},
+},
 retention: Retention = .{
     .archive = 10,
     .artifacts = 2,
 },
 
 pub fn get_pipeline(self: @This(), name: []const u8) ?*const Pipeline {
-    return for (self.pipelines) |*pipeline| {
-        if (std.mem.eql(u8, pipeline.name, name))
-            break pipeline;
-    } else null;
+    return self.pipelines.get(name);
 }
 
 pub fn find_remote(self: @This(), name: []const u8) ?Remote {
-    for (self.remotes) |r|
-        if (std.mem.eql(u8, r.@"0", name))
-            return r;
-    return null;
+    return if (self.remotes.get(name)) |r|
+        r.*
+    else
+        null;
 }
 
 pub fn select_remote_for(self: @This(), pipeline: *const Pipeline, group: []const u8) ?Remote {
-    for (self.remotes) |remote|
+    for (self.remotes.items) |remote|
         if (remote_has_group(remote, group))
             if (pipeline.matches_remote(remote))
                 return remote;
@@ -163,7 +163,7 @@ pub fn select_remote_for(self: @This(), pipeline: *const Pipeline, group: []cons
 }
 
 pub fn get_producer(self: @This(), output: []const u8) ?*const Pipeline {
-    return pipeline: for (self.pipelines) |*pipeline| {
+    return pipeline: for (self.pipelines.items) |*pipeline| {
         for (pipeline.out orelse &.{pipeline.name}) |out|
             if (std.mem.eql(u8, out, output))
                 break :pipeline pipeline;
@@ -171,9 +171,9 @@ pub fn get_producer(self: @This(), output: []const u8) ?*const Pipeline {
 }
 pub inline fn get_sources(self: @This()) []const struct { []const u8, []const u8 } {
     return if (self.sources) |s|
-        s
+        s.items
     else
-        &.{.{ "", "." }};
+        &.{.{ "src", "." }};
 }
 
 pub inline fn is_source_artifact(p: []const u8) bool {
@@ -181,16 +181,13 @@ pub inline fn is_source_artifact(p: []const u8) bool {
 }
 
 pub fn get_environment(self: @This(), name: []const u8) ?*const Env {
-    return for (self.environments) |*environment| {
-        if (std.mem.eql(u8, environment.name, name))
-            break environment;
-    } else null;
+    return self.environments.get(name);
 }
 
 pub const Env = struct {
     name: []const u8,
     uses: []const []const u8 = &.{},
-    vars: []const struct { []const u8, ?[]const u8 } = &.{},
+    vars: zoton.Map(?[]const u8) = .{},
     pkgs: []const []const u8 = &.{},
 };
 pub fn has_mode(self: @This(), mode: []const u8) bool {

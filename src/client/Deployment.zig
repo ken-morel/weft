@@ -1,6 +1,7 @@
 const std = @import("std");
 const log = std.log.scoped;
 
+const Task = @import("../domain/Task.zig");
 const Term = @import("../domain/Term.zig");
 const Weft = @import("../domain/Weft.zig");
 const crockford32 = @import("../util/crockford32.zig");
@@ -39,6 +40,28 @@ pub const Id = bitpack struct(u40) {
         _ = num;
         return self.format(writer);
     }
+
+    pub fn zoton_serialize(self: @This(), out: *std.Io.Writer, _: usize) std.Io.Writer.Error!void {
+        const str = self.to_string();
+        try out.print("\"{s}\"", .{str});
+    }
+
+    pub fn zoton_deserialize_leaky(
+        _: std.mem.Allocator,
+        ctx: zoton.Context,
+        node_idx: std.zig.Zoir.Node.Index,
+    ) zoton.Error!@This() {
+        return switch (node_idx.get(ctx.zoir)) {
+            .string_literal => |s| parse(s) catch {
+                ctx.log_err(node_idx, "invalid deployment id '{s}'", .{s});
+                return error.InvalidType;
+            },
+            else => |node| {
+                ctx.log_err(node_idx, "expected string literal for Deployment.Id, found {s}", .{@tagName(node)});
+                return error.InvalidType;
+            },
+        };
+    }
     pub inline fn gt(a: @This(), b: @This()) bool {
         return @backingInt(a) > @backingInt(b);
     }
@@ -66,10 +89,11 @@ pub const Artifact = struct {
     name: []const u8,
 };
 pub const Failed = struct {
+    pub const StatusError = Task.Status.TaskError || error{ TaskKilled, TaskNotFound };
     retries_left: u16,
     remote: []const u8,
     pipeline: []const u8,
-    status: anyerror!u16,
+    status: StatusError!u16,
 };
 
 pub fn get_artifact(self: @This(), output: []const u8) ?Artifact {

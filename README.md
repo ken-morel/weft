@@ -7,7 +7,7 @@ Weft is a Linux deployment and task orchestration tool written in Zig. A single 
 - **Direct Linux supervision**: Tasks run under a built-in supervisor rather than a container daemon (Docker, Podman). Isolation is configured per host (`kvm`, `lxc`, `vz`) using Linux namespaces (`mount`, `pid`, `net`, `uts`, `ipc`, `cgroup`), `pivot_root`, and cgroups v2, degrading gracefully on restricted kernels such as unprivileged LXC, OpenVZ, or Google Colab.
 - **Daemonless Nix provisioning**: Pipeline and developer environments pull binary closures directly from `cache.nixos.org` into `/var/lib/weft/nix/store/` without requiring NixOS or a `nix-daemon` on the target host.
 - **Pluggable transports**: Remotes communicate over direct TCP, local stdio proxy scripts (`!<script>`), or dynamic address-provider scripts (`~<script>`).
-- **Authenticated wire protocol**: Client-to-daemon connections use an Ed25519 + X25519 handshake with protocol-hash verification, encrypting all frames with XChaCha20-Poly1305 AEAD.
+- **Authenticated wire protocol**: Client-to-daemon connections use an Ed25519 + X25519 handshake with per-request type-hash verification, encrypting all frames with XChaCha20-Poly1305 AEAD.
 
 ---
 
@@ -124,14 +124,16 @@ The binary is output to `zig-out/bin/weft`.
 - `weft daemon register <key>`  
   Appends a 64-character hex Ed25519 public key to `/etc/weft/keys` and signals the local daemon over `/run/weft/weft.pipe` to reload authorized keys.
 
-#### `weft nix`, `weft key`, `weft decode`, `weft version`
+#### `weft nix`, `weft zoto`, `weft key`, `weft version`
 
 - `weft nix search <query>` — Searches the Devbox Nix package index.
 - `weft nix query <name>` — Lists available versions, platforms, and store path identifiers (`<hash>-<name>-<version>`) for a package.
 - `weft nix info <pkg>` — Fetches `.narinfo` metadata for `<pkg>` (full identifier or 32-character store hash) from `cache.nixos.org` and prints it as YAML.
+- `weft zoto decode [file] [out]` — Decodes a `zoto` binary file (or `-` for `stdin`) into ZOTON text (written to `out` or `-` for `stdout`), with leading `// zoto:` and `// header:` metadata comments.
+- `weft zoto encode [file] [out] [-type <name>] [-header <bool>]` — Encodes ZOTON text (from `file` or `-` for `stdin`) into a `zoto` binary file (or `-` for `stdout`).
+- `weft zoto edit [file]` — Decodes a `zoto` binary file to a temporary `.zon` file, opens `$VISUAL`/`$EDITOR` (falling back to `vi`), and atomically re-encodes on exit. Passing `-` reads binary `zoto` from `stdin`, attaches the editor to `/dev/tty`, and writes the edited binary to `stdout`.
 - `weft key` — Prints the local client's 64-character hex Ed25519 public key.
-- `weft decode [file]` — Decodes a `zoto`-serialized binary file (or `stdin` when omitted or `-`) into formatted Zig struct literals.
-- `weft version` — Prints the build version, wire protocol hash, and optimization mode.
+- `weft version` — Prints the build version and optimization mode.
 
 ---
 
@@ -161,14 +163,18 @@ A project is defined by `weft/weft.zon`, pipeline scripts in `weft/`, and option
 
 ### Root Schema (`src/domain/Weft.zig`)
 
+Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `deployment.zon`) use **ZOTON** (valid ZON syntax parsed via `src/util/zoton.zig`, supporting `zoton.Map`, `zoton.NamedMap`, closed error sets, and error unions). Keys containing characters such as `-` or `.` use standard ZON identifier quoting (`.@"my-pipeline" = .{ ... }`).
+
 ```zig
 modes: []const []const u8 = &.{"default"},
-environments: []const Env = &.{},
+environments: zoton.NamedMap(.name, Env) = .{},
 workspace: []const u8,
-sources: ?[]const struct { []const u8, []const u8 } = null,
+sources: ?zoton.Map([]const u8) = null,
 
-pipelines: []const Pipeline = &.{},
-remotes: []const Remote = &.{.{ "local", null, "local" }},
+pipelines: zoton.NamedMap(.name, Pipeline) = .{},
+remotes: zoton.NamedMap(.name, Remote) = .{
+    .items = &.{.{ .name = "local", .groups = "local" }},
+},
 retention: Retention = .{
     .archive = 10,
     .artifacts = 2,
@@ -177,11 +183,14 @@ retention: Retention = .{
 
 - `workspace`: Project identifier used by remote daemons to namespace state on disk. Must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
 - `modes`: Valid execution modes accepted in `<mode>:<remote>.<pipeline>` targets and `<mode>:<item>` conditional configuration entries.
+- `sources`: Optional map of source names to project-relative directories (e.g. `.sources = .{ .backend = "backend/", .web = "web/" }`). When `null`, defaults to `.{ .src = "." }`.
 - `retention`: Number of recent deployments for which a remote daemon retains harvested output directories (`artifacts`, default `2`) and task status/log records (`archive`, default `10`). Enforced automatically whenever a new task is spawned.
 
 ---
 
 ### `.pipelines`
+
+`.pipelines` is a `zoton.NamedMap(.name, Pipeline)`: each pipeline is declared as a field under `.pipelines = .{ .<name> = .{ ... } }`, and the field name is assigned to `Pipeline.name` automatically. Pipeline names must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
 
 ```zig
 pub const Pipeline = struct {
@@ -199,24 +208,20 @@ pub const Pipeline = struct {
     retention: ?Retention = null,
 
     sibling: HandleSibling = .{ .then = .ignore },
-    keep: []Keep = &.{},
+    keep: zoton.Map([]const u8) = .{},
     on: ?[]const []const u8 = null,
 
     env: struct {
         uses: []const []const u8 = &.{},
-        vars: []const struct { []const u8, ?[]const u8 } = &.{},
+        vars: zoton.Map(?[]const u8) = .{},
         pkgs: []const []const u8 = &.{},
     } = .{},
 };
 ```
 
-#### `.name`
-
-Pipeline identifier. Must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
-
 #### `.in` and `.out`
 
-- **Source inputs (`-<source>`)**: An entry in `.in` starting with `-` (e.g. `"-backend"`, or `"-"` for the root source) references an entry in `.sources`. During `weft do`, the client snapshots the source directory (respecting `.gitignore`, `.weftignore`, and `.ignore`, and always excluding `.git`, `.jj`, `weft/do`, and `weft/cache`), uploads it to the target remote, and extracts it directly into the task's working directory.
+- **Source inputs (`-<source>`)**: An entry in `.in` starting with `-` (e.g. `"-backend"`, or `"-src"` for the default root source) references an entry in `.sources`. During `weft do`, the client snapshots the source directory (respecting `.gitignore`, `.weftignore`, and `.ignore`, and always excluding `.git`, `.jj`, `weft/do`, and `weft/cache`), uploads it to the target remote, and extracts it directly into the task's working directory.
 - **Artifact inputs (`<artifact>`)**: An entry in `.in` without a leading `-` references an output produced by another pipeline. Upstream producer pipelines run on the same target remote as the consumer step; their harvested outputs are mounted read-only at `$IN/<artifact>`.
 - **Outputs**: When `.out` is `null` (default), the pipeline implicitly declares a single output named `<pipeline.name>`. Providing `.out` overrides the output list (use `.out = &.{}` for tasks that produce no artifacts). Files written to `$OUT/<output>` during execution are harvested when the script exits with code `0`; outputs of top-level deployment targets are automatically pulled back to `weft/do/<deployment>/<output>/`.
 - **Mode filtering**: Entries in `.in`, `.out`, `.keep`, `.env.uses`, `.env.pkgs`, and `.env.vars` keys may be prefixed with `<mode>:` (e.g. `"prod:migrate"`), activating that entry only when the step runs under `<mode>`.
@@ -242,14 +247,16 @@ Optional list of remote group tags (`?[]const []const u8`). When `null`, the pip
 
 #### `.keep`
 
+Map of `<cache_name>` to `<relative_workdir_path>` (`zoton.Map([]const u8)`):
+
 ```zig
-pub const Keep = struct {
-    []const u8,
-    []const u8,
-};
+.keep = .{
+    .@"backend-target" = "target/",
+    .node_modules = "node_modules/",
+},
 ```
 
-Each tuple `.{ "<cache_name>", "<relative_workdir_path>" }` mounts (or symlinks under `isolate.mount = false`) a persistent workspace directory `/var/lib/weft/workspace/<workspace>/keep/<cache_name>/` into the task's working directory at `<relative_workdir_path>`. Keep names may be prefixed with `<mode>:`.
+Each entry mounts (or symlinks under `isolate.mount = false`) a persistent workspace directory `/var/lib/weft/workspace/<workspace>/keep/<cache_name>/` into the task's working directory at `<relative_workdir_path>`. Keep names may be prefixed with `<mode>:`.
 
 #### `.sibling`
 
@@ -280,14 +287,14 @@ Determines how the supervisor handles existing active tasks for the same `<works
 ```zig
 env: struct {
     uses: []const []const u8 = &.{},
-    vars: []const struct { []const u8, ?[]const u8 } = &.{},
+    vars: zoton.Map(?[]const u8) = .{},
     pkgs: []const []const u8 = &.{},
 } = .{},
 ```
 
-- `uses`: Names of top-level `.environments` entries to inherit (supports up to 16 levels of nesting and `<mode>:` prefixes).
+- `uses`: Names of top-level `.environments` entries (`zoton.NamedMap(.name, Env)`) to inherit (supports up to 100 levels of nesting and `<mode>:` prefixes).
 - `pkgs`: Nix store package names (`"<hash>-<name>-<version>"`) to unpack and prepend to `PATH` (supports `<mode>:` prefixes).
-- `vars`: Key-value pairs `.{ "<KEY>", <VALUE_OR_NULL> }` (keys support `<mode>:` prefixes). When the value is `null`, Weft resolves `<KEY>` from project `.env` files in the following order:
+- `vars`: Map of variable names to values or `null` (`.vars = .{ .PORT = "8080", .DATABASE_URL = null }`; keys support `<mode>:` prefixes). When the value is `null`, Weft resolves `<KEY>` from project `.env` files in the following order:
   1. `.env.<pipeline_or_env_name>` in the project root
   2. `.env` in the project root
   3. Inherited parent environments listed in `uses`
@@ -349,24 +356,31 @@ pub const Tune = struct {
 
 ### `.remotes` and Client Configuration (`client.zon`)
 
-In `weft/weft.zon`, each remote is a 3-tuple `.{ "<name>", <address>, "<tags>" }`:
+In `weft/weft.zon`, `.remotes` is a `zoton.NamedMap(.name, Remote)` where each entry specifies `address` (`?[]const u8 = null`) and `groups` (`[]const u8 = ""`):
 
-- `<name>`: Identifier used in CLI targets (`<remote>.<pipeline>`).
-- `<address>` (`?[]const u8`):
+```zig
+.remotes = .{
+    .local = .{ .groups = "build run" },
+    .prod = .{ .address = "195.201.10.42:9338", .groups = "run" },
+},
+```
+
+- Key (`<name>`): Identifier used in CLI targets (`<remote>.<pipeline>`).
+- `.address` (`?[]const u8`, default `null`):
   - `"{domain|ip}[:port]"` — direct TCP connection (defaults to port `9338`).
   - `"!<script> [args...]"` — spawns `<script>` and runs the encrypted wire protocol over its `stdin`/`stdout`.
   - `"~<script> [args...]"` — spawns `<script>`, reads a resolved address (`host:port` or `!<script>`) from the first line of its `stdout`, and keeps the provider process alive for the session.
   - `null` — looks up the remote's address in the local user's `~/.config/weft/client.zon`.
-- `<tags>`: Space-separated group tags matched by pipeline `.on` constraints.
+- `.groups` (`[]const u8`, default `""`): Space-separated group tags matched by pipeline `.on` constraints.
 
 User-level configuration resides in `$XDG_CONFIG_HOME/weft/client.zon` (or `~/.config/weft/client.zon`, with fallback to `config.zon`):
 
 ```zig
 .{
     .remotes = .{
-        .{ "hetzner", "195.201.10.42:9338" },
-        .{ "colab", "!remote colab" },
-        .{ "local", "127.0.0.1:9338" },
+        .hetzner = "195.201.10.42:9338",
+        .colab = "!remote colab",
+        .local = "127.0.0.1:9338",
     },
     .compress = true,
     .decompress = true,

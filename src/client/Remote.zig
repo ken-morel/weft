@@ -35,9 +35,9 @@ pub fn resolve_remotes_leaky(
     project: ?Project,
 ) ![]const @This() {
     const total_len = if (config) |c|
-        c.remotes.len
+        c.remotes.items.len
     else if (inst) |i|
-        i.config.remotes.len
+        i.config.remotes.items.len
     else
         0;
 
@@ -45,7 +45,7 @@ pub fn resolve_remotes_leaky(
     defer remotes.deinit(ara);
 
     if (config) |c| {
-        for (c.remotes) |r|
+        for (c.remotes.items) |r|
             try remotes.append(ara, try resolve_single_remote_leaky(
                 gpa,
                 ara,
@@ -55,12 +55,12 @@ pub fn resolve_remotes_leaky(
                 project,
             ));
     } else if (inst) |i|
-        for (i.config.remotes) |r|
+        for (i.config.remotes.items) |r|
             try remotes.append(ara, try resolve_single_remote_leaky(
                 gpa,
                 ara,
                 io,
-                .{ r.@"0", r.@"1", r.@"0" },
+                .{ .name = r.@"0", .address = r.@"1", .groups = r.@"0" },
                 inst,
                 project,
             ));
@@ -77,19 +77,16 @@ pub fn resolve_single_remote_leaky(
     project: ?Project,
 ) !@This() {
     const l = log(.resolve_remote);
-    const raw_addr = if (r.@"1") |addr|
+    const raw_addr = if (r.address) |addr|
         addr
     else if (inst) |i|
-        for (i.config.remotes) |cr| {
-            if (std.mem.eql(u8, cr.@"0", r.@"0"))
-                break cr.@"1";
-        } else null
+        i.config.remotes.get(r.name)
     else
         null;
 
     if (raw_addr) |addr| {
         return .{
-            .name = r.@"0",
+            .name = r.name,
             .address = try .resolve_leaky(
                 gpa,
                 ara,
@@ -98,10 +95,10 @@ pub fn resolve_single_remote_leaky(
                 inst,
                 project,
             ),
-            .groups = r.@"2",
+            .groups = r.groups,
         };
     } else {
-        l.err("remote '{s}' has no specified address", .{r.@"0"});
+        l.err("remote '{s}' has no specified address", .{r.name});
         return error.InvalidRemote;
     }
 }

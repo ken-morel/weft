@@ -50,8 +50,8 @@ fn get_config_caches(alloc: std.mem.Allocator, config: Weft) ![]const []const u8
     var list: std.ArrayList([]const u8) = .empty;
     defer list.deinit(alloc);
 
-    for (config.pipelines) |p| {
-        for (p.keep) |k| {
+    for (config.pipelines.items) |p| {
+        for (p.keep.items) |k| {
             const already_has = for (list.items) |item| {
                 if (std.mem.eql(u8, item, k.@"0"))
                     break true;

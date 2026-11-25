@@ -58,7 +58,7 @@ fn check_cycle(
     for (pipeline.in) |input|
         if (Weft.is_source_artifact(input))
             continue
-        else for (config.pipelines) |other|
+        else for (config.pipelines.items) |other|
             if (other.produces(input))
                 if (check_cycle(alloc, config, other, stack))
                     return true;
@@ -108,17 +108,17 @@ pub fn run(
         };
     }
 
-    for (config.environments, 0..) |e1, idx|
-        for (config.environments[idx + 1 ..]) |e2|
+    for (config.environments.items, 0..) |e1, idx|
+        for (config.environments.items[idx + 1 ..]) |e2|
             if (std.mem.eql(u8, e1.name, e2.name)) {
                 l.err("duplicate environment name found: '{s}'", .{e1.name});
                 errors += 1;
             };
 
-    for (config.remotes, 0..) |r1, idx|
-        for (config.remotes[idx + 1 ..]) |r2|
-            if (std.mem.eql(u8, r1.@"0", r2.@"0")) {
-                l.err("duplicate remote name found: '{s}'", .{r1.@"0"});
+    for (config.remotes.items, 0..) |r1, idx|
+        for (config.remotes.items[idx + 1 ..]) |r2|
+            if (std.mem.eql(u8, r1.name, r2.name)) {
+                l.err("duplicate remote name found: '{s}'", .{r1.name});
                 errors += 1;
             };
 
@@ -127,14 +127,13 @@ pub fn run(
     else
         null;
 
-    for (config.remotes) |r| {
-        const raw_addr = if (r.@"1") |addr| addr else blk: {
+    for (config.remotes.items) |r| {
+        const raw_addr = if (r.address) |addr| addr else blk: {
             if (client_cfg) |cfg|
-                for (cfg.remotes) |cr|
-                    if (std.mem.eql(u8, cr.@"0", r.@"0"))
-                        break :blk cr.@"1";
+                if (cfg.remotes.get(r.name)) |addr|
+                    break :blk addr;
 
-            l.warn("remote '{s}': address is not specified in weft.zon and not configured in client.zon", .{r.@"0"});
+            l.warn("remote '{s}': address is not specified in weft.zon and not configured in client.zon", .{r.name});
             break :blk null;
         };
 
@@ -151,27 +150,27 @@ pub fn run(
                         if (try project.locate_script(alloc, io, script_name)) |sp| {
                             alloc.free(sp);
                         } else if (project.dir.access(io, script_name, .{})) |_| {} else |_| {
-                            l.err("remote '{s}': connection script '{s}' not found in client config, weft/, or project directory", .{ r.@"0", script_name });
+                            l.err("remote '{s}': connection script '{s}' not found in client config, weft/, or project directory", .{ r.name, script_name });
                             errors += 1;
                         }
                     }
                 } else {
-                    l.err("remote '{s}': command is empty after '{c}'", .{ r.@"0", addr[0] });
+                    l.err("remote '{s}': command is empty after '{c}'", .{ r.name, addr[0] });
                     errors += 1;
                 }
             };
     }
 
-    for (config.pipelines, 0..) |p1, idx|
-        for (config.pipelines[idx + 1 ..]) |p2|
+    for (config.pipelines.items, 0..) |p1, idx|
+        for (config.pipelines.items[idx + 1 ..]) |p2|
             if (std.mem.eql(u8, p1.name, p2.name)) {
                 l.err("duplicate pipeline name found: '{s}'", .{p1.name});
                 errors += 1;
             };
 
-    for (config.pipelines, 0..) |p1, idx| {
+    for (config.pipelines.items, 0..) |p1, idx| {
         const p1_outs: []const []const u8 = p1.out orelse &.{p1.name};
-        for (config.pipelines[idx + 1 ..]) |p2| {
+        for (config.pipelines.items[idx + 1 ..]) |p2| {
             const p2_outs: []const []const u8 = p2.out orelse &.{p2.name};
             for (p1_outs) |out1| {
                 for (p2_outs) |out2| {
@@ -187,7 +186,7 @@ pub fn run(
     var cycle_stack: std.ArrayList([]const u8) = .empty;
     defer cycle_stack.deinit(alloc);
 
-    for (config.pipelines) |pipeline| {
+    for (config.pipelines.items) |pipeline| {
         if (!Step.is_valid_name(pipeline.name)) {
             l.err("pipeline name '{s}' is invalid (must start with a letter and contain only letters, numbers, and '-')", .{pipeline.name});
             errors += 1;
@@ -209,7 +208,7 @@ pub fn run(
                     errors += 1;
                 }
             } else {
-                const produced = produced: for (config.pipelines) |*other| {
+                const produced = produced: for (config.pipelines.items) |*other| {
                     const outs = other.out orelse &.{other.name};
                     for (outs) |raw_out| {
                         const out = Weft.strip_mode(null, raw_out) orelse raw_out;
@@ -236,7 +235,7 @@ pub fn run(
 
         if (pipeline.on) |on_list| {
             for (on_list) |target| {
-                const found = for (config.remotes) |r| {
+                const found = for (config.remotes.items) |r| {
                     if (Weft.remote_has_group(r, target))
                         break true;
                 } else false;
@@ -249,7 +248,7 @@ pub fn run(
         }
 
         for (pipeline.env.uses) |env_name| {
-            for (config.environments) |e| {
+            for (config.environments.items) |e| {
                 if (std.mem.eql(u8, e.name, env_name))
                     break;
             } else {
@@ -258,7 +257,7 @@ pub fn run(
             }
         }
 
-        for (pipeline.keep) |k| {
+        for (pipeline.keep.items) |k| {
             if (!is_valid_relative_path(k.@"1")) {
                 l.err("pipeline '{s}': .keep path '{s}' must be a relative path and cannot start with '.' or '/'", .{ pipeline.name, k.@"1" });
                 errors += 1;
@@ -278,7 +277,7 @@ pub fn run(
         }
     }
 
-    for (config.pipelines) |*pipeline|
+    for (config.pipelines.items) |*pipeline|
         if (pipeline.run) |p_run|
             switch (p_run) {
                 .script => |script_str| {
@@ -332,7 +331,7 @@ pub fn run(
         };
 
     for (config.modes) |mode| {
-        for (config.pipelines) |*pipeline| {
+        for (config.pipelines.items) |*pipeline| {
             var p_arena: std.heap.ArenaAllocator = .init(gpa);
             defer p_arena.deinit();
             _ = Task.Spec.resolve_leaky(

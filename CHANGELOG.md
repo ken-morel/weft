@@ -13,8 +13,17 @@
   - Added `weft nix query <name>` to inspect available versions, platforms, and output store paths.
   - Added `weft nix info <pkg>` to fetch `.narinfo` metadata from `cache.nixos.org` and display it as YAML.
   - Custom streaming NAR unpacker (`NarUnpacker.zig`) supporting zstd/xz decompression directly into `/var/lib/weft/store/` with atomic locking.
-- **ZOTO Binary Inspection**:
-  - Added `weft decode` CLI tool to inspect and pretty-print zoto-encoded binary payloads (task specs, status, wire packets) from `stdin` as colored Zig struct definitions, with support for multiline scripts, tuples, error sets, and remaining-byte diagnostics.
+- **ZOTON & `weft zoto` CLI**:
+  - Replaced `weft decode` with `weft zoto` (`decode`, `encode`, `edit`, including `weft zoto edit -` for stdin-to-stdout interactive editing via a temporary `.zon` file and `/dev/tty`).
+  - Introduced standalone `src/util/zoton.zig` (re-exported as `zoto.n`) built on `std.zig.Ast`/`Zoir`, adding support for closed `error_set`, `error_union`, `zoton.Map(V)`, `zoton.NamedMap(key, V)`, `__`-prefixed hidden fields, custom `zoton_serialize`/`zoton_deserialize_leaky` hooks, and `line:col` error logging.
+- **Configuration Schema Migration to ZOTON**:
+  - Migrated `weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `deployment.zon` from `std.zon` to `zoton`.
+  - Converted `.pipelines`, `.environments`, and `.remotes` (with named `address`/`groups` fields) to `zoton.NamedMap`, and `.sources`, `.keep`, `.vars`, and client `.remotes` to `zoton.Map`.
+  - Changed the default `.sources` entry to `.src = "."` (referenced as `"-src"`).
+  - Serialized `Deployment.Id` as an 8-character Crockford Base32 string in ZOTON, narrowed `Deployment.Failed.status` to a closed error union, and renamed `DaemonInstall.Isolate._pad` to `__pad` so it is omitted from config output.
+- **ZOTO & Wire Protocol Improvements**:
+  - Fixed closed `error_set` serialization in `zoto.zig` to encode/decode by error name rather than build-local error IDs, fixed full-width enum tag hashing, fixed `serializeAlloc` slice ownership, and added scoped `.zoto` deserialization error logging.
+  - Replaced global protocol hash check with per-request type-hash verification and upgraded `Task.Status.failed` to carry `TaskError!u16`.
 - **Artifact & Cache CLI Operations**:
   - Added `weft artifact push` and `weft artifact pull` commands for remote artifact sync.
   - Added `weft artifact register` and `weft artifact path`.
@@ -30,7 +39,7 @@
   - Added provided remote addresses (`~<script> [args...]`) that spawn an address-provider process (such as a port forwarder), resolve the address printed on its first line of `stdout`, and keep it running for the session.
   - Deduped runner polling and deployment step rendering into a unified step renderer (`DeploymentView.zig`).
   - Improved error propagation on resumed deployments and config loading.
-  - Scoped debug logging added across daemon, supervisor, and runner subsystems.
+  - Scoped `.debug` and `.info` logging added across client connections, transports, address providers, daemon, supervisor, and runner subsystems; interactive TTY `View` automatically caps runtime logging at `.info`.
 
 ## v0.1.1-dev
 

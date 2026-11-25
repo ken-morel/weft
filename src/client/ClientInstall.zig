@@ -14,14 +14,9 @@ const Project = @import("Project.zig");
 pub const key_file_name = "key";
 pub const config_file_name = "config.zon";
 
-pub const Remote = struct {
-    []const u8,
-    []const u8,
-};
-
 pub const Config = struct {
-    remotes: []const Remote = &.{
-        .{ "local", "127.0.0.1:9338" },
+    remotes: zoton.Map([]const u8) = .{
+        .items = &.{.{ "local", "127.0.0.1:9338" }},
     },
     compress: bool = true,
     decompress: bool = true,

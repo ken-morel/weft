@@ -457,7 +457,7 @@ pub const Spec = struct {
                     } else try pkgs.append(ara, try ara.dupe(u8, p));
 
         var env_vars: std.StringHashMapUnmanaged([]const u8) = .empty;
-        for (env.vars) |env_var|
+        for (env.vars.items) |env_var|
             if (Weft.strip_mode(mode, env_var.@"0")) |name| {
                 if (env_var.@"1" orelse dotenv.get(env.name, name)) |val|
                     try env_vars.put(alloc, name, val)
@@ -503,14 +503,14 @@ pub const Spec = struct {
                 l.err("Large scripts/binaries should be imported as source artifacts", .{});
                 return error.ScriptTooLarge;
             };
-        const env = try resolve_env_leaky(gpa, ara, io, mode, config.environments, dotenv, pipeline.environ());
+        const env = try resolve_env_leaky(gpa, ara, io, mode, config.environments.items, dotenv, pipeline.environ());
         const outputs: []const []const u8 = if (pipeline.out) |o|
             o
         else
             try ara.dupe([]const u8, &.{pipeline.name});
 
-        var keep: std.ArrayList(Weft.Keep) = try .initCapacity(ara, pipeline.keep.len);
-        for (pipeline.keep) |k|
+        var keep: std.ArrayList(Weft.Keep) = try .initCapacity(ara, pipeline.keep.items.len);
+        for (pipeline.keep.items) |k|
             if (Weft.strip_mode(mode, k.@"0")) |name|
                 keep.appendAssumeCapacity(.{ try ara.dupe(u8, name), try ara.dupe(u8, k.@"1") });
 

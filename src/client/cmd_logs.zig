@@ -52,7 +52,7 @@ pub fn run(
         } else for (deployment.running) |run_| {
             if (std.mem.eql(u8, run_.pipeline, pipeline_name))
                 break run_.remote;
-        } else if (deployment.config.select_remote_for(pipeline, "local")) |r| r.@"0" else "local"
+        } else if (deployment.config.select_remote_for(pipeline, "local")) |r| r.name else "local"
     else
         step.remote;
 
