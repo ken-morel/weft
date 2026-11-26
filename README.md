@@ -274,7 +274,7 @@ Map of `<cache_name>` to `<relative_workdir_path>` (`zoton.Map([]const u8)`):
 
 ```zig
 .keep = .{
-    .@"backend-target" = "target/",
+    .backend_target = "target/",
     .node_modules = "node_modules/",
 },
 ```
@@ -472,7 +472,7 @@ pub const Config = struct {
 - `/etc/weft/keys` — Newline-separated 64-character hex Ed25519 public keys of authorized clients (`0600`).
 - `/var/lib/weft/bin/` — Hardlinks (with copy fallback) to host coreutils (`sh`, `bash`, `cp`, `mv`, `rm`, `tar`, `gzip`, `zstd`, `grep`, `sed`, `awk`, `find`, `weft`, etc.) bind-mounted as `/bin` inside mount-isolated sandboxes.
 - `/var/lib/weft/nix/store/` — Shared unpacked Nix store closures guarded by `/var/lib/weft/nix/store/.lock`, with cached NAR info in `/var/lib/weft/nix/narinfo/`.
-- `/var/lib/weft/active/` — Symlinks named `<workspace>_<pipeline>_<deployment>` pointing to `/var/lib/weft/workspace/<workspace>/task/<pipeline>/<deployment>/` for active tasks. On startup, the daemon scans this directory to prune stale links and respawn tasks configured with `restart = true`.
+- `/var/lib/weft/active/` — Symlinks named `<workspace>-<pipeline>-<deployment>` pointing to `/var/lib/weft/workspace/<workspace>/task/<pipeline>/<deployment>/` for active tasks. On startup, the daemon scans this directory to prune stale links and respawn tasks configured with `restart = true`.
 - `/var/lib/weft/workspace/<workspace>/`:
   - `uid` — Monotonically allocated unprivileged UID for the workspace user (`weft-<workspace>`).
   - `home/` — Persistent home directory for the workspace user.
