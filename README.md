@@ -165,7 +165,7 @@ A project is defined by `weft/weft.zon`, pipeline scripts in `weft/`, and option
 └── weft/
     ├── weft.zon            # Project configuration
     ├── .gitignore          # Ignores do/ and cache/
-    ├── <pipeline>[.sh]     # Pipeline scripts
+    ├── <pipeline>[.*]      # Pipeline scripts (e.g. .sh, .js, .py)
     ├── do/
     │   └── <deployment>/
     │       ├── deployment.zon
@@ -260,7 +260,7 @@ pub const Run = union(enum) {
 ```
 
 - `.{ .script = "..." }`: Inline entry script (must start with a `#!` shebang; capped at 16 KiB).
-- `.{ .file = "name" }`: Loads `weft/<name>` or `weft/<name>.sh` (any single-extension file matching `weft/<name>.*`).
+- `.{ .file = "name" }`: Loads `weft/<name>` or `weft/<name>.*` (e.g. `.sh`, `.js`, `.py`).
 - `null` (default): Resolves `weft/<pipeline.name>` or `weft/<pipeline.name>.*`.
 - `.nothing`: Virtual target that spawns no remote process, used to group upstream dependencies in `.in`.
 
