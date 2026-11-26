@@ -19,14 +19,16 @@ Commands accept arguments positionally or as named flags (`-<field> <value>`), w
 
 #### Prebuilt Binary
 
+Prebuilt static binaries are published for Linux `x86_64` and `aarch64`:
+
 ```bash
-curl -fsSL "https://github.com/ken-morel/weft/releases/download/nightly/weft-linux-x86_64.tar.gz" | sudo tar -xz -C /usr/local/bin
+curl -fsSL "https://github.com/ken-morel/weft/releases/download/nightly/weft-linux-$(uname -m).tar.gz" | sudo tar -xz -C /usr/local/bin
 sudo chmod +x /usr/local/bin/weft
 ```
 
 #### GitHub Actions
 
-Supports Linux `x86_64` and `aarch64` runners.
+Supports Linux `x86_64` and `aarch64` runners (outputs: `arch`, `public-key`).
 
 ```yaml
 - uses: ken-morel/weft@nightly
@@ -42,6 +44,7 @@ Supports Linux `x86_64` and `aarch64` runners.
       ...
     cache-nix: true          # Optional: cache /var/lib/weft/nix/store
     cache-keep: true         # Optional: 'true' (auto-detect from weft/weft.zon) or workspace name(s)
+    cache-key-prefix: weft   # Optional: prefix for GitHub Actions cache keys
 ```
 
 #### Building from Source
@@ -382,7 +385,7 @@ pub const Tune = struct {
 
 - `cpu`: Configures cgroup v2 `cpu.max` (`max` quota and `quota` period in microseconds).
 - `mem`: Configures cgroup v2 `memory.max`, `memory.high`, `memory.swap.max` (bytes), and `/proc/self/oom_score_adj`.
-- `net`: `private = true` unshares `CLONE_NEWNET` with no external interfaces; `hosts` populates `/etc/hosts` when mount isolation is enabled.
+- `net`: `private = true` unshares `CLONE_NEWNET` and brings up `lo` (`127.0.0.1` / `::1`) with no external interfaces; `hosts` populates `/etc/hosts` when mount isolation is enabled.
 - `io`: Configures cgroup v2 `io.weight`, `pids.max`, and custom mounts `.{ "<target_path>", .<mode>, "<source_path>" }` (`.tmpfs`, `.read`, or `.read_write`).
 
 #### `.timeout`, `.retries`, `.restart`, `.retention`
