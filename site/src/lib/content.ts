@@ -9,10 +9,10 @@ export const site = {
 	readme: `${repo}#readme`,
 	license: `${repo}/blob/dev/LICENSE`,
 	changelog: `${repo}/blob/dev/CHANGELOG.md`,
-	styleguide: `${repo}/blob/dev/STYLEGUIDE.md`,
+	styleguide: `${repo}/blob/dev/STYLE_GUIDE.md`,
 	releases: `${repo}/releases/tag/nightly`,
 	maintainer: { name: 'Engon Ken Morel', url: 'https://github.com/ken-morel' },
-	zigVersion: '0.18.0',
+	zigVersion: '0.18.0-dev',
 	inspiration: 'https://eza.rocks'
 } as const;
 
@@ -46,13 +46,12 @@ const prompt = (cmd: string): Line => [
 	[cmd, 'bold']
 ];
 
-export const installCommand = `curl -fsSL ${repo}/releases/download/nightly/weft-linux-x86_64.tar.gz | sudo tar -xz -C /usr/local/bin`;
+export const installCommand = `curl -fsSL ${repo}/releases/download/nightly/weft-linux-$(uname -m).tar.gz | sudo tar -xz -C /usr/local/bin`;
 
 export const heroTiles = [
 	{ label: 'kvm', note: 'VMs, bare metal' },
 	{ label: 'lxc', note: 'containers' },
-	{ label: 'vz', note: 'OpenVZ' },
-	{ label: 'colab', note: 'notebooks' },
+	{ label: 'vz', note: 'OpenVZ, Colab' },
 	{ label: 'action', note: 'GitHub CI' }
 ] as const;
 
@@ -161,7 +160,7 @@ export const demos: Demo[] = [
 export const facts = [
 	{ value: '1', label: 'binary: CLI, daemon, and supervisor' },
 	{ value: '0', label: 'container runtimes required' },
-	{ value: '4', label: 'isolation profiles, VM to notebook' },
+	{ value: '3', label: 'isolation profiles, VM to notebook' },
 	{ value: 'MIT', label: 'licensed, written in Zig' }
 ] as const;
 
@@ -181,7 +180,7 @@ export const features = [
 	{
 		title: 'hosts without a public IP',
 		body: 'Reach a daemon over TCP, through a stdio script (!script), or a script that prints the address (~script).',
-		snippet: [[['.{ "colab", ', ''], ['"!remote colab"', 'green'], [' }', '']]] as Line[]
+		snippet: [[['.colab = ', ''], ['"!remote colab"', 'green']]] as Line[]
 	},
 	{
 		title: 'signed & sealed',
@@ -192,6 +191,11 @@ export const features = [
 		title: 'resumable',
 		body: 'Artifacts move between remotes on their own. A failed deploy resumes at the step that broke.',
 		snippet: [[['$ ', 'green'], ['weft resume', 'bold']]] as Line[]
+	},
+	{
+		title: 'runs in CI too',
+		body: 'The GitHub Action installs weft on x86_64 or aarch64 runners, starts a local daemon, and caches the Nix store and keep dirs. This site is built that way.',
+		snippet: [[['daemon: ', 'yellow'], ['kvm-small', 'green']]] as Line[]
 	},
 	{
 		title: 'live monitor',
@@ -215,8 +219,8 @@ export const installs = [
 	{
 		id: 'binary',
 		label: 'Prebuilt binary',
-		note: 'Linux x86_64 nightly',
-		code: `curl -fsSL "${repo}/releases/download/nightly/weft-linux-x86_64.tar.gz" \\
+		note: 'Linux x86_64 / aarch64 nightly',
+		code: `curl -fsSL "${repo}/releases/download/nightly/weft-linux-$(uname -m).tar.gz" \\
   | sudo tar -xz -C /usr/local/bin
 sudo chmod +x /usr/local/bin/weft
 weft version`
@@ -234,12 +238,18 @@ weft remote install root@203.0.113.10 kvm-small`
 		note: 'deploy from CI',
 		code: `- uses: ken-morel/weft@nightly
   with:
-    version: nightly`
+    version: nightly
+    daemon: kvm-small       # optional: start a local daemon
+    client-key: \${{ secrets.WEFT_CLIENT_KEY }}
+    cache-nix: true         # cache /var/lib/weft/nix/store
+    cache-keep: true        # cache workspace keep dirs
+
+- run: weft do build`
 	},
 	{
 		id: 'source',
 		label: 'From source',
-		note: `Zig ${site.zigVersion}+`,
+		note: `Zig master (${site.zigVersion})`,
 		code: `git clone ${repo}.git
 cd weft
 zig build -Doptimize=ReleaseSafe`
@@ -257,6 +267,7 @@ export const reference = [
 			{ term: 'remote monitor [remote]', desc: 'live CPU, memory, disk, network, and task usage' },
 			{ term: 'daemon install [profile]', desc: 'install the daemon under systemd, openrc, or runit' },
 			{ term: 'daemon register <key>', desc: 'add a key and reload without restarting' },
+			{ term: 'daemon reload', desc: 'reload keys and config in the running daemon' },
 			{ term: 'daemon run', desc: 'run the daemon in the foreground' }
 		]
 	},
@@ -290,10 +301,11 @@ export const reference = [
 			{ term: 'nix search <query>', desc: 'search the Nix package index' },
 			{ term: 'nix query <name>', desc: 'list versions and store paths' },
 			{ term: 'nix info <pkg>', desc: 'print .narinfo metadata as YAML' },
+			{ term: 'init', desc: 'create weft/weft.zon, do/, and cache/ in this directory' },
 			{ term: 'check', desc: 'validate weft/weft.zon' },
 			{ term: 'key', desc: 'print this client’s public key' },
-			{ term: 'decode [file]', desc: 'print a zoto binary file as Zig literals' },
-			{ term: 'version', desc: 'build version and wire protocol hash' }
+			{ term: 'zoto decode|encode|edit [file]', desc: 'convert zoto binary files to ZOTON text and back, or edit in $EDITOR' },
+			{ term: 'version', desc: 'build version and optimization mode' }
 		]
 	}
 ] as const;
@@ -302,14 +314,14 @@ export const reference = [
 export const isolations = [
 	{ id: 'kvm', label: 'kvm', note: 'VMs and bare metal', flags: { cgroups: true, mount: true, pid: true, net: true } },
 	{ id: 'lxc', label: 'lxc', note: 'LXC containers', flags: { cgroups: false, mount: true, pid: true, net: true } },
-	{ id: 'vz', label: 'vz', note: 'OpenVZ / Virtuozzo', flags: { cgroups: false, mount: false, pid: false, net: false } },
-	{ id: 'colab', label: 'colab', note: 'notebooks', flags: { cgroups: false, mount: false, pid: false, net: false } }
+	{ id: 'vz', label: 'vz', note: 'OpenVZ, Colab', flags: { cgroups: false, mount: false, pid: false, net: false } },
 ] as const;
 
 export const scales = [
-	{ id: 'tiny', label: 'tiny', note: '1 worker', max_workers: 1, compress: false, decompress: false },
-	{ id: 'small', label: 'small', note: '4 workers', max_workers: 4, compress: false, decompress: true },
-	{ id: 'large', label: 'large', note: '16 workers', max_workers: 16, compress: true, decompress: true }
+	{ id: 'atomic', label: 'atomic', note: '1 worker', max_workers: 1, compress: false, decompress: false },
+	{ id: 'tiny', label: 'tiny', note: '2 workers', max_workers: 2, compress: false, decompress: false },
+	{ id: 'small', label: 'small', note: '8 workers', max_workers: 8, compress: false, decompress: true },
+	{ id: 'large', label: 'large', note: '32 workers', max_workers: 32, compress: true, decompress: true }
 ] as const;
 
 /* coming from */
@@ -320,8 +332,8 @@ export const migration = {
 		'ssh vps "docker pull registry/shop && docker restart shop"'
 	],
 	added: [
-		'.{ .name = "build", .in = .{"-"}, .on = .{"local"} },',
-		'.{ .name = "server", .in = .{"build"}, .sibling = .{ .then = .kill } },'
+		'.build = .{ .in = .{"-src"}, .on = .{"local"} },',
+		'.server = .{ .in = .{"build"}, .sibling = .{ .then = .kill } },'
 	],
 	note: 'then: weft do prod:vps.server'
 } as const;

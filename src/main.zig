@@ -87,7 +87,7 @@ const Argz = union(enum) {
         pub const doc = "Perform actions on the local daemon";
         install: struct {
             pub const doc = "Install the weft daemon locally, requires superuser priviledges";
-            pub const doc_template = "Containerization template: <isolate>[-<scale>] (e.g. kvm-small, lxc-large, colab, vz-tiny)";
+            pub const doc_template = "Containerization template: <isolate>[-<scale>] (e.g. kvm-small, lxc-large, vz-tiny)";
             template: ?[]const u8 = null,
         },
         run: struct {

@@ -6,7 +6,7 @@
 	let scaleId = $state<string>('small');
 
 	const iso = $derived(isolations.find((i) => i.id === isoId) ?? isolations[0]);
-	const scale = $derived(scales.find((s) => s.id === scaleId) ?? scales[1]);
+	const scale = $derived(scales.find((s) => s.id === scaleId) ?? scales[2]);
 	const profile = $derived(`${iso.id}-${scale.id}`);
 	const flag = (v: boolean) => (v ? 'c-green' : 'c-red');
 </script>
@@ -32,7 +32,7 @@
 				</fieldset>
 				<fieldset>
 					<legend>scale</legend>
-					<div class="swatches three">
+					<div class="swatches four">
 						{#each scales as s (s.id)}
 							<button type="button" aria-pressed={s.id === scaleId} onclick={() => (scaleId = s.id)}>
 								<strong>{s.label}</strong><span>{s.note}</span>
@@ -105,8 +105,14 @@
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
 
-	.three {
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+	.four {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+
+	@media (min-width: 560px) {
+		.four {
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+		}
 	}
 
 	.swatches button {

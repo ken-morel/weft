@@ -70,7 +70,7 @@ pub const Config = struct {
                 cfg.port = p
             else {
                 log(.config).err(
-                    "unknown template component '{s}'. Valid isolates: kvm, lxc, vz, colab. Valid scales: tiny, small, large. Or a valid u16 port number",
+                    "unknown template component '{s}'. Valid isolates: kvm, lxc, vz. Valid scales: atomic, tiny, small, large. Or a valid u16 port number",
                     .{part},
                 );
                 return error.TemplateNotFound;

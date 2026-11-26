@@ -30,7 +30,7 @@
 				<code class="cmd">{installCommand}</code>
 				<Copy text={installCommand} />
 			</div>
-			<p class="meta">Linux x86_64 · nightly · Zig {site.zigVersion}+ · MIT</p>
+			<p class="meta">Linux x86_64 / aarch64 · nightly · Zig master · MIT</p>
 
 			<div class="legend">
 				<span class="legend-label">runs on</span>
