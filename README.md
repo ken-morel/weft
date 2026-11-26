@@ -74,7 +74,7 @@ The binary is output to `zig-out/bin/weft`.
   Packages local sources, resolves the dependency graph for the specified targets, transfers required artifacts across remotes, and runs the tasks.
   - Omitting `<remote>.` defaults to `local`.
   - Omitting `<mode>:` on the first target defaults to `default`. Subsequent targets without an explicit `<mode>:` inherit the preceding target's mode (e.g. `weft do prod:db.migrate db.server` runs both in `prod` mode).
-  - A standalone `-` token acts as an execution barrier: all targets before `-` must complete before any target after `-` is scheduled (e.g. `weft do site-fetch - site-build`). Targets within the same stage run concurrently.
+  - A standalone `-` token acts as an execution barrier: all targets before `-` must complete before any target after `-` is scheduled (e.g. `weft do site_fetch - site_build`). Targets within the same stage run concurrently.
   - Each deployment is assigned an 8-character lowercase Crockford Base32 ID (30-bit 250ms timestamp + 10-bit random salt) and recorded under `weft/do/<deployment>/deployment.zon`.
 - `weft resume [deployment]`  
   Resumes an interrupted or failed deployment from `weft/do/`, skipping steps already marked done and retrying failed or pending steps.
@@ -178,7 +178,7 @@ A project is defined by `weft/weft.zon`, pipeline scripts in `weft/`, and option
 
 ### Root Schema (`weft/weft.zon`)
 
-Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `deployment.zon`) use **ZOTON** (valid ZON syntax parsed via `src/util/zoton.zig`, supporting keyed maps, closed error sets, and error unions). Keys containing characters such as `-` or `.` use standard ZON identifier quoting (`.@"my-pipeline" = .{ ... }`).
+Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `deployment.zon`) use **ZOTON** (valid ZON syntax parsed via `src/util/zoton.zig`, supporting keyed maps, closed error sets, and error unions). Keys containing special characters such as `:` (e.g. mode-prefixed `.vars` entries like `.@"prod:BASE_PATH"`) use standard ZON identifier quoting.
 
 ```zig
 .{
@@ -193,10 +193,10 @@ Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `d
         .bun = .{ .pkgs = .{"qkydg77xf2s395md9fq0a6djjpq7fzh4-bun-1.4.2"} },
     },
     .pipelines = .{
-        .@"web-build" = .{
+        .web_build = .{
             .on = .{"build"},
             .in = .{"-web"},
-            .keep = .{ .@"web-modules" = "node_modules/" },
+            .keep = .{ .web_modules = "node_modules/" },
             .env = .{ .uses = .{"bun"} },
         },
     },
@@ -207,7 +207,7 @@ Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `d
 }
 ```
 
-- `workspace` (`[]const u8`, required): Project identifier used by remote daemons to namespace state on disk. Must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
+- `workspace` (`[]const u8`, required): Project identifier used by remote daemons to namespace state on disk. Must start with an ASCII letter and contain only ASCII alphanumeric characters or `_`.
 - `modes` (`[]const []const u8`, default `.{"default"}`): Valid execution modes accepted in `<mode>:<remote>.<pipeline>` targets and `<mode>:<item>` conditional configuration entries.
 - `sources` (optional map of `<name> = "<relative_dir>"`): When omitted or `null`, defaults to `.{ .src = "." }`.
 - `environments` (map of `<name> = .{ ... }`, default `.{}`): Reusable package/variable bundles referenced from pipeline `.env.uses`.
@@ -219,7 +219,7 @@ Configuration files (`weft/weft.zon`, `client.zon`, `/etc/weft/weft.zon`, and `d
 
 ### `.pipelines`
 
-Each entry under `.pipelines` is declared as `.<name> = .{ ... }`; the key is the pipeline's identifier (do not specify a `.name` field inside the entry). Pipeline names must start with an ASCII letter and contain only ASCII alphanumeric characters or `-`.
+Each entry under `.pipelines` is declared as `.<name> = .{ ... }`; the key is the pipeline's identifier (do not specify a `.name` field inside the entry). Pipeline names must start with an ASCII letter and contain only ASCII alphanumeric characters or `_`.
 
 ```zig
 .{
@@ -492,7 +492,7 @@ When a task is spawned, the daemon starts a detached `weft supervisor supervise`
 2. **Sibling resolution**: Scans `/var/lib/weft/active/` for other active tasks of the same `<workspace>/<pipeline>` (skipping itself) and enforces `sibling.wait` and `sibling.then`.
 3. **Isolation and spawning**:
    - If `isolate.pid` is enabled, unshares `CLONE_NEWPID` so the child `weft supervisor spawn` process runs as PID 1 inside the namespace; otherwise the child calls `setsid()`.
-   - If `isolate.cgroups` is enabled, creates `/sys/fs/cgroup/weft/weft--<pipeline>--<deployment>`, applies `tune` limits, and moves the child into `cgroup.procs`.
+   - If `isolate.cgroups` is enabled, creates `/sys/fs/cgroup/weft/<workspace>-<pipeline>-<deployment>`, applies `tune` limits, and moves the child into `cgroup.procs`.
    - The supervisor monitors the child via `pidfd_open` and handles `SIGTERM`, `SIGINT`, `SIGTSTP`, and `SIGCONT` via `signalfd` and `poll` (forwarding freeze/unfreeze and enforcing `spec.timeout`).
 4. **Sandbox setup (`weft supervisor spawn`)**:
    - When `isolate.mount` is `true`, unshares `CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC` (plus `CLONE_NEWCGROUP` and `CLONE_NEWNET` when configured), mounts a `16m` `tmpfs` at `root/`, writes minimal `/etc/passwd`, `/etc/group`, and `/etc/hosts`, bind-mounts `/nix/store`, `/bin`, `/usr/lib`, `/lib`, `/lib64`, `/proc`, `/tmp`, `/dev/shm`, device nodes, DNS/CA certificates (unless `net.private`), `/in/<artifact>`, `/out/<output>`, and `/work/<keep>`, remounts `/` read-only, and calls `pivot_root`.

@@ -508,7 +508,7 @@ fn collect_task_metrics(io: std.Io, tid: Task.Id, sup_pid: ?i32) TaskMetrics {
 
     var cg_path_buf: [256]u8 = undefined;
 
-    const cg_path = std.fmt.bufPrint(&cg_path_buf, "/sys/fs/cgroup/weft/{s}--{s}--{s}", .{
+    const cg_path = std.fmt.bufPrint(&cg_path_buf, "/sys/fs/cgroup/weft/{s}-{s}-{s}", .{
         tid.workspace,
         tid.pipeline,
         &tid.deployment.to_string(),

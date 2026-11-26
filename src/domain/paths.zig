@@ -21,7 +21,7 @@ pub const weft_workspace_uid = weft_workspace ++ "uid";
 pub const weft_active = weft_lib ++ "active/";
 
 /// fmt: workspace, pipeline, deployment
-pub const active_link = weft_active ++ "{s}_{s}_{d}";
+pub const active_link = weft_active ++ "{s}-{s}-{d}";
 
 pub const weft_socket = weft_run ++ "weft.pipe";
 

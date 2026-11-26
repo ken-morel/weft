@@ -85,7 +85,7 @@ pub fn run(
     var errors: usize = 0;
 
     if (!Step.is_valid_name(config.workspace)) {
-        l.err("workspace name '{s}' is invalid (must start with a letter and contain only letters, numbers, and '-')", .{config.workspace});
+        l.err("workspace name '{s}' is invalid (must start with a letter and contain only letters, numbers, and '_')", .{config.workspace});
         errors += 1;
     }
 
@@ -188,7 +188,7 @@ pub fn run(
 
     for (config.pipelines.items) |pipeline| {
         if (!Step.is_valid_name(pipeline.name)) {
-            l.err("pipeline name '{s}' is invalid (must start with a letter and contain only letters, numbers, and '-')", .{pipeline.name});
+            l.err("pipeline name '{s}' is invalid (must start with a letter and contain only letters, numbers, and '_')", .{pipeline.name});
             errors += 1;
         }
 

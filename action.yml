@@ -161,7 +161,7 @@ runs:
               token="${token#"${token%%[![:space:]]*}"}"
               token="${token%"${token##*[![:space:]]}"}"
               [ -z "$token" ] && continue
-              if [[ ! "$token" =~ ^[A-Za-z][A-Za-z0-9-]*$ ]]; then
+              if [[ ! "$token" =~ ^[A-Za-z][A-Za-z0-9_]*$ ]]; then
                 echo "::error::Invalid workspace name in cache-keep: '${token}'"
                 exit 1
               fi

@@ -1,9 +1,5 @@
-#!/bin/bash
-
-set -euo pipefail
-
-exec bun -e '
-const root = process.env.IN + "/site-build";
+#!/bin/env bun
+const root = process.env.IN + "/site_build";
 const port = Number(process.env.PORT ?? 6080);
 Bun.serve({
   port,
@@ -18,4 +14,3 @@ Bun.serve({
   },
 });
 console.log(`Serving ${root} on http://127.0.0.1:${port}`);
-'

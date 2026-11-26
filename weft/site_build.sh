@@ -8,5 +8,5 @@ if [[ "$WEFT_PIPELINE" == *"fetch"* ]]; then
     bun install
 else
     bun run --bun build
-    cp -r build/. "$OUT/site-build/"
+    cp -r build/. "$OUT/site_build/"
 fi

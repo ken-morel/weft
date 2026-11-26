@@ -32,11 +32,11 @@ jobs:
         run: weft check
 
       - name: Test and build site with Weft
-        run: weft do site-fetch - site-test - pages:site-build
+        run: weft do site_fetch - site_test - pages:site_build
 
-      - name: Locate site-build artifact
+      - name: Locate site_build artifact
         id: artifact
-        run: echo "path=$(weft artifact path site-build)" >> "$GITHUB_OUTPUT"
+        run: echo "path=$(weft artifact path site_build)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-pages-artifact@v3
         with:

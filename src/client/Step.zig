@@ -11,7 +11,7 @@ pub fn is_valid_name(str: []const u8) bool {
     return str.len > 0 and
         std.ascii.isAlphabetic(str[0]) and
         for (str[1..]) |c| {
-            if (!std.ascii.isAlphanumeric(c) and c != '-')
+            if (!std.ascii.isAlphanumeric(c) and c != '_')
                 break false;
         } else true;
 }

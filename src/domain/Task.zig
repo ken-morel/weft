@@ -114,10 +114,10 @@ pub fn from_cgroup_name(name: []const u8) ?@This() {
         s = s["weft/".len..];
     if (std.mem.endsWith(u8, s, ".service"))
         s = s[0 .. s.len - ".service".len];
-    if (std.mem.startsWith(u8, s, "weft-runner--"))
-        s = s["weft-runner--".len..];
+    if (std.mem.startsWith(u8, s, "weft-runner-"))
+        s = s["weft-runner-".len..];
 
-    var iter = std.mem.splitSequence(u8, s, "--");
+    var iter = std.mem.splitScalar(u8, s, '-');
     const workspace = iter.next() orelse return null;
     const pipeline = iter.next() orelse return null;
     const deployment_id = iter.next() orelse return null;
@@ -256,7 +256,7 @@ pub fn send_input(self: @This(), gpa: std.mem.Allocator, io: std.Io, data: []con
 }
 
 pub fn cgroup_name(self: @This(), gpa: std.mem.Allocator) ![]const u8 {
-    return try gpa.print("weft/{s}--{s}--{s}", .{
+    return try gpa.print("weft/{s}-{s}-{s}", .{
         self.id.workspace,
         self.id.pipeline,
         &self.id.deployment.to_string(),

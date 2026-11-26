@@ -15,30 +15,30 @@
         },
     },
     .pipelines = .{
-        .@"site-fetch" = .{
+        .site_fetch = .{
             .in = .{"-site"},
             .out = .{},
-            .run = .{ .file = "site-build" },
+            .run = .{ .file = "site_build" },
             .keep = .{
-                .@"web-modules" = "node_modules/",
+                .web_modules = "node_modules/",
             },
             .env = .{ .uses = .{"bun"} },
         },
-        .@"site-test" = .{
+        .site_test = .{
             .in = .{"-site"},
             .out = .{},
             .keep = .{
-                .@"web-modules" = "node_modules/",
+                .web_modules = "node_modules/",
             },
             .tune = .{
                 .net = .{ .private = true },
             },
             .env = .{ .uses = .{"bun"} },
         },
-        .@"site-build" = .{
+        .site_build = .{
             .in = .{"-site"},
             .keep = .{
-                .@"web-modules" = "node_modules/",
+                .web_modules = "node_modules/",
             },
             .tune = .{
                 .net = .{ .private = true },
@@ -50,8 +50,8 @@
                 },
             },
         },
-        .@"site-run" = .{
-            .in = .{"site-build"},
+        .site_run = .{
+            .in = .{"site_build"},
             .out = .{},
             .sibling = .{ .then = .kill },
             .env = .{
